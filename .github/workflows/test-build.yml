@@ -1,0 +1,77 @@
+name: Test Build
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Binary
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+        cache: true
+
+    - name: Set up MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        update: true
+        install: mingw-w64-x86_64-gcc
+
+    - name: Add MinGW to PATH
+      run: echo "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Download dependencies
+      run: |
+        go mod tidy
+        go mod download
+
+    - name: Build release binary
+      run: |
+        $env:CGO_ENABLED = "1"
+        go build -v -ldflags="-s -w -H windowsgui" -trimpath -o dictation.exe .
+      shell: pwsh
+
+    - name: Check binary
+      run: |
+        if (Test-Path dictation.exe) {
+          $size = (Get-Item dictation.exe).Length / 1MB
+          Write-Host "✓ Build successful!"
+          Write-Host "Binary size: $([math]::Round($size, 2)) MB"
+        } else {
+          Write-Host "✗ Build failed - binary not found"
+          exit 1
+        }
+      shell: pwsh
+
+    - name: Upload binary
+      uses: actions/upload-artifact@v4
+      with:
+        name: dictation-windows-exe
+        path: dictation.exe
+        retention-days: 30
+
+    - name: Create portable ZIP
+      run: |
+        New-Item -ItemType Directory -Force -Path "dictation-portable"
+        Copy-Item "dictation.exe" "dictation-portable\"
+        Copy-Item "config.sample.toml" "dictation-portable\"
+        Copy-Item "README.md" "dictation-portable\"
+        Copy-Item "QUICKSTART.md" "dictation-portable\"
+        Compress-Archive -Path "dictation-portable" -DestinationPath "dictation-windows-portable.zip"
+      shell: pwsh
+
+    - name: Upload portable ZIP
+      uses: actions/upload-artifact@v4
+      with:
+        name: dictation-windows-portable-zip
+        path: dictation-windows-portable.zip
+        retention-days: 30
