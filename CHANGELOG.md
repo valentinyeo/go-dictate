@@ -5,6 +5,45 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-02-05 "Auto-Ducking"
+
+### Added
+- **Auto-ducking Windows volume** - Automatically reduces system volume to 20% when you speak
+  - Allows dictation even while videos/music are playing
+  - Restores volume when you stop talking
+  - Configurable via `duck_volume` in config.toml (default: 0.2 = 20%)
+  - Uses Windows IAudioEndpointVolume API for system master volume control
+
+### Changed
+- **Removed auto-pause on media** - Now uses auto-ducking instead of pausing
+  - Old behavior: paused transcription when media detected
+  - New behavior: ducks volume and continues transcribing
+  - Simpler and more seamless experience
+  - No more interruption when watching videos
+- **Renamed MediaPaused → MediaDetected** - Media icon now just visual indicator
+  - Amber icon shows when media is playing (visual feedback only)
+  - Does not block transcription anymore
+
+### Removed
+- `auto_pause_on_media` config option - feature replaced by auto-ducking
+
+### Technical Details
+- Implemented: `internal/audio/ducking.go` - Windows IAudioEndpointVolume API integration
+  - `Duck()` method reduces volume to configured level (saves original volume)
+  - `Restore()` method returns volume to original level
+  - Thread-safe with mutex protection
+  - Proper COM initialization and resource cleanup
+- Modified: `main.go` - Removed auto-pause logic (lines 191-220)
+  - Simplified media detection to visual indicator only
+  - Audio processing continues even when media is detected
+- Modified: `internal/state/manager.go` - Renamed MediaPaused → MediaDetected
+  - Updated state constants, String(), and IconColor() methods
+- Updated: `version.go` - Bumped to v1.3.0
+- Updated: `internal/tray/manager.go` - Updated tooltip and menu version
+- Updated: `CHANGELOG.md` - Documented major feature change
+
+---
+
 ## [1.2.10] - 2026-02-05 "25ms Media Detection"
 
 ### Improved

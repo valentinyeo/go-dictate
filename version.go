@@ -1,7 +1,7 @@
 package main
 
 const (
-	Version     = "1.2.10"
+	Version     = "1.3.0"
 	BuildDate   = "2026-02-05"
-	VersionName = "25ms Media Detection"
+	VersionName = "Auto-Ducking"
 )
