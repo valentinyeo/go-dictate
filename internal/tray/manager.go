@@ -206,44 +206,11 @@ func (m *Manager) handleIconUpdates() {
 }
 
 func (m *Manager) updateIcon(appState state.AppState) {
-	iconData := generateIcon(appState.IconColor())
+	iconData := getIconData(appState.IconColor())
 	systray.SetIcon(iconData)
 }
 
-func generateIcon(color string) []byte {
-	// Generate a simple 32x32 RGBA icon
-	const size = 32
-	data := make([]byte, size*size*4)
-
-	var r, g, b byte
-	switch color {
-	case "blue":
-		r, g, b = 0, 120, 212 // #0078D4
-	case "red":
-		r, g, b = 209, 52, 56 // #D13438
-	default: // grey
-		r, g, b = 138, 138, 138 // #8A8A8A
-	}
-
-	// Draw a simple circle (microphone representation)
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			dx := float64(x) - 16.0
-			dy := float64(y) - 16.0
-			dist := dx*dx + dy*dy
-
-			if dist < 144.0 { // radius 12
-				idx := (y*size + x) * 4
-				data[idx] = r
-				data[idx+1] = g
-				data[idx+2] = b
-				data[idx+3] = 255
-			}
-		}
-	}
-
-	return data
-}
+// Removed - using icons.go instead
 
 func isAutostartEnabled() bool {
 	k, err := registry.OpenKey(registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, registry.QUERY_VALUE)
