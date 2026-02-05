@@ -15,9 +15,12 @@ type Config struct {
 }
 
 type DeepgramConfig struct {
-	APIKey   string `toml:"api_key"`
-	Language string `toml:"language"`
-	Model    string `toml:"model"`
+	APIKey       string   `toml:"api_key"`
+	Language     string   `toml:"language"`
+	Model        string   `toml:"model"`
+	Punctuate    bool     `toml:"punctuate"`
+	FillerWords  bool     `toml:"filler_words"`
+	Keywords     []string `toml:"keywords"`
 }
 
 type AudioConfig struct {
@@ -32,9 +35,12 @@ type VADConfig struct {
 func Default() Config {
 	return Config{
 		Deepgram: DeepgramConfig{
-			APIKey:   "",
-			Language: "en",
-			Model:    "nova-2",
+			APIKey:      "",
+			Language:    "en",
+			Model:       "nova-3",
+			Punctuate:   true,
+			FillerWords: true,
+			Keywords:    []string{},
 		},
 		Audio: AudioConfig{
 			SilenceThresholdMs: 3000,
@@ -103,12 +109,22 @@ func (c *Config) Save() error {
 
 %s
 
+# Deepgram settings
+# model: nova-3 (latest), nova-2 (previous version)
+# language: en (English), de (German) - toggle with Ctrl+Alt+Shift+L
+# punctuate: Enable automatic punctuation and capitalization (true/false)
+# filler_words: Remove "um", "uh", "like", etc. (true/false)
+# keywords: List of words to boost recognition (e.g., ["GitHub", "API", "SQL"])
+
 # Audio settings
 # silence_threshold_ms: Auto-pause after this many milliseconds of silence
 # duck_volume: Volume level (0.0-1.0) for other apps during dictation
 
 # VAD settings
 # energy_threshold: RMS threshold for speech detection (0.0-1.0)
+
+# Global Hotkeys
+# Ctrl+Alt+Shift+L: Toggle language (EN ↔ DE)
 `, string(data))
 
 	if err := os.WriteFile(configPath, []byte(commented), 0644); err != nil {
@@ -139,7 +155,10 @@ func OpenInEditor() error {
 		return err
 	}
 
-	// Windows: use cmd /C start to open with default editor
-	_, err = os.StartProcess("cmd", []string{"/C", "start", "", configPath}, &os.ProcAttr{})
+	// Windows: use cmd.exe to open with default text editor
+	proc := &os.ProcAttr{
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	}
+	_, err = os.StartProcess("C:\\Windows\\System32\\cmd.exe", []string{"/C", "start", "", configPath}, proc)
 	return err
 }

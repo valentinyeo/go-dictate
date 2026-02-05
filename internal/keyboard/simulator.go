@@ -6,6 +6,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/valen/go-dictate/internal/logger"
 	"golang.org/x/sys/windows"
 )
 
@@ -33,10 +34,14 @@ var (
 	sendInputProc = user32.NewProc("SendInput")
 )
 
-type Simulator struct{}
+type Simulator struct{
+	lastChar rune
+}
 
 func NewSimulator() *Simulator {
-	return &Simulator{}
+	return &Simulator{
+		lastChar: 0,
+	}
 }
 
 func (s *Simulator) Run(ctx context.Context, textRx <-chan string) {
@@ -54,11 +59,23 @@ func (s *Simulator) Run(ctx context.Context, textRx <-chan string) {
 }
 
 func (s *Simulator) typeText(text string) {
-	// Add space before text
-	textWithSpace := " " + text
+	if text == "" {
+		return
+	}
 
-	for _, ch := range textWithSpace {
+	// Add space before text if we've already typed something
+	// (i.e., this isn't the very first text being typed)
+	textToType := text
+	if s.lastChar != 0 {
+		textToType = " " + text
+	}
+
+	logger.Typed(textToType)
+
+	// Type the text and track the last character
+	for _, ch := range textToType {
 		s.sendUnicodeChar(ch)
+		s.lastChar = ch
 		time.Sleep(10 * time.Millisecond)
 	}
 }

@@ -8,39 +8,65 @@ import (
 	"net/http"
 
 	"github.com/gorilla/websocket"
+	"github.com/valen/go-dictate/internal/logger"
 )
 
 type Client struct {
-	apiKey   string
-	language string
-	model    string
+	apiKey      string
+	language    string
+	model       string
+	punctuate   bool
+	fillerWords bool
+	keywords    []string
 }
 
-func NewClient(apiKey, language, model string) *Client {
+func NewClient(apiKey, language, model string, punctuate, fillerWords bool, keywords []string) *Client {
 	return &Client{
-		apiKey:   apiKey,
-		language: language,
-		model:    model,
+		apiKey:      apiKey,
+		language:    language,
+		model:       model,
+		punctuate:   punctuate,
+		fillerWords: fillerWords,
+		keywords:    keywords,
 	}
 }
 
 func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, textTx chan<- string) error {
+	// Build URL with optional punctuation and dictation parameters
 	url := fmt.Sprintf(
 		"wss://api.deepgram.com/v1/listen?model=%s&encoding=linear16&sample_rate=16000&channels=1&language=%s",
 		c.model, c.language,
 	)
 
+	if c.punctuate {
+		url += "&smart_format=true&paragraphs=true"
+	}
+
+	if c.fillerWords {
+		url += "&filler_words=true"
+	}
+
+	if len(c.keywords) > 0 {
+		// URL encode keywords array
+		for _, kw := range c.keywords {
+			url += fmt.Sprintf("&keywords=%s", kw)
+		}
+	}
+
 	headers := http.Header{}
 	headers.Set("Authorization", fmt.Sprintf("Token %s", c.apiKey))
 
+	logger.Info("[Deepgram] Connecting to %s", url)
 	fmt.Printf("[Deepgram] Connecting to %s\n", url)
 
 	conn, _, err := websocket.DefaultDialer.Dial(url, headers)
 	if err != nil {
+		logger.Error("[Deepgram] Connection failed: %v", err)
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 	defer conn.Close()
 
+	logger.Info("[Deepgram] Connected successfully")
 	fmt.Println("[Deepgram] Connected")
 
 	// Channel for coordinating shutdown
@@ -104,7 +130,17 @@ func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 				continue
 			}
 
+			// Log raw response for debugging
+			logger.Debug("Raw response - is_final: %v, text: '%s'", response.IsFinal,
+				func() string {
+					if len(response.Channel.Alternatives) > 0 {
+						return response.Channel.Alternatives[0].Transcript
+					}
+					return ""
+				}())
+
 			if text := response.GetText(); text != nil {
+				logger.Transcript(*text)
 				fmt.Printf("[Deepgram] Transcript: %s\n", *text)
 				select {
 				case textTx <- *text:

@@ -22,6 +22,8 @@ type Manager struct {
 	languageItem  *systray.MenuItem
 	autostartItem *systray.MenuItem
 	settingsItem  *systray.MenuItem
+	logItem       *systray.MenuItem
+	dashboardItem *systray.MenuItem
 	exitItem      *systray.MenuItem
 
 	ctx    context.Context
@@ -54,6 +56,9 @@ func (m *Manager) onReady() {
 	m.autostartItem = systray.AddMenuItemCheckbox("Start on Boot", "Start application on boot", isAutostartEnabled())
 	systray.AddSeparator()
 	m.settingsItem = systray.AddMenuItem("Open Config File", "Open configuration file")
+	m.logItem = systray.AddMenuItem("Open Debug Log", "Open debug log file")
+	m.dashboardItem = systray.AddMenuItem("Open Deepgram Dashboard", "Open Deepgram console")
+	systray.AddSeparator()
 	m.exitItem = systray.AddMenuItem("Exit", "Exit application")
 
 	// Update language menu based on config
@@ -64,6 +69,8 @@ func (m *Manager) onReady() {
 	go m.handleLanguageClick()
 	go m.handleAutostartClick()
 	go m.handleSettingsClick()
+	go m.handleLogClick()
+	go m.handleDashboardClick()
 	go m.handleExitClick()
 	go m.handleIconUpdates()
 }
@@ -162,6 +169,57 @@ func (m *Manager) handleSettingsClick() {
 			}
 		}
 	}
+}
+
+func (m *Manager) handleLogClick() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-m.logItem.ClickedCh:
+			if err := openLogFile(); err != nil {
+				fmt.Printf("[Tray] Failed to open log: %v\n", err)
+			}
+		}
+	}
+}
+
+func openLogFile() error {
+	appData := os.Getenv("APPDATA")
+	if appData == "" {
+		return fmt.Errorf("APPDATA not set")
+	}
+	logPath := fmt.Sprintf("%s\\dictation\\debug.log", appData)
+
+	proc := &os.ProcAttr{
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	}
+	_, err := os.StartProcess("C:\\Windows\\System32\\cmd.exe", []string{"/C", "start", "", logPath}, proc)
+	return err
+}
+
+func (m *Manager) handleDashboardClick() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-m.dashboardItem.ClickedCh:
+			if err := openDashboard(); err != nil {
+				fmt.Printf("[Tray] Failed to open dashboard: %v\n", err)
+			}
+		}
+	}
+}
+
+func openDashboard() error {
+	dashboardURL := "https://console.deepgram.com/"
+
+	proc := &os.ProcAttr{
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	}
+	_, err := os.StartProcess("C:\\Windows\\System32\\cmd.exe",
+		[]string{"/C", "start", "", dashboardURL}, proc)
+	return err
 }
 
 func (m *Manager) handleExitClick() {

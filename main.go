@@ -9,17 +9,28 @@ import (
 	"github.com/valen/go-dictate/internal/audio"
 	"github.com/valen/go-dictate/internal/config"
 	"github.com/valen/go-dictate/internal/deepgram"
+	"github.com/valen/go-dictate/internal/hotkey"
 	"github.com/valen/go-dictate/internal/keyboard"
+	"github.com/valen/go-dictate/internal/logger"
 	"github.com/valen/go-dictate/internal/state"
 	"github.com/valen/go-dictate/internal/tray"
 )
 
 func main() {
-	fmt.Println("=== Dictation App Starting ===")
+	fmt.Printf("=== Dictation App v%s (%s) ===\n", Version, VersionName)
+
+	// Initialize logger
+	if err := logger.Init(); err != nil {
+		fmt.Printf("[Logger] Warning: Failed to initialize logger: %v\n", err)
+	}
+	defer logger.Close()
+
+	logger.Info("=== Dictation App v%s (%s) Starting ===", Version, VersionName)
 
 	// Load configuration
 	cfg, err := config.LoadOrCreate()
 	if err != nil {
+		logger.Error("Config error: %v", err)
 		fmt.Printf("[Config] Error: %v\n", err)
 		fmt.Println("[Config] Please edit config.toml and add your Deepgram API key")
 		time.Sleep(5 * time.Second)
@@ -27,6 +38,8 @@ func main() {
 	}
 
 	configPath, _ := config.GetConfigPath()
+	logger.Info("Config loaded from: %s", configPath)
+	logger.Info("Punctuation enabled: %v", cfg.Deepgram.Punctuate)
 	fmt.Printf("[Config] Loaded from: %s\n", configPath)
 
 	// Create state manager
@@ -56,6 +69,27 @@ func main() {
 
 	// Start VAD processor and Deepgram client manager
 	go vadAndDeepgramManager(ctx, audioChunks, transcriptText, stateManager, cfg)
+
+	// Register global hotkey for language toggle
+	hotkeyManager := hotkey.NewManager()
+	err = hotkeyManager.RegisterLanguageToggle(func() {
+		// Toggle language between en and de
+		if cfg.Deepgram.Language == "en" {
+			cfg.Deepgram.Language = "de"
+		} else {
+			cfg.Deepgram.Language = "en"
+		}
+		if err := cfg.Save(); err != nil {
+			logger.Error("Failed to save language change: %v", err)
+		}
+		logger.Info("Language switched to: %s (Ctrl+Alt+Shift+L)", cfg.Deepgram.Language)
+		fmt.Printf("[Hotkey] Language switched to: %s\n", cfg.Deepgram.Language)
+	})
+	if err != nil {
+		logger.Error("Failed to register hotkey: %v", err)
+		fmt.Printf("[Hotkey] Warning: Could not register Ctrl+Alt+Shift+L: %v\n", err)
+	}
+	defer hotkeyManager.Stop()
 
 	// Create and run system tray (blocks on main thread)
 	fmt.Println("[Main] Creating system tray...")
@@ -107,6 +141,7 @@ func vadAndDeepgramManager(
 
 			switch vadEvent {
 			case audio.SpeechStarted:
+				logger.Info("[VAD] Speech started - opening Deepgram connection")
 				fmt.Println("[VAD] Speech started")
 				stateManager.Set(state.Speaking)
 
@@ -118,6 +153,9 @@ func vadAndDeepgramManager(
 					cfg.Deepgram.APIKey,
 					cfg.Deepgram.Language,
 					cfg.Deepgram.Model,
+					cfg.Deepgram.Punctuate,
+					cfg.Deepgram.FillerWords,
+					cfg.Deepgram.Keywords,
 				)
 
 				deepgramAudioTx = make(chan []int16, 100)
@@ -147,6 +185,7 @@ func vadAndDeepgramManager(
 				}
 
 			case audio.SilenceDetected:
+				logger.Info("[VAD] Silence detected - closing Deepgram connection")
 				fmt.Println("[VAD] Silence detected")
 				stateManager.Set(state.AutoPaused)
 
