@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"image"
 	"image/color"
-	"image/draw"
-	"image/png"
 	"os"
 	"path/filepath"
+
+	"github.com/srwiley/oksvg"
+	"github.com/srwiley/rasterx"
 )
 
 func getIconData(colorName string) []byte {
@@ -16,17 +17,17 @@ func getIconData(colorName string) []byte {
 
 	switch colorName {
 	case "blue":
-		iconFile = "mic-on.png" // Filled mic - Speaking/dictation active
-		tintColor = color.RGBA{0x10, 0xB9, 0x81, 0xFF} // #10B981 Green
+		iconFile = "mic-on.svg" // Filled mic - Speaking
+		tintColor = color.RGBA{0x10, 0xB9, 0x81, 0xFF} // Green
 	case "red":
-		iconFile = "mic-off.png" // Prohibited mic - Paused/muted
-		tintColor = color.RGBA{0xEF, 0x44, 0x44, 0xFF} // #EF4444 Red
+		iconFile = "mic-off.svg" // Prohibited mic - Paused
+		tintColor = color.RGBA{0xEF, 0x44, 0x44, 0xFF} // Red
 	default: // grey
-		iconFile = "mic-standby.png" // Outline mic - Standby/waiting
-		tintColor = color.RGBA{0x9C, 0xA3, 0xAF, 0xFF} // #9CA3AF Grey
+		iconFile = "mic-standby.svg" // Outline mic - Standby
+		tintColor = color.RGBA{0x9C, 0xA3, 0xAF, 0xFF} // Grey
 	}
 
-	// Try to load icon from multiple possible locations
+	// Try to load from multiple paths
 	possiblePaths := []string{
 		filepath.Join("icons", iconFile),
 		filepath.Join("..", "..", "icons", iconFile),
@@ -35,54 +36,54 @@ func getIconData(colorName string) []byte {
 	}
 
 	for _, path := range possiblePaths {
-		if data := loadAndConvertIcon(path, tintColor); data != nil {
+		if data := loadSVGIcon(path, tintColor); data != nil {
 			return data
 		}
 	}
 
-	// Fallback to programmatic icon if files not found
+	// Fallback
 	return createFallbackIcon(tintColor)
 }
 
-func loadAndConvertIcon(path string, tintColor color.RGBA) []byte {
-	// Read PNG file
-	file, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer file.Close()
-
-	// Decode image
-	img, err := png.Decode(file)
+func loadSVGIcon(path string, tintColor color.RGBA) []byte {
+	// Read SVG file
+	svgData, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
 
-	// Convert to RGBA
-	bounds := img.Bounds()
-	rgba := image.NewRGBA(bounds)
-	draw.Draw(rgba, bounds, img, bounds.Min, draw.Src)
+	// Parse SVG
+	icon, err := oksvg.ReadIconStream(bytes.NewReader(svgData))
+	if err != nil {
+		return nil
+	}
 
-	// Invert and tint: black pixels → tinted color, white pixels → transparent
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			oldColor := rgba.RGBAAt(x, y)
+	// Create 16x16 image
+	w, h := 16, 16
+	icon.SetTarget(0, 0, float64(w), float64(h))
 
-			// Calculate brightness (0 = black, 255 = white)
-			brightness := (uint32(oldColor.R) + uint32(oldColor.G) + uint32(oldColor.B)) / 3
+	// Create RGBA image
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
 
-			if brightness < 128 {
-				// Dark pixel → apply tint color with full opacity
-				rgba.SetRGBA(x, y, tintColor)
-			} else {
-				// Light pixel → make transparent
-				rgba.SetRGBA(x, y, color.RGBA{0, 0, 0, 0})
+	// Render SVG
+	scanner := rasterx.NewScannerGV(w, h, img, img.Bounds())
+	raster := rasterx.NewDasher(w, h, scanner)
+	icon.Draw(raster, 1.0)
+
+	// Apply color tint (replace black with tint color)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			c := img.RGBAAt(x, y)
+			// If pixel has color (not transparent)
+			if c.A > 0 {
+				// Replace with tint color
+				img.SetRGBA(x, y, tintColor)
 			}
 		}
 	}
 
-	// Convert to ICO format
-	return convertToICO(rgba)
+	// Convert to ICO
+	return convertToICO(img)
 }
 
 func convertToICO(img *image.RGBA) []byte {
@@ -91,92 +92,66 @@ func convertToICO(img *image.RGBA) []byte {
 	height := bounds.Dy()
 
 	if width > 256 || height > 256 {
-		return nil // ICO format limitation
+		return nil
 	}
 
 	var buf bytes.Buffer
 
 	// ICO header
-	buf.Write([]byte{0x00, 0x00}) // Reserved
-	buf.Write([]byte{0x01, 0x00}) // Type: ICO
-	buf.Write([]byte{0x01, 0x00}) // Number of images
+	buf.Write([]byte{0x00, 0x00, 0x01, 0x00, 0x01, 0x00})
 
-	// Image directory entry
-	buf.WriteByte(byte(width))  // Width
-	buf.WriteByte(byte(height)) // Height
-	buf.WriteByte(0x00)         // Color palette
-	buf.WriteByte(0x00)         // Reserved
-	buf.Write([]byte{0x01, 0x00}) // Color planes
-	buf.Write([]byte{0x20, 0x00}) // Bits per pixel (32-bit RGBA)
+	// Image directory
+	buf.WriteByte(byte(width))
+	buf.WriteByte(byte(height))
+	buf.Write([]byte{0x00, 0x00, 0x01, 0x00, 0x20, 0x00})
 
-	// Placeholder for image size (will update later)
 	sizeOffset := buf.Len()
-	buf.Write([]byte{0x00, 0x00, 0x00, 0x00})
-
-	// Offset to image data
-	buf.Write([]byte{0x16, 0x00, 0x00, 0x00}) // 22 bytes (6 + 16)
+	buf.Write([]byte{0x00, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00})
 
 	// BMP header
 	bmpStart := buf.Len()
-	buf.Write([]byte{0x28, 0x00, 0x00, 0x00}) // Header size (40 bytes)
-
-	// Width
+	buf.Write([]byte{0x28, 0x00, 0x00, 0x00})
 	buf.WriteByte(byte(width))
 	buf.Write([]byte{0x00, 0x00, 0x00})
-
-	// Height (doubled for AND mask)
 	buf.WriteByte(byte(height * 2))
-	buf.Write([]byte{0x00, 0x00, 0x00})
+	buf.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x00, 0x20, 0x00})
+	buf.Write(make([]byte, 20)) // Zeros for compression, size, etc.
 
-	buf.Write([]byte{0x01, 0x00}) // Planes
-	buf.Write([]byte{0x20, 0x00}) // Bits per pixel
-	buf.Write([]byte{0x00, 0x00, 0x00, 0x00}) // Compression
-	buf.Write([]byte{0x00, 0x00, 0x00, 0x00}) // Image size
-	buf.Write([]byte{0x00, 0x00, 0x00, 0x00}) // X pixels per meter
-	buf.Write([]byte{0x00, 0x00, 0x00, 0x00}) // Y pixels per meter
-	buf.Write([]byte{0x00, 0x00, 0x00, 0x00}) // Colors used
-	buf.Write([]byte{0x00, 0x00, 0x00, 0x00}) // Important colors
-
-	// Pixel data (bottom-up BMP format)
+	// Pixel data (bottom-up)
 	for y := height - 1; y >= 0; y-- {
 		for x := 0; x < width; x++ {
 			c := img.RGBAAt(x, y)
-			buf.WriteByte(c.B) // Blue
-			buf.WriteByte(c.G) // Green
-			buf.WriteByte(c.R) // Red
-			buf.WriteByte(c.A) // Alpha
+			buf.WriteByte(c.B)
+			buf.WriteByte(c.G)
+			buf.WriteByte(c.R)
+			buf.WriteByte(c.A)
 		}
 	}
 
-	// AND mask (all zeros for full alpha support)
+	// AND mask
 	rowSize := ((width + 31) / 32) * 4
-	for y := 0; y < height; y++ {
-		for x := 0; x < rowSize; x++ {
-			buf.WriteByte(0x00)
-		}
-	}
+	buf.Write(make([]byte, rowSize*height))
 
-	// Update image size in directory entry
+	// Update size
 	imageSize := buf.Len() - bmpStart
 	result := buf.Bytes()
-	result[sizeOffset] = byte(imageSize & 0xFF)
-	result[sizeOffset+1] = byte((imageSize >> 8) & 0xFF)
-	result[sizeOffset+2] = byte((imageSize >> 16) & 0xFF)
-	result[sizeOffset+3] = byte((imageSize >> 24) & 0xFF)
+	result[sizeOffset] = byte(imageSize)
+	result[sizeOffset+1] = byte(imageSize >> 8)
+	result[sizeOffset+2] = byte(imageSize >> 16)
+	result[sizeOffset+3] = byte(imageSize >> 24)
 
 	return result
 }
 
 func createFallbackIcon(c color.RGBA) []byte {
-	// Simple 16x16 fallback icon
 	size := 16
 	img := image.NewRGBA(image.Rect(0, 0, size, size))
 
-	// Draw a simple mic shape
+	// Simple mic
 	for y := 0; y < size; y++ {
 		for x := 0; x < size; x++ {
-			if (y >= 2 && y <= 7 && x >= 6 && x <= 9) || // Capsule
-			   (y >= 8 && y <= 10 && x >= 7 && x <= 8) { // Stand
+			if (y >= 2 && y <= 7 && x >= 6 && x <= 9) ||
+				(y >= 8 && y <= 10 && x >= 7 && x <= 8) {
 				img.SetRGBA(x, y, c)
 			}
 		}
