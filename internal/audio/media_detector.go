@@ -5,96 +5,186 @@ import (
 	"unsafe"
 )
 
-// IsMediaPlaying checks if any media is currently playing on Windows
+var (
+	ole32               = syscall.NewLazyDLL("ole32.dll")
+	coInitializeEx      = ole32.NewProc("CoInitializeEx")
+	coUninitialize      = ole32.NewProc("CoUninitialize")
+	coCreateInstance    = ole32.NewProc("CoCreateInstance")
+
+	// MMDeviceEnumerator CLSID: {BCDE0395-E52F-467C-8E3D-C4579291692E}
+	CLSID_MMDeviceEnumerator = syscall.GUID{
+		Data1: 0xBCDE0395,
+		Data2: 0xE52F,
+		Data3: 0x467C,
+		Data4: [8]byte{0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E},
+	}
+
+	// IMMDeviceEnumerator IID: {A95664D2-9614-4F35-A746-DE8DB63617E6}
+	IID_IMMDeviceEnumerator = syscall.GUID{
+		Data1: 0xA95664D2,
+		Data2: 0x9614,
+		Data3: 0x4F35,
+		Data4: [8]byte{0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6},
+	}
+
+	// IAudioSessionManager2 IID: {77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}
+	IID_IAudioSessionManager2 = syscall.GUID{
+		Data1: 0x77AA99A0,
+		Data2: 0x1BD6,
+		Data3: 0x484F,
+		Data4: [8]byte{0x8B, 0xC7, 0x2C, 0x65, 0x4C, 0x9A, 0x9B, 0x6F},
+	}
+)
+
+const (
+	CLSCTX_INPROC_SERVER = 0x1
+	eRender              = 0 // Audio rendering (speakers)
+	eConsole             = 0 // Console audio device
+	AudioSessionStateActive = 1 // Active audio session
+)
+
+// IsMediaPlaying detects if any audio is playing through speakers
 func IsMediaPlaying() bool {
-	// Use Windows Audio Session API to detect if media is playing
-	// Check if any audio session (other than our own) is active
-	return isAudioSessionActive()
-}
-
-func isAudioSessionActive() bool {
-	// Load required Windows DLLs
-	ole32 := syscall.NewLazyDLL("ole32.dll")
-	coInitializeEx := ole32.NewProc("CoInitializeEx")
-	coUninitialize := ole32.NewProc("CoUninitialize")
-
 	// Initialize COM
-	coInitializeEx.Call(0, 0x2) // COINIT_APARTMENTTHREADED
+	ret, _, _ := coInitializeEx.Call(0, 0x2) // COINIT_APARTMENTTHREADED
+	if ret != 0 && ret != 0x00000001 { // S_OK or S_FALSE (already initialized)
+		return false
+	}
 	defer coUninitialize.Call()
 
-	// For now, use a simple heuristic: check if Chrome/Edge/Firefox processes exist
-	// These typically indicate video playback
-	browsers := []string{"chrome.exe", "msedge.exe", "firefox.exe"}
+	// Create MMDeviceEnumerator
+	var deviceEnumerator uintptr
+	ret, _, _ = coCreateInstance.Call(
+		uintptr(unsafe.Pointer(&CLSID_MMDeviceEnumerator)),
+		0,
+		CLSCTX_INPROC_SERVER,
+		uintptr(unsafe.Pointer(&IID_IMMDeviceEnumerator)),
+		uintptr(unsafe.Pointer(&deviceEnumerator)),
+	)
+	if ret != 0 || deviceEnumerator == 0 {
+		return false
+	}
+	defer syscall.Syscall(getVTable(deviceEnumerator, 2), 1, deviceEnumerator, 0, 0) // Release
 
-	for _, browser := range browsers {
-		if isProcessRunning(browser) {
-			// Assume media might be playing if browser is running
-			// This is a conservative approach - better to pause unnecessarily
-			// than to transcribe video audio
-			return true
+	// Get default audio endpoint (speakers)
+	var device uintptr
+	ret, _, _ = syscall.Syscall6(
+		getVTable(deviceEnumerator, 4), // GetDefaultAudioEndpoint
+		4,
+		deviceEnumerator,
+		uintptr(eRender),  // Render device (speakers)
+		uintptr(eConsole), // Console role
+		uintptr(unsafe.Pointer(&device)),
+		0,
+		0,
+	)
+	if ret != 0 || device == 0 {
+		return false
+	}
+	defer syscall.Syscall(getVTable(device, 2), 1, device, 0, 0) // Release
+
+	// Activate IAudioSessionManager2
+	var sessionManager uintptr
+	ret, _, _ = syscall.Syscall6(
+		getVTable(device, 3), // Activate
+		5,
+		device,
+		uintptr(unsafe.Pointer(&IID_IAudioSessionManager2)),
+		CLSCTX_INPROC_SERVER,
+		0,
+		uintptr(unsafe.Pointer(&sessionManager)),
+		0,
+	)
+	if ret != 0 || sessionManager == 0 {
+		return false
+	}
+	defer syscall.Syscall(getVTable(sessionManager, 2), 1, sessionManager, 0, 0) // Release
+
+	// Get session enumerator
+	var sessionEnumerator uintptr
+	ret, _, _ = syscall.Syscall(
+		getVTable(sessionManager, 5), // GetSessionEnumerator
+		2,
+		sessionManager,
+		uintptr(unsafe.Pointer(&sessionEnumerator)),
+		0,
+	)
+	if ret != 0 || sessionEnumerator == 0 {
+		return false
+	}
+	defer syscall.Syscall(getVTable(sessionEnumerator, 2), 1, sessionEnumerator, 0, 0) // Release
+
+	// Get session count
+	var sessionCount int32
+	ret, _, _ = syscall.Syscall(
+		getVTable(sessionEnumerator, 3), // GetCount
+		2,
+		sessionEnumerator,
+		uintptr(unsafe.Pointer(&sessionCount)),
+		0,
+	)
+	if ret != 0 {
+		return false
+	}
+
+	// Get our own process ID to exclude it
+	ourPID := getCurrentProcessID()
+
+	// Check each session
+	for i := int32(0); i < sessionCount; i++ {
+		var session uintptr
+		ret, _, _ = syscall.Syscall(
+			getVTable(sessionEnumerator, 4), // GetSession
+			3,
+			sessionEnumerator,
+			uintptr(i),
+			uintptr(unsafe.Pointer(&session)),
+		)
+		if ret != 0 || session == 0 {
+			continue
+		}
+
+		// Get session state
+		var state int32
+		syscall.Syscall(
+			getVTable(session, 3), // GetState
+			2,
+			session,
+			uintptr(unsafe.Pointer(&state)),
+			0,
+		)
+
+		// Get process ID for this session
+		var processID uint32
+		syscall.Syscall(
+			getVTable(session, 14), // GetProcessId
+			2,
+			session,
+			uintptr(unsafe.Pointer(&processID)),
+			0,
+		)
+
+		syscall.Syscall(getVTable(session, 2), 1, session, 0, 0) // Release
+
+		// Check if session is active and not our own process
+		if state == AudioSessionStateActive && processID != ourPID {
+			return true // Found active audio from another process
 		}
 	}
 
 	return false
 }
 
-func isProcessRunning(processName string) bool {
-	snapshot := syscall.NewLazyDLL("kernel32.dll").NewProc("CreateToolhelp32Snapshot")
-	process32First := syscall.NewLazyDLL("kernel32.dll").NewProc("Process32FirstW")
-	process32Next := syscall.NewLazyDLL("kernel32.dll").NewProc("Process32NextW")
-	closeHandle := syscall.NewLazyDLL("kernel32.dll").NewProc("CloseHandle")
+// getVTable gets a function pointer from COM vtable
+func getVTable(obj uintptr, index int) uintptr {
+	vtable := *(**uintptr)(unsafe.Pointer(obj))
+	return *(*uintptr)(unsafe.Pointer(uintptr(unsafe.Pointer(vtable)) + uintptr(index)*unsafe.Sizeof(uintptr(0))))
+}
 
-	const TH32CS_SNAPPROCESS = 0x00000002
-
-	// Create snapshot
-	hSnapshot, _, _ := snapshot.Call(uintptr(TH32CS_SNAPPROCESS), 0)
-	if hSnapshot == 0 {
-		return false
-	}
-	defer closeHandle.Call(hSnapshot)
-
-	// Process entry structure
-	type ProcessEntry32 struct {
-		Size              uint32
-		Usage             uint32
-		ProcessID         uint32
-		DefaultHeapID     uintptr
-		ModuleID          uint32
-		Threads           uint32
-		ParentProcessID   uint32
-		PriClassBase      int32
-		Flags             uint32
-		ExeFile           [260]uint16
-	}
-
-	var pe ProcessEntry32
-	pe.Size = uint32(unsafe.Sizeof(pe))
-
-	// Get first process
-	ret, _, _ := process32First.Call(hSnapshot, uintptr(unsafe.Pointer(&pe)))
-	if ret == 0 {
-		return false
-	}
-
-	// Convert target process name to UTF16
-	targetName := syscall.StringToUTF16(processName)
-
-	// Iterate through processes
-	for {
-		// Compare process names
-		exeName := syscall.UTF16ToString(pe.ExeFile[:])
-		if exeName == processName {
-			return true
-		}
-
-		// Get next process
-		ret, _, _ = process32Next.Call(hSnapshot, uintptr(unsafe.Pointer(&pe)))
-		if ret == 0 {
-			break
-		}
-	}
-
-	_ = targetName // Use the variable to avoid unused warning
-
-	return false
+// getCurrentProcessID returns the current process ID
+func getCurrentProcessID() uint32 {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	getCurrentProcessId := kernel32.NewProc("GetCurrentProcessId")
+	pid, _, _ := getCurrentProcessId.Call()
+	return uint32(pid)
 }

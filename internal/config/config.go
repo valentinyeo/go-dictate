@@ -46,7 +46,7 @@ func Default() Config {
 		Audio: AudioConfig{
 			SilenceThresholdMs: 3000,
 			DuckVolume:         0.2,
-			AutoPauseOnMedia:   true,
+			AutoPauseOnMedia:   true, // Now uses proper audio detection!
 		},
 		VAD: VADConfig{
 			EnergyThreshold: 0.02,
