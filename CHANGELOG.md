@@ -5,6 +5,22 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.7] - 2026-02-05 "Fixed Standby Bug"
+
+### Fixed
+- **Critical bug: App stuck in standby state** - Fixed issue where app wouldn't come out of AutoPaused state
+  - When media playback was detected while Deepgram connection was open, the connection was never closed
+  - This left the connection hanging and prevented new speech detection
+  - Now properly closes Deepgram connection and restores audio ducking when media is detected
+  - App now correctly transitions from AutoPaused → Active → Speaking when you start talking again
+
+### Technical Details
+- Modified: `main.go:191-206` - Added Deepgram connection cleanup when media playback detected
+- Closes both the Deepgram context and audio channel
+- Restores audio ducking to prevent audio conflicts
+
+---
+
 ## [1.2.6] - 2026-02-05 "Restart Menu Option"
 
 ### Added

@@ -194,6 +194,20 @@ func vadAndDeepgramManager(
 					logger.Info("[Media] Media playback detected - auto-pausing")
 					fmt.Println("[Media] Media playback detected - pausing dictation")
 					stateManager.Set(state.AutoPaused)
+
+					// Close any open Deepgram connection
+					if deepgramCancel != nil {
+						logger.Info("[Media] Closing open Deepgram connection")
+						deepgramCancel()
+						deepgramCancel = nil
+					}
+					if deepgramAudioTx != nil {
+						close(deepgramAudioTx)
+						deepgramAudioTx = nil
+					}
+
+					// Restore audio ducking
+					_ = ducker.Restore()
 				}
 				continue
 			}
