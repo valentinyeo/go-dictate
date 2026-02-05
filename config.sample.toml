@@ -1,0 +1,15 @@
+# Dictation App Configuration
+# Edit this file to configure the application
+# Get your Deepgram API key from: https://console.deepgram.com/
+
+[deepgram]
+api_key = "YOUR_API_KEY_HERE"
+language = "en"  # en or de
+model = "nova-2"
+
+[audio]
+silence_threshold_ms = 3000  # Auto-pause after 3 seconds of silence
+duck_volume = 0.2           # Volume level (0.0-1.0) for other apps during dictation
+
+[vad]
+energy_threshold = 0.02  # RMS threshold for speech detection (0.0-1.0)

@@ -1,0 +1,231 @@
+name: Release with Installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        default: 'v0.1.0'
+
+jobs:
+  release:
+    name: Build and Create Release with Installer
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+        cache: true
+
+    - name: Set up MinGW
+      uses: msys2/setup-msys2@v2
+      with:
+        update: true
+        install: mingw-w64-x86_64-gcc
+
+    - name: Add MinGW to PATH
+      run: echo "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Install NSIS
+      run: |
+        choco install nsis -y
+        echo "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      shell: pwsh
+
+    - name: Get version
+      id: version
+      run: |
+        if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+          $version = "${{ github.event.inputs.version }}"
+        } else {
+          $version = "${{ github.ref_name }}"
+        }
+        $versionNum = $version -replace '^v', ''
+        echo "VERSION=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        echo "VERSION_NUM=$versionNum" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        echo "Building version: $version"
+      shell: pwsh
+
+    - name: Download dependencies
+      run: go mod download
+
+    - name: Build release binary
+      run: |
+        $env:CGO_ENABLED = "1"
+        $version = "${{ steps.version.outputs.VERSION }}"
+        go build -v -ldflags="-s -w -H windowsgui -X main.Version=$version" -trimpath -o dictation.exe .
+      shell: pwsh
+
+    - name: Create LICENSE if missing
+      run: |
+        if (-not (Test-Path "LICENSE")) {
+          @"
+MIT License
+
+Copyright (c) 2025
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"@ | Out-File -FilePath "LICENSE" -Encoding utf8
+        }
+      shell: pwsh
+
+    - name: Update NSIS script version
+      run: |
+        $version = "${{ steps.version.outputs.VERSION_NUM }}"
+        $content = Get-Content "installer.nsi" -Raw
+        $content = $content -replace '!define APP_VERSION ".*"', "!define APP_VERSION `"$version`""
+        $content | Out-File -FilePath "installer.nsi" -Encoding utf8
+      shell: pwsh
+
+    - name: Build NSIS installer
+      run: makensis installer.nsi
+      shell: cmd
+
+    - name: Rename installer
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        $versionNum = "${{ steps.version.outputs.VERSION_NUM }}"
+        $oldName = "DictationSetup-$versionNum.exe"
+        $newName = "dictation-$version-windows-installer.exe"
+
+        if (Test-Path $oldName) {
+          Rename-Item $oldName $newName
+          Write-Host "Renamed: $oldName -> $newName"
+        }
+      shell: pwsh
+
+    - name: Create portable ZIP
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        $archiveName = "dictation-$version-windows-portable"
+
+        New-Item -ItemType Directory -Force -Path $archiveName
+
+        Copy-Item "dictation.exe" "$archiveName\"
+        Copy-Item "config.sample.toml" "$archiveName\"
+        Copy-Item "README.md" "$archiveName\"
+        Copy-Item "QUICKSTART.md" "$archiveName\"
+        Copy-Item "LICENSE" "$archiveName\"
+
+        Compress-Archive -Path $archiveName -DestinationPath "$archiveName.zip"
+
+        Write-Host "`nCreated portable package: $archiveName.zip"
+      shell: pwsh
+
+    - name: Generate checksums
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+
+        $installer = "dictation-$version-windows-installer.exe"
+        $portable = "dictation-$version-windows-portable.zip"
+
+        $hashes = @()
+
+        if (Test-Path $installer) {
+          $hash = Get-FileHash $installer -Algorithm SHA256
+          $hashes += "$($hash.Hash)  $installer"
+        }
+
+        if (Test-Path $portable) {
+          $hash = Get-FileHash $portable -Algorithm SHA256
+          $hashes += "$($hash.Hash)  $portable"
+        }
+
+        $hashes | Out-File -FilePath "checksums.txt" -Encoding utf8
+
+        Write-Host "`nChecksums:"
+        Get-Content "checksums.txt"
+      shell: pwsh
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.VERSION }}
+        name: Release ${{ steps.version.outputs.VERSION }}
+        draft: false
+        prerelease: false
+        body: |
+          ## Go Dictation App ${{ steps.version.outputs.VERSION }}
+
+          Windows system tray dictation app using Deepgram API.
+
+          ### 📦 Downloads
+
+          **Installer (Recommended)**
+          - `dictation-${{ steps.version.outputs.VERSION }}-windows-installer.exe` - One-click installer with Start Menu integration
+
+          **Portable**
+          - `dictation-${{ steps.version.outputs.VERSION }}-windows-portable.zip` - Extract and run, no installation needed
+
+          ### 🚀 Quick Start
+
+          **Using Installer:**
+          1. Download and run `dictation-${{ steps.version.outputs.VERSION }}-windows-installer.exe`
+          2. Launch from Start Menu
+          3. Right-click tray icon → Settings → Add API key
+          4. Restart and start dictating!
+
+          **Using Portable:**
+          1. Download and extract ZIP
+          2. Run `dictation.exe`
+          3. Configure API key in tray settings
+          4. Start dictating!
+
+          ### ✅ Requirements
+
+          - Windows 10/11 (64-bit)
+          - Microphone
+          - Deepgram API key ([Get free key](https://console.deepgram.com/))
+
+          ### 📝 Features
+
+          - Real-time speech-to-text transcription
+          - Automatic pause after 3s silence
+          - System tray integration
+          - English/German language support
+          - Auto-start on boot option
+          - Low resource usage (<50 MB RAM, <5% CPU)
+
+          ### 🔒 Security
+
+          SHA256 checksums available in `checksums.txt`
+
+          ### 📚 Documentation
+
+          - [README](https://github.com/${{ github.repository }}/blob/main/README.md)
+          - [Quick Start Guide](https://github.com/${{ github.repository }}/blob/main/QUICKSTART.md)
+
+          ---
+
+          **Full changelog:** https://github.com/${{ github.repository }}/commits/${{ steps.version.outputs.VERSION }}
+        files: |
+          dictation-${{ steps.version.outputs.VERSION }}-windows-installer.exe
+          dictation-${{ steps.version.outputs.VERSION }}-windows-portable.zip
+          checksums.txt
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
