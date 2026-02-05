@@ -13,7 +13,7 @@ var (
 		isPlaying bool
 		lastCheck time.Time
 	}
-	cacheDuration = 25 * time.Millisecond // Check at most every 25ms
+	cacheDuration = 5 * time.Millisecond // Check at most every 5ms (200 checks/sec)
 )
 
 var (
