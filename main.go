@@ -192,6 +192,22 @@ func vadAndDeepgramManager(
 			if audio.IsMediaPlaying() {
 				if currentState == state.Active {
 					stateManager.Set(state.MediaDetected)
+				} else if currentState == state.Speaking {
+					// Media started while speaking - restore volume and close connection to prevent feedback loop
+					logger.Info("[Media] Media detected while speaking - closing Deepgram connection")
+					_ = ducker.Restore()
+
+					// Close any open Deepgram connection
+					if deepgramCancel != nil {
+						deepgramCancel()
+						deepgramCancel = nil
+					}
+					if deepgramAudioTx != nil {
+						close(deepgramAudioTx)
+						deepgramAudioTx = nil
+					}
+
+					stateManager.Set(state.MediaDetected)
 				}
 			} else if currentState == state.MediaDetected {
 				stateManager.Set(state.Active)
@@ -205,8 +221,10 @@ func vadAndDeepgramManager(
 				fmt.Println("[VAD] Speech started")
 				stateManager.Set(state.Speaking)
 
-				// Duck audio
-				_ = ducker.Duck()
+				// Duck audio only if media is NOT playing (avoid feedback loop from speakers)
+				if currentState != state.MediaDetected {
+					_ = ducker.Duck()
+				}
 
 				// Start Deepgram connection
 				client := deepgram.NewClient(

@@ -5,6 +5,25 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-02-05 "Fixed Feedback Loop"
+
+### Fixed
+- **CRITICAL: Audio feedback loop** - Fixed ducking triggered by video audio through microphone
+  - VAD was detecting video audio through mic as "speech", causing continuous ducking
+  - Now only ducks volume when media is NOT playing (prevents feedback loop)
+  - When media detected while speaking, immediately restores volume and closes Deepgram connection
+  - Volume now properly restores when you stop speaking
+
+### Technical Details
+- Modified: `main.go` - Added conditional ducking logic (line 207-209)
+  - Only calls `Duck()` when `currentState != state.MediaDetected`
+- Modified: `main.go` - Added media detection while speaking handler (lines 191-208)
+  - Restores volume immediately when media starts during speech
+  - Closes Deepgram connection to prevent transcribing video audio
+  - Transitions to MediaDetected state
+
+---
+
 ## [1.3.0] - 2026-02-05 "Auto-Ducking"
 
 ### Added
