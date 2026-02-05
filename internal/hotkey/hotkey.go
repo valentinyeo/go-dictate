@@ -3,6 +3,7 @@ package hotkey
 import (
 	"context"
 	"fmt"
+	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -16,12 +17,12 @@ const (
 )
 
 var (
-	user32                  = windows.NewLazySystemDLL("user32.dll")
-	procRegisterHotKey      = user32.NewProc("RegisterHotKey")
-	procUnregisterHotKey    = user32.NewProc("UnregisterHotKey")
-	procGetMessage          = user32.NewProc("GetMessageW")
-	procTranslateMessage    = user32.NewProc("TranslateMessage")
-	procDispatchMessage     = user32.NewProc("DispatchMessageW")
+	user32               = windows.NewLazySystemDLL("user32.dll")
+	procRegisterHotKey   = user32.NewProc("RegisterHotKey")
+	procUnregisterHotKey = user32.NewProc("UnregisterHotKey")
+	procGetMessage       = user32.NewProc("GetMessageW")
+	procTranslateMessage = user32.NewProc("TranslateMessage")
+	procDispatchMessage  = user32.NewProc("DispatchMessageW")
 )
 
 type MSG struct {
@@ -34,44 +35,67 @@ type MSG struct {
 }
 
 type Manager struct {
-	hotkeyID int
-	callback func()
-	ctx      context.Context
-	cancel   context.CancelFunc
+	hotkeys   map[int]func()
+	nextID    int
+	ctx       context.Context
+	cancel    context.CancelFunc
+	mu        sync.Mutex
+	loopStarted bool
 }
 
 func NewManager() *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
-		hotkeyID: 1,
-		ctx:      ctx,
-		cancel:   cancel,
+		hotkeys: make(map[int]func()),
+		nextID:  1,
+		ctx:     ctx,
+		cancel:  cancel,
 	}
 }
 
-// Register Ctrl+Alt+Shift+L hotkey
+// RegisterLanguageToggle registers Ctrl+Alt+Shift+L hotkey
 func (m *Manager) RegisterLanguageToggle(callback func()) error {
-	m.callback = callback
-
-	// Register hotkey: Ctrl+Alt+Shift+L (VK_L = 0x4C)
-	modifiers := MOD_CONTROL | MOD_ALT | MOD_SHIFT
+	modifiers := uintptr(MOD_CONTROL | MOD_ALT | MOD_SHIFT)
 	vkCode := uintptr(0x4C) // L key
+	return m.register(modifiers, vkCode, "Ctrl+Alt+Shift+L (Language Toggle)", callback)
+}
+
+// RegisterPauseToggle registers Ctrl+Alt+Shift+P hotkey
+func (m *Manager) RegisterPauseToggle(callback func()) error {
+	modifiers := uintptr(MOD_CONTROL | MOD_ALT | MOD_SHIFT)
+	vkCode := uintptr(0x50) // P key
+	return m.register(modifiers, vkCode, "Ctrl+Alt+Shift+P (Pause/Resume)", callback)
+}
+
+func (m *Manager) register(modifiers, vkCode uintptr, description string, callback func()) error {
+	m.mu.Lock()
+	hotkeyID := m.nextID
+	m.nextID++
+	m.hotkeys[hotkeyID] = callback
+	needStart := !m.loopStarted
+	m.loopStarted = true
+	m.mu.Unlock()
 
 	ret, _, err := procRegisterHotKey.Call(
-		0,                   // NULL window handle
-		uintptr(m.hotkeyID), // Hotkey ID
-		uintptr(modifiers),
+		0,
+		uintptr(hotkeyID),
+		modifiers,
 		vkCode,
 	)
 
 	if ret == 0 {
-		return fmt.Errorf("failed to register hotkey: %v", err)
+		m.mu.Lock()
+		delete(m.hotkeys, hotkeyID)
+		m.mu.Unlock()
+		return fmt.Errorf("failed to register %s: %v", description, err)
 	}
 
-	fmt.Println("[Hotkey] Registered Ctrl+Alt+Shift+L for language toggle")
+	fmt.Printf("[Hotkey] Registered %s\n", description)
 
-	// Start message loop
-	go m.messageLoop()
+	// Start message loop only once
+	if needStart {
+		go m.messageLoop()
+	}
 
 	return nil
 }
@@ -82,7 +106,7 @@ func (m *Manager) messageLoop() {
 	for {
 		select {
 		case <-m.ctx.Done():
-			m.Unregister()
+			m.UnregisterAll()
 			return
 		default:
 		}
@@ -99,10 +123,13 @@ func (m *Manager) messageLoop() {
 		}
 
 		if msg.Msg == WM_HOTKEY {
-			if int(msg.WParam) == m.hotkeyID {
-				if m.callback != nil {
-					m.callback()
-				}
+			hotkeyID := int(msg.WParam)
+			m.mu.Lock()
+			callback := m.hotkeys[hotkeyID]
+			m.mu.Unlock()
+
+			if callback != nil {
+				callback()
 			}
 		}
 
@@ -111,9 +138,15 @@ func (m *Manager) messageLoop() {
 	}
 }
 
-func (m *Manager) Unregister() {
-	procUnregisterHotKey.Call(0, uintptr(m.hotkeyID))
-	fmt.Println("[Hotkey] Unregistered hotkey")
+func (m *Manager) UnregisterAll() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for hotkeyID := range m.hotkeys {
+		procUnregisterHotKey.Call(0, uintptr(hotkeyID))
+	}
+	m.hotkeys = make(map[int]func())
+	fmt.Println("[Hotkey] Unregistered all hotkeys")
 }
 
 func (m *Manager) Stop() {

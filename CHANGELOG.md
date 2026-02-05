@@ -5,6 +5,32 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-02-05 "Auto-Pause & Hotkeys"
+
+### Added
+- **Auto-pause on media playback** - Automatically pauses dictation when YouTube or other media is playing
+  - Prevents transcribing video/audio content
+  - Configurable via `auto_pause_on_media` in config.toml
+  - Detects Chrome, Edge, Firefox browser processes as media indicators
+- **Pause/Resume hotkey** - Press **Ctrl+Alt+Shift+P** to quickly pause/resume dictation
+  - No need to click tray icon
+  - Works system-wide from any app
+- **Multi-hotkey support** - Hotkey manager now supports multiple global hotkeys
+  - Ctrl+Alt+Shift+L: Language toggle (English/German)
+  - Ctrl+Alt+Shift+P: Pause/Resume toggle
+
+### Changed
+- Refactored hotkey manager to support multiple hotkeys simultaneously
+- Improved VAD loop to check for media playback before processing audio
+
+### Technical Details
+- Added: `internal/audio/media_detector.go` - Windows API media detection
+- Modified: `internal/hotkey/hotkey.go` - Multi-hotkey support with sync.Mutex
+- Modified: `internal/config/config.go` - Added AutoPauseOnMedia config option
+- Modified: `main.go` - Integrated media detection and pause hotkey
+
+---
+
 ## [1.1.0] - 2026-02-05 "Dashboard & PNG Icons"
 
 ### Added

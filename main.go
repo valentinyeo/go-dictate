@@ -70,8 +70,10 @@ func main() {
 	// Start VAD processor and Deepgram client manager
 	go vadAndDeepgramManager(ctx, audioChunks, transcriptText, stateManager, cfg)
 
-	// Register global hotkey for language toggle
+	// Register global hotkeys
 	hotkeyManager := hotkey.NewManager()
+
+	// Language toggle: Ctrl+Alt+Shift+L
 	err = hotkeyManager.RegisterLanguageToggle(func() {
 		// Toggle language between en and de
 		if cfg.Deepgram.Language == "en" {
@@ -86,16 +88,30 @@ func main() {
 		fmt.Printf("[Hotkey] Language switched to: %s\n", cfg.Deepgram.Language)
 	})
 	if err != nil {
-		logger.Error("Failed to register hotkey: %v", err)
+		logger.Error("Failed to register language hotkey: %v", err)
 		fmt.Printf("[Hotkey] Warning: Could not register Ctrl+Alt+Shift+L: %v\n", err)
 	}
+
+	// Pause/Resume toggle: Ctrl+Alt+Shift+P
+	err = hotkeyManager.RegisterPauseToggle(func() {
+		newState := stateManager.TogglePause()
+		logger.Info("Hotkey pause toggle: %s (Ctrl+Alt+Shift+P)", newState)
+		fmt.Printf("[Hotkey] Pause toggled: %s\n", newState)
+	})
+	if err != nil {
+		logger.Error("Failed to register pause hotkey: %v", err)
+		fmt.Printf("[Hotkey] Warning: Could not register Ctrl+Alt+Shift+P: %v\n", err)
+	}
+
 	defer hotkeyManager.Stop()
 
 	// Create and run system tray (blocks on main thread)
 	fmt.Println("[Main] Creating system tray...")
 	trayManager := tray.NewManager(stateManager, cfg)
 
-	fmt.Println("[Main] Dictation app ready!")
+	fmt.Printf("[Main] Dictation app v%s ready!\n", Version)
+	fmt.Println("[Main] - Ctrl+Alt+Shift+P: Pause/Resume")
+	fmt.Println("[Main] - Ctrl+Alt+Shift+L: Toggle language")
 	fmt.Println("[Main] - Left-click tray icon to pause/resume")
 	fmt.Println("[Main] - Right-click for menu options")
 
@@ -134,6 +150,16 @@ func vadAndDeepgramManager(
 
 			// Skip processing if paused
 			if currentState == state.Paused || currentState == state.MicConflict {
+				continue
+			}
+
+			// Check for media playback and auto-pause if enabled
+			if cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying() {
+				if currentState != state.AutoPaused {
+					logger.Info("[Media] Media playback detected - auto-pausing")
+					fmt.Println("[Media] Media playback detected - pausing dictation")
+					stateManager.Set(state.AutoPaused)
+				}
 				continue
 			}
 

@@ -8,8 +8,9 @@ language = "en"  # en or de
 model = "nova-2"
 
 [audio]
-silence_threshold_ms = 3000  # Auto-pause after 3 seconds of silence
-duck_volume = 0.2           # Volume level (0.0-1.0) for other apps during dictation
+silence_threshold_ms = 3000   # Auto-pause after 3 seconds of silence
+duck_volume = 0.2            # Volume level (0.0-1.0) for other apps during dictation
+auto_pause_on_media = true   # Auto-pause when media is playing (YouTube, videos, etc.)
 
 [vad]
 energy_threshold = 0.02  # RMS threshold for speech detection (0.0-1.0)

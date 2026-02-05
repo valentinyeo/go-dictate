@@ -26,6 +26,7 @@ type DeepgramConfig struct {
 type AudioConfig struct {
 	SilenceThresholdMs uint64  `toml:"silence_threshold_ms"`
 	DuckVolume         float32 `toml:"duck_volume"`
+	AutoPauseOnMedia   bool    `toml:"auto_pause_on_media"`
 }
 
 type VADConfig struct {
@@ -45,6 +46,7 @@ func Default() Config {
 		Audio: AudioConfig{
 			SilenceThresholdMs: 3000,
 			DuckVolume:         0.2,
+			AutoPauseOnMedia:   true,
 		},
 		VAD: VADConfig{
 			EnergyThreshold: 0.02,
