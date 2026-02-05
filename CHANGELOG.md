@@ -5,6 +5,22 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-02-05 "Auto-Pause & Hotkeys (Fixed)"
+
+### Fixed
+- **Windows Core Audio API implementation** - Fixed compilation errors in media detection
+  - Changed from naive browser process detection to proper audio session monitoring
+  - Uses IAudioSessionManager2 to enumerate actual audio sessions on speakers
+  - Filters out own process ID to avoid false positives
+  - Now correctly detects when YouTube, videos, or any media is playing
+- Fixed syscall type issues that prevented v1.2.0 from compiling properly
+
+### Technical Details
+- Fixed: `internal/audio/media_detector.go` - Proper COM interface calls with correct argument types
+- All syscall.Syscall6 calls now use proper uintptr type casting
+
+---
+
 ## [1.2.0] - 2026-02-05 "Auto-Pause & Hotkeys"
 
 ### Added

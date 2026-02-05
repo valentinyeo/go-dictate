@@ -47,10 +47,10 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.2.0")
+	systray.SetTooltip("Dictation App v1.2.1")
 
 	// Create menu items
-	systray.AddMenuItem("v1.2.0 - Auto-Pause & Hotkeys", "Current version").Disable()
+	systray.AddMenuItem("v1.2.1 - Auto-Pause & Hotkeys", "Current version").Disable()
 	systray.AddSeparator()
 	m.pauseItem = systray.AddMenuItem("Pause", "Pause/Resume dictation")
 	systray.AddSeparator()
