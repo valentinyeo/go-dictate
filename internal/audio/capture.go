@@ -55,11 +55,8 @@ func NewCapture(audioChunks chan<- []int16) (*Capture, error) {
 		return nil, fmt.Errorf("failed to initialize audio device: %w", err)
 	}
 
-	// Get device info
-	deviceInfo, err := ctx.DeviceInfo(malgo.Capture, device.ID(), malgo.Shared)
-	if err == nil {
-		fmt.Printf("[Audio] Using device: %s\n", deviceInfo.Name())
-	}
+	// Device info
+	fmt.Println("[Audio] Audio device initialized")
 
 	fmt.Printf("[Audio] Config: 16kHz, mono, i16, %d bytes per period\n", sizeInBytes)
 

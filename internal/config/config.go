@@ -140,6 +140,6 @@ func OpenInEditor() error {
 	}
 
 	// Windows: use cmd /C start to open with default editor
-	cmd := fmt.Sprintf(`cmd /C start "" "%s"`, configPath)
-	return os.StartProcess("cmd", []string{"/C", "start", "", configPath}, &os.ProcAttr{})
+	_, err = os.StartProcess("cmd", []string{"/C", "start", "", configPath}, &os.ProcAttr{})
+	return err
 }
