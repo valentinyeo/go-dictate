@@ -53,7 +53,7 @@ func (m *Manager) onReady() {
 	m.languageItem = systray.AddMenuItem("Language: English", "Toggle language")
 	m.autostartItem = systray.AddMenuItemCheckbox("Start on Boot", "Start application on boot", isAutostartEnabled())
 	systray.AddSeparator()
-	m.settingsItem = systray.AddMenuItem("Settings", "Open configuration file")
+	m.settingsItem = systray.AddMenuItem("Open Config File", "Open configuration file")
 	m.exitItem = systray.AddMenuItem("Exit", "Exit application")
 
 	// Update language menu based on config
