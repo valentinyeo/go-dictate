@@ -5,6 +5,18 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.10] - 2026-02-05 "25ms Media Detection"
+
+### Improved
+- **Even faster media resume** - Reduced cache to 25ms (was 100ms)
+  - Checks media status up to 40 times per second
+  - Near-instant resume when video stops playing
+
+### Technical Details
+- Modified: `internal/audio/media_detector.go` - Reduced cache duration from 100ms to 25ms
+
+---
+
 ## [1.2.9] - 2026-02-05 "Snappy Media Resume"
 
 ### Improved

@@ -1,7 +1,7 @@
 package main
 
 const (
-	Version     = "1.2.9"
+	Version     = "1.2.10"
 	BuildDate   = "2026-02-05"
-	VersionName = "Snappy Media Resume"
+	VersionName = "25ms Media Detection"
 )
