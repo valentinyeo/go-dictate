@@ -183,34 +183,29 @@ func vadAndDeepgramManager(
 
 			currentState := stateManager.Get()
 
-			// Skip processing if paused
+			// Skip processing if manually paused
 			if currentState == state.Paused || currentState == state.MicConflict {
 				continue
 			}
 
-			// Update media detection visual indicator (does not block transcription)
+			// Auto-pause when media is playing (prevents transcribing video audio)
+			// BUT allow VAD to run so it can detect when user starts speaking (which overrides pause)
 			if audio.IsMediaPlaying() {
-				if currentState == state.Active {
-					stateManager.Set(state.MediaDetected)
+				if currentState == state.Active || currentState == state.AutoPaused {
+					logger.Info("[Media] Media detected - auto-pausing (VAD still monitoring)")
+					stateManager.Set(state.MediaPaused)
+					// Don't continue - let VAD process to detect speech
 				} else if currentState == state.Speaking {
-					// Media started while speaking - restore volume and close connection to prevent feedback loop
-					logger.Info("[Media] Media detected while speaking - closing Deepgram connection")
-					_ = ducker.Restore()
-
-					// Close any open Deepgram connection
-					if deepgramCancel != nil {
-						deepgramCancel()
-						deepgramCancel = nil
-					}
-					if deepgramAudioTx != nil {
-						close(deepgramAudioTx)
-						deepgramAudioTx = nil
-					}
-
-					stateManager.Set(state.MediaDetected)
+					// User is actively speaking while media plays - keep transcribing
+					// (volume is ducked, so their speech should be clear)
 				}
-			} else if currentState == state.MediaDetected {
-				stateManager.Set(state.Active)
+				// If MediaPaused, let VAD continue processing to detect speech override
+			} else {
+				// No media playing - resume to Active if we were media-paused
+				if currentState == state.MediaPaused {
+					logger.Info("[Media] Media stopped - resuming to Active")
+					stateManager.Set(state.Active)
+				}
 			}
 
 			vadEvent := vad.Process(audioChunk)
@@ -219,12 +214,11 @@ func vadAndDeepgramManager(
 			case audio.SpeechStarted:
 				logger.Info("[VAD] Speech started - opening Deepgram connection")
 				fmt.Println("[VAD] Speech started")
-				stateManager.Set(state.Speaking)
 
-				// Duck audio only if media is NOT playing (avoid feedback loop from speakers)
-				if currentState != state.MediaDetected {
-					_ = ducker.Duck()
-				}
+				// Duck audio (even if media playing - this is what allows dictation over media!)
+				_ = ducker.Duck()
+
+				stateManager.Set(state.Speaking)
 
 				// Start Deepgram connection
 				client := deepgram.NewClient(
@@ -252,22 +246,20 @@ func vadAndDeepgramManager(
 				}
 
 			case audio.Speaking:
-				if currentState == state.Speaking {
-					// Forward audio to Deepgram
-					if deepgramAudioTx != nil {
-						select {
-						case deepgramAudioTx <- audioChunk:
-						default:
-						}
+				// Forward audio to Deepgram if connection is open
+				// (Don't check currentState - it might be stale if we just transitioned from MediaPaused)
+				if deepgramAudioTx != nil {
+					select {
+					case deepgramAudioTx <- audioChunk:
+					default:
 					}
 				}
 
 			case audio.SilenceDetected:
 				logger.Info("[VAD] Silence detected - closing Deepgram connection")
 				fmt.Println("[VAD] Silence detected")
-				stateManager.Set(state.AutoPaused)
 
-				// Restore audio
+				// Restore audio volume
 				_ = ducker.Restore()
 
 				// Close Deepgram connection
@@ -281,6 +273,14 @@ func vadAndDeepgramManager(
 				}
 
 				vad.Reset()
+
+				// Return to MediaPaused if media is still playing, otherwise AutoPaused
+				if audio.IsMediaPlaying() {
+					logger.Info("[VAD] Media still playing - returning to MediaPaused")
+					stateManager.Set(state.MediaPaused)
+				} else {
+					stateManager.Set(state.AutoPaused)
+				}
 
 			case audio.Silence:
 				// Continue listening

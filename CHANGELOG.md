@@ -5,6 +5,31 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.3] - 2026-02-05 "Speech Overrides Media"
+
+### Changed
+- **Restored auto-pause + auto-ducking combination** - The way it was meant to work!
+  - Media playing → Auto-pauses transcription (prevents transcribing video audio)
+  - You start speaking → Overrides pause, ducks volume to 20%, starts transcribing YOUR speech
+  - You stop speaking → Restores volume, resumes pause if media still playing
+  - Renamed MediaDetected back to MediaPaused (it's actually pausing now)
+
+### Fixed
+- **CRITICAL: Couldn't dictate while media playing** - Fixed stale state variable
+  - `currentState` was read at loop start but not updated after state changes
+  - When transitioning MediaPaused → Speaking, audio wasn't forwarded to Deepgram
+  - Now forwards audio based on Deepgram connection status, not stale state variable
+
+### Technical Details
+- Modified: `main.go` - Restored auto-pause behavior with VAD override
+  - Media detection auto-pauses but VAD continues monitoring
+  - SpeechStarted overrides MediaPaused, ducks volume, starts transcribing
+  - SilenceDetected returns to MediaPaused if media still playing
+- Fixed: `main.go` - Removed stale currentState check in Speaking handler (line 248-257)
+- Modified: `internal/state/manager.go` - Renamed MediaDetected → MediaPaused
+
+---
+
 ## [1.3.2] - 2026-02-05 "5ms Media Detection"
 
 ### Improved
