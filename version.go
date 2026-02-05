@@ -1,7 +1,7 @@
 package main
 
 const (
-	Version     = "1.2.7"
+	Version     = "1.2.8"
 	BuildDate   = "2026-02-05"
-	VersionName = "Fixed Standby Bug"
+	VersionName = "Media Icon + Fix"
 )

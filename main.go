@@ -190,10 +190,10 @@ func vadAndDeepgramManager(
 
 			// Check for media playback and auto-pause if enabled
 			if cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying() {
-				if currentState != state.AutoPaused {
+				if currentState != state.MediaPaused {
 					logger.Info("[Media] Media playback detected - auto-pausing")
 					fmt.Println("[Media] Media playback detected - pausing dictation")
-					stateManager.Set(state.AutoPaused)
+					stateManager.Set(state.MediaPaused)
 
 					// Close any open Deepgram connection
 					if deepgramCancel != nil {
@@ -212,8 +212,8 @@ func vadAndDeepgramManager(
 				continue
 			}
 
-			// If we were auto-paused due to media and media has stopped, resume to Active state
-			if currentState == state.AutoPaused && cfg.Audio.AutoPauseOnMedia {
+			// If we were media-paused and media has stopped, resume to Active state
+			if currentState == state.MediaPaused {
 				logger.Info("[Media] Media stopped - resuming to Active")
 				fmt.Println("[Media] Media stopped - resuming dictation")
 				stateManager.Set(state.Active)

@@ -22,6 +22,9 @@ func getIconData(colorName string) []byte {
 	case "red":
 		iconFile = "mic-off.png" // Prohibited mic - Paused
 		tintColor = color.RGBA{0xEF, 0x44, 0x44, 0xFF} // Red
+	case "media":
+		iconFile = "mic-media.png" // Media icon - Media paused
+		tintColor = color.RGBA{0xF5, 0x9E, 0x0B, 0xFF} // Amber/Orange
 	default: // grey
 		iconFile = "mic-standby.png" // Outline mic - Standby
 		tintColor = color.RGBA{0x9C, 0xA3, 0xAF, 0xFF} // Grey

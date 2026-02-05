@@ -48,10 +48,10 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.2.7")
+	systray.SetTooltip("Dictation App v1.2.8")
 
 	// Create menu items
-	systray.AddMenuItem("v1.2.7 - Fixed Standby Bug", "Current version").Disable()
+	systray.AddMenuItem("v1.2.8 - Media Icon + Fix", "Current version").Disable()
 	systray.AddSeparator()
 	m.languageItem = systray.AddMenuItem("Language: English", "Toggle language")
 	m.autostartItem = systray.AddMenuItemCheckbox("Start on Boot", "Start application on boot", isAutostartEnabled())

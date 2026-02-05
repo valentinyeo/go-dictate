@@ -5,6 +5,28 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.8] - 2026-02-05 "Media Icon + Fix"
+
+### Added
+- **New MediaPaused state** - Distinct state for when media/YouTube is playing
+- **New media icon** (`mic-media.png`) - Amber/orange icon shows when paused due to media
+  - Makes it immediately clear WHY the app is paused
+  - Different from grey standby icon (AutoPaused after silence)
+
+### Fixed
+- **Media resume issue** - App now reliably comes out of media-paused state
+  - Changed condition to check for MediaPaused state directly
+  - More reliable than checking AutoPaused + config flag
+  - App properly transitions: MediaPaused → Active when video stops
+
+### Technical Details
+- Added: `state.MediaPaused` - New app state for media playback detection
+- Modified: `internal/state/manager.go` - Added MediaPaused state and icon mapping
+- Modified: `internal/tray/icons.go` - Added "media" color case for mic-media.png
+- Modified: `main.go` - Use MediaPaused instead of AutoPaused when media detected
+
+---
+
 ## [1.2.7] - 2026-02-05 "Fixed Standby Bug"
 
 ### Fixed

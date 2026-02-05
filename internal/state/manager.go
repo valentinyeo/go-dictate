@@ -11,6 +11,7 @@ const (
 	Active      AppState = iota // Listening, VAD running (grey icon)
 	Paused                      // User paused (red icon)
 	AutoPaused                  // VAD silence-paused (grey icon)
+	MediaPaused                 // Auto-paused due to media playback (media icon)
 	Speaking                    // Actively transcribing (blue icon)
 	MicConflict                 // Mic in use by other app (red icon)
 )
@@ -23,6 +24,8 @@ func (s AppState) String() string {
 		return "Paused"
 	case AutoPaused:
 		return "AutoPaused"
+	case MediaPaused:
+		return "MediaPaused"
 	case Speaking:
 		return "Speaking"
 	case MicConflict:
@@ -36,6 +39,8 @@ func (s AppState) IconColor() string {
 	switch s {
 	case Active, AutoPaused:
 		return "grey"
+	case MediaPaused:
+		return "media"
 	case Speaking:
 		return "blue"
 	case Paused, MicConflict:
