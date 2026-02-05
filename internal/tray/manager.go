@@ -47,9 +47,11 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App")
+	systray.SetTooltip("Dictation App v1.1.0")
 
 	// Create menu items
+	systray.AddMenuItem("v1.1.0 - Dashboard & PNG Icons", "Current version").Disable()
+	systray.AddSeparator()
 	m.pauseItem = systray.AddMenuItem("Pause", "Pause/Resume dictation")
 	systray.AddSeparator()
 	m.languageItem = systray.AddMenuItem("Language: English", "Toggle language")
