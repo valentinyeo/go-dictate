@@ -5,6 +5,20 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.6] - 2026-02-05 "Restart Menu Option"
+
+### Added
+- **Restart menu option** in system tray
+  - Right-click tray icon and select "🔄 Restart" to restart the application
+  - Useful for quickly restarting if something goes wrong
+  - Located between Pause/Resume and Exit menu items
+
+### Technical Details
+- Modified: `internal/tray/manager.go` - Added restart menu item and handler
+- New function: `restartApplication()` - Handles graceful restart with 500ms delay
+
+---
+
 ## [1.2.5] - 2026-02-05 "Ctrl+Alt+X Restored"
 
 ### Changed

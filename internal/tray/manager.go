@@ -24,6 +24,7 @@ type Manager struct {
 	settingsItem  *systray.MenuItem
 	logItem       *systray.MenuItem
 	dashboardItem *systray.MenuItem
+	restartItem   *systray.MenuItem
 	exitItem      *systray.MenuItem
 
 	ctx    context.Context
@@ -47,10 +48,10 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.2.5")
+	systray.SetTooltip("Dictation App v1.2.6")
 
 	// Create menu items
-	systray.AddMenuItem("v1.2.5 - Ctrl+Alt+X Restored", "Current version").Disable()
+	systray.AddMenuItem("v1.2.6 - Restart Menu Option", "Current version").Disable()
 	systray.AddSeparator()
 	m.languageItem = systray.AddMenuItem("Language: English", "Toggle language")
 	m.autostartItem = systray.AddMenuItemCheckbox("Start on Boot", "Start application on boot", isAutostartEnabled())
@@ -60,6 +61,7 @@ func (m *Manager) onReady() {
 	m.dashboardItem = systray.AddMenuItem("Open Deepgram Dashboard", "Open Deepgram console")
 	systray.AddSeparator()
 	m.pauseItem = systray.AddMenuItem("⏸ Pause / Resume", "Ctrl+Alt+X: Pause or resume dictation")
+	m.restartItem = systray.AddMenuItem("🔄 Restart", "Restart the application")
 	m.exitItem = systray.AddMenuItem("Exit", "Exit application")
 
 	// Update language menu based on config
@@ -72,6 +74,7 @@ func (m *Manager) onReady() {
 	go m.handleSettingsClick()
 	go m.handleLogClick()
 	go m.handleDashboardClick()
+	go m.handleRestartClick()
 	go m.handleExitClick()
 	go m.handleIconUpdates()
 }
@@ -221,6 +224,45 @@ func openDashboard() error {
 	_, err := os.StartProcess("C:\\Windows\\System32\\cmd.exe",
 		[]string{"/C", "start", "", dashboardURL}, proc)
 	return err
+}
+
+func (m *Manager) handleRestartClick() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-m.restartItem.ClickedCh:
+			fmt.Println("[Tray] Restarting application...")
+			if err := restartApplication(); err != nil {
+				fmt.Printf("[Tray] Failed to restart: %v\n", err)
+			}
+		}
+	}
+}
+
+func restartApplication() error {
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("failed to get executable path: %w", err)
+	}
+
+	// Start new instance
+	proc := &os.ProcAttr{
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	}
+	_, err = os.StartProcess(exePath, []string{}, proc)
+	if err != nil {
+		return fmt.Errorf("failed to start new instance: %w", err)
+	}
+
+	// Exit current instance after a small delay to let the new one start
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		systray.Quit()
+		os.Exit(0)
+	}()
+
+	return nil
 }
 
 func (m *Manager) handleExitClick() {
