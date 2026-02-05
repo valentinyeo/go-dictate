@@ -1,8 +1,19 @@
 package audio
 
 import (
+	"sync"
 	"syscall"
+	"time"
 	"unsafe"
+)
+
+var (
+	mediaCache struct {
+		sync.Mutex
+		isPlaying bool
+		lastCheck time.Time
+	}
+	cacheDuration = 100 * time.Millisecond // Check at most every 100ms
 )
 
 var (
@@ -44,7 +55,24 @@ const (
 )
 
 // IsMediaPlaying detects if any audio is playing through speakers
+// Uses a 100ms cache to avoid expensive COM calls on every audio chunk
 func IsMediaPlaying() bool {
+	mediaCache.Lock()
+	defer mediaCache.Unlock()
+
+	// Return cached result if still valid
+	if time.Since(mediaCache.lastCheck) < cacheDuration {
+		return mediaCache.isPlaying
+	}
+
+	// Update cache
+	mediaCache.isPlaying = checkMediaPlayback()
+	mediaCache.lastCheck = time.Now()
+	return mediaCache.isPlaying
+}
+
+// checkMediaPlayback performs the actual Windows API check
+func checkMediaPlayback() bool {
 	// Initialize COM
 	ret, _, _ := coInitializeEx.Call(0, 0x2) // COINIT_APARTMENTTHREADED
 	if ret != 0 && ret != 0x00000001 { // S_OK or S_FALSE (already initialized)

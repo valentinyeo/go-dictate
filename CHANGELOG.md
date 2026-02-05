@@ -5,6 +5,21 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.9] - 2026-02-05 "Snappy Media Resume"
+
+### Improved
+- **Much faster media resume** - App now resumes within ~100ms after media stops
+  - Added 100ms cache to media detection (was checking on every audio chunk)
+  - Drastically reduced CPU usage from repeated Windows COM API calls
+  - Snappier transition from MediaPaused → Active state
+
+### Technical Details
+- Modified: `internal/audio/media_detector.go` - Added caching with 100ms TTL
+- New: `checkMediaPlayback()` - Internal function for actual Windows API check
+- Media status now cached and only refreshed every 100ms instead of every audio chunk
+
+---
+
 ## [1.2.8] - 2026-02-05 "Media Icon + Fix"
 
 ### Added
