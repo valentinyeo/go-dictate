@@ -5,6 +5,21 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.5] - 2026-02-05 "Ctrl+Alt+X Restored"
+
+### Changed
+- **Pause hotkey restored to Ctrl+Alt+X** (from Ctrl+Shift+P)
+  - Simpler key combination without Shift
+  - Works reliably with golang.design/x/hotkey implementation
+  - Updated all UI elements and documentation to reflect the change
+
+### Technical Details
+- Modified: `main.go` - Changed pause hotkey from Ctrl+Shift+P to Ctrl+Alt+X
+- Modified: `internal/tray/manager.go` - Updated tooltip and menu text
+- Modified: `version.go` - Updated to v1.2.5
+
+---
+
 ## [1.2.1] - 2026-02-05 "Auto-Pause & Hotkeys (Fixed)"
 
 ### Fixed

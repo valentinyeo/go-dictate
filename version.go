@@ -1,7 +1,7 @@
 package main
 
 const (
-	Version     = "1.2.1"
+	Version     = "1.2.5"
 	BuildDate   = "2026-02-05"
-	VersionName = "Auto-Pause & Hotkeys (Fixed)"
+	VersionName = "Ctrl+Alt+X Restored"
 )

@@ -3,20 +3,37 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"time"
+
+	"golang.design/x/hotkey"
+	"golang.design/x/hotkey/mainthread"
 
 	"github.com/valen/go-dictate/internal/audio"
 	"github.com/valen/go-dictate/internal/config"
 	"github.com/valen/go-dictate/internal/deepgram"
-	"github.com/valen/go-dictate/internal/hotkey"
 	"github.com/valen/go-dictate/internal/keyboard"
 	"github.com/valen/go-dictate/internal/logger"
 	"github.com/valen/go-dictate/internal/state"
 	"github.com/valen/go-dictate/internal/tray"
 )
 
+var (
+	cfg           *config.Config
+	stateManager  *state.Manager
+	audioChunks   chan []int16
+	transcriptText chan string
+	ctx           context.Context
+	cancel        context.CancelFunc
+)
+
 func main() {
+	// Run on main thread for hotkey support
+	mainthread.Init(run)
+}
+
+func run() {
 	fmt.Printf("=== Dictation App v%s (%s) ===\n", Version, VersionName)
 
 	// Initialize logger
@@ -28,7 +45,8 @@ func main() {
 	logger.Info("=== Dictation App v%s (%s) Starting ===", Version, VersionName)
 
 	// Load configuration
-	cfg, err := config.LoadOrCreate()
+	var err error
+	cfg, err = config.LoadOrCreate()
 	if err != nil {
 		logger.Error("Config error: %v", err)
 		fmt.Printf("[Config] Error: %v\n", err)
@@ -43,11 +61,11 @@ func main() {
 	fmt.Printf("[Config] Loaded from: %s\n", configPath)
 
 	// Create state manager
-	stateManager := state.NewManager()
+	stateManager = state.NewManager()
 
 	// Create channels
-	audioChunks := make(chan []int16, 100)  // Buffered to prevent drops
-	transcriptText := make(chan string, 10) // Buffered for smooth delivery
+	audioChunks = make(chan []int16, 100)
+	transcriptText = make(chan string, 10)
 
 	// Start audio capture
 	fmt.Println("[Main] Starting audio capture...")
@@ -61,7 +79,7 @@ func main() {
 
 	// Start keyboard simulator
 	fmt.Println("[Main] Starting keyboard simulator...")
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
 
 	sim := keyboard.NewSimulator()
@@ -70,53 +88,70 @@ func main() {
 	// Start VAD processor and Deepgram client manager
 	go vadAndDeepgramManager(ctx, audioChunks, transcriptText, stateManager, cfg)
 
-	// Register global hotkeys
-	hotkeyManager := hotkey.NewManager()
-
-	// Language toggle: Ctrl+Alt+Shift+L
-	err = hotkeyManager.RegisterLanguageToggle(func() {
-		// Toggle language between en and de
-		if cfg.Deepgram.Language == "en" {
-			cfg.Deepgram.Language = "de"
-		} else {
-			cfg.Deepgram.Language = "en"
-		}
-		if err := cfg.Save(); err != nil {
-			logger.Error("Failed to save language change: %v", err)
-		}
-		logger.Info("Language switched to: %s (Ctrl+Alt+Shift+L)", cfg.Deepgram.Language)
-		fmt.Printf("[Hotkey] Language switched to: %s\n", cfg.Deepgram.Language)
-	})
-	if err != nil {
-		logger.Error("Failed to register language hotkey: %v", err)
-		fmt.Printf("[Hotkey] Warning: Could not register Ctrl+Alt+Shift+L: %v\n", err)
-	}
-
-	// Pause/Resume toggle: Ctrl+Alt+Shift+P
-	err = hotkeyManager.RegisterPauseToggle(func() {
-		newState := stateManager.TogglePause()
-		logger.Info("Hotkey pause toggle: %s (Ctrl+Alt+Shift+P)", newState)
-		fmt.Printf("[Hotkey] Pause toggled: %s\n", newState)
-	})
-	if err != nil {
-		logger.Error("Failed to register pause hotkey: %v", err)
-		fmt.Printf("[Hotkey] Warning: Could not register Ctrl+Alt+Shift+P: %v\n", err)
-	}
-
-	defer hotkeyManager.Stop()
-
-	// Create and run system tray (blocks on main thread)
+	// Create and run system tray
 	fmt.Println("[Main] Creating system tray...")
 	trayManager := tray.NewManager(stateManager, cfg)
 
+	// Register hotkeys after tray is created
+	go registerHotkeys()
+
 	fmt.Printf("[Main] Dictation app v%s ready!\n", Version)
-	fmt.Println("[Main] - Ctrl+Alt+Shift+P: Pause/Resume")
+	fmt.Println("[Main] - Ctrl+Alt+X: Pause/Resume")
 	fmt.Println("[Main] - Ctrl+Alt+Shift+L: Toggle language")
-	fmt.Println("[Main] - Left-click tray icon to pause/resume")
-	fmt.Println("[Main] - Right-click for menu options")
 
 	// Run tray (blocks until exit)
 	trayManager.Run()
+}
+
+func registerHotkeys() {
+	// Give tray time to initialize
+	time.Sleep(500 * time.Millisecond)
+
+	logger.Info("[Hotkey] Registering Ctrl+Alt+X for pause/resume...")
+
+	// Pause/Resume: Ctrl+Alt+X
+	hkPause := hotkey.New([]hotkey.Modifier{hotkey.ModCtrl, hotkey.ModAlt}, hotkey.KeyX)
+	if err := hkPause.Register(); err != nil {
+		logger.Error("[Hotkey] FAILED to register Ctrl+Alt+X: %v", err)
+		log.Printf("[Hotkey] FAILED to register Ctrl+Alt+X: %v", err)
+	} else {
+		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+X")
+		log.Println("[Hotkey] Successfully registered Ctrl+Alt+X")
+		go func() {
+			for range hkPause.Keydown() {
+				logger.Info("[Hotkey] *** CTRL+ALT+X PRESSED *** Toggling pause...")
+				log.Println("[Hotkey] Ctrl+Alt+X pressed!")
+				newState := stateManager.TogglePause()
+				logger.Info("[Hotkey] Pause toggled to: %s", newState)
+				log.Printf("[Hotkey] Toggled to: %s\n", newState)
+			}
+		}()
+	}
+
+	// Language toggle: Ctrl+Alt+Shift+L
+	hkLanguage := hotkey.New([]hotkey.Modifier{hotkey.ModCtrl, hotkey.ModAlt, hotkey.ModShift}, hotkey.KeyL)
+	if err := hkLanguage.Register(); err != nil {
+		logger.Error("[Hotkey] Failed to register Ctrl+Alt+Shift+L: %v", err)
+		log.Printf("[Hotkey] Failed to register Ctrl+Alt+Shift+L: %v", err)
+	} else {
+		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+Shift+L")
+		log.Println("[Hotkey] Successfully registered Ctrl+Alt+Shift+L")
+		go func() {
+			for range hkLanguage.Keydown() {
+				logger.Info("[Hotkey] Ctrl+Alt+Shift+L pressed - toggling language")
+				// Toggle language
+				if cfg.Deepgram.Language == "en" {
+					cfg.Deepgram.Language = "de"
+				} else {
+					cfg.Deepgram.Language = "en"
+				}
+				if err := cfg.Save(); err != nil {
+					logger.Error("Failed to save language change: %v", err)
+				}
+				logger.Info("Language switched to: %s", cfg.Deepgram.Language)
+			}
+		}()
+	}
 }
 
 func vadAndDeepgramManager(
@@ -161,6 +196,13 @@ func vadAndDeepgramManager(
 					stateManager.Set(state.AutoPaused)
 				}
 				continue
+			}
+
+			// If we were auto-paused due to media and media has stopped, resume to Active state
+			if currentState == state.AutoPaused && cfg.Audio.AutoPauseOnMedia {
+				logger.Info("[Media] Media stopped - resuming to Active")
+				fmt.Println("[Media] Media stopped - resuming dictation")
+				stateManager.Set(state.Active)
 			}
 
 			vadEvent := vad.Process(audioChunk)

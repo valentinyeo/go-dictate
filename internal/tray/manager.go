@@ -47,12 +47,10 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.2.1")
+	systray.SetTooltip("Dictation App v1.2.5")
 
 	// Create menu items
-	systray.AddMenuItem("v1.2.1 - Auto-Pause & Hotkeys", "Current version").Disable()
-	systray.AddSeparator()
-	m.pauseItem = systray.AddMenuItem("Pause", "Pause/Resume dictation")
+	systray.AddMenuItem("v1.2.5 - Ctrl+Alt+X Restored", "Current version").Disable()
 	systray.AddSeparator()
 	m.languageItem = systray.AddMenuItem("Language: English", "Toggle language")
 	m.autostartItem = systray.AddMenuItemCheckbox("Start on Boot", "Start application on boot", isAutostartEnabled())
@@ -61,6 +59,7 @@ func (m *Manager) onReady() {
 	m.logItem = systray.AddMenuItem("Open Debug Log", "Open debug log file")
 	m.dashboardItem = systray.AddMenuItem("Open Deepgram Dashboard", "Open Deepgram console")
 	systray.AddSeparator()
+	m.pauseItem = systray.AddMenuItem("⏸ Pause / Resume", "Ctrl+Alt+X: Pause or resume dictation")
 	m.exitItem = systray.AddMenuItem("Exit", "Exit application")
 
 	// Update language menu based on config

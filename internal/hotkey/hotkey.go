@@ -3,7 +3,9 @@ package hotkey
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -20,10 +22,12 @@ var (
 	user32               = windows.NewLazySystemDLL("user32.dll")
 	procRegisterHotKey   = user32.NewProc("RegisterHotKey")
 	procUnregisterHotKey = user32.NewProc("UnregisterHotKey")
-	procGetMessage       = user32.NewProc("GetMessageW")
+	procPeekMessage      = user32.NewProc("PeekMessageW")
 	procTranslateMessage = user32.NewProc("TranslateMessage")
 	procDispatchMessage  = user32.NewProc("DispatchMessageW")
 )
+
+const PM_REMOVE = 0x0001
 
 type MSG struct {
 	HWND   uintptr
@@ -35,11 +39,11 @@ type MSG struct {
 }
 
 type Manager struct {
-	hotkeys   map[int]func()
-	nextID    int
-	ctx       context.Context
-	cancel    context.CancelFunc
-	mu        sync.Mutex
+	hotkeys     map[int]func()
+	nextID      int
+	ctx         context.Context
+	cancel      context.CancelFunc
+	mu          sync.Mutex
 	loopStarted bool
 }
 
@@ -60,11 +64,11 @@ func (m *Manager) RegisterLanguageToggle(callback func()) error {
 	return m.register(modifiers, vkCode, "Ctrl+Alt+Shift+L (Language Toggle)", callback)
 }
 
-// RegisterPauseToggle registers Ctrl+Alt+Shift+P hotkey
+// RegisterPauseToggle registers Ctrl+Shift+P hotkey
 func (m *Manager) RegisterPauseToggle(callback func()) error {
-	modifiers := uintptr(MOD_CONTROL | MOD_ALT | MOD_SHIFT)
+	modifiers := uintptr(MOD_CONTROL | MOD_SHIFT)
 	vkCode := uintptr(0x50) // P key
-	return m.register(modifiers, vkCode, "Ctrl+Alt+Shift+P (Pause/Resume)", callback)
+	return m.register(modifiers, vkCode, "Ctrl+Shift+P (Pause/Resume)", callback)
 }
 
 func (m *Manager) register(modifiers, vkCode uintptr, description string, callback func()) error {
@@ -101,40 +105,55 @@ func (m *Manager) register(modifiers, vkCode uintptr, description string, callba
 }
 
 func (m *Manager) messageLoop() {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	var msg MSG
+	fmt.Println("[Hotkey] Message loop started on dedicated thread")
+
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-m.ctx.Done():
 			m.UnregisterAll()
 			return
-		default:
-		}
+		case <-ticker.C:
+			// Poll for messages using PeekMessage
+			for {
+				ret, _, _ := procPeekMessage.Call(
+					uintptr(unsafe.Pointer(&msg)),
+					0,
+					0,
+					0,
+					PM_REMOVE,
+				)
 
-		ret, _, _ := procGetMessage.Call(
-			uintptr(unsafe.Pointer(&msg)),
-			0,
-			0,
-			0,
-		)
+				if ret == 0 {
+					// No more messages
+					break
+				}
 
-		if ret == 0 {
-			return
-		}
+				if msg.Msg == WM_HOTKEY {
+					fmt.Printf("[Hotkey] WM_HOTKEY received! ID=%d\n", msg.WParam)
+					hotkeyID := int(msg.WParam)
+					m.mu.Lock()
+					callback := m.hotkeys[hotkeyID]
+					m.mu.Unlock()
 
-		if msg.Msg == WM_HOTKEY {
-			hotkeyID := int(msg.WParam)
-			m.mu.Lock()
-			callback := m.hotkeys[hotkeyID]
-			m.mu.Unlock()
+					if callback != nil {
+						fmt.Println("[Hotkey] Executing callback")
+						go callback() // Execute in separate goroutine to avoid blocking
+					} else {
+						fmt.Println("[Hotkey] No callback found!")
+					}
+				}
 
-			if callback != nil {
-				callback()
+				procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
+				procDispatchMessage.Call(uintptr(unsafe.Pointer(&msg)))
 			}
 		}
-
-		procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg)))
-		procDispatchMessage.Call(uintptr(unsafe.Pointer(&msg)))
 	}
 }
 

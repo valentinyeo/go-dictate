@@ -126,6 +126,7 @@ func (c *Config) Save() error {
 # energy_threshold: RMS threshold for speech detection (0.0-1.0)
 
 # Global Hotkeys
+# Ctrl+Alt+X: Pause/Resume dictation
 # Ctrl+Alt+Shift+L: Toggle language (EN ↔ DE)
 `, string(data))
 
