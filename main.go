@@ -20,12 +20,13 @@ import (
 )
 
 var (
-	cfg           *config.Config
-	stateManager  *state.Manager
-	audioChunks   chan []int16
-	transcriptText chan string
-	ctx           context.Context
-	cancel        context.CancelFunc
+	cfg               *config.Config
+	stateManager      *state.Manager
+	audioChunks       chan []int16
+	transcriptText    chan string
+	settingsChangedCh chan struct{}
+	ctx               context.Context
+	cancel            context.CancelFunc
 )
 
 func main() {
@@ -67,15 +68,41 @@ func run() {
 	audioChunks = make(chan []int16, 100)
 	transcriptText = make(chan string, 10)
 
+	// Enumerate microphone devices
+	micDevices, err := audio.ListCaptureDevices()
+	if err != nil {
+		logger.Error("[Main] Failed to list microphones: %v", err)
+		fmt.Printf("[Main] Warning: Failed to list microphones: %v\n", err)
+	}
+	var micNames []string
+	for _, d := range micDevices {
+		micNames = append(micNames, d.Name)
+		fmt.Printf("[Main] Found microphone: %s\n", d.Name)
+	}
+
+	// Find the configured device
+	var selectedDevice *audio.CaptureDevice
+	if cfg.Audio.DeviceName != "" {
+		for i, d := range micDevices {
+			if d.Name == cfg.Audio.DeviceName {
+				selectedDevice = &micDevices[i]
+				break
+			}
+		}
+		if selectedDevice == nil {
+			fmt.Printf("[Main] Warning: Configured mic %q not found, using system default\n", cfg.Audio.DeviceName)
+		}
+	}
+
 	// Start audio capture
 	fmt.Println("[Main] Starting audio capture...")
-	audioCapture, err := audio.NewCapture(audioChunks)
+	audioCapture, err := audio.NewCapture(audioChunks, selectedDevice)
 	if err != nil {
 		fmt.Printf("[Main] Failed to start audio capture: %v\n", err)
 		time.Sleep(5 * time.Second)
 		os.Exit(1)
 	}
-	defer audioCapture.Stop()
+	defer func() { audioCapture.Stop() }()
 
 	// Start keyboard simulator
 	fmt.Println("[Main] Starting keyboard simulator...")
@@ -85,19 +112,69 @@ func run() {
 	sim := keyboard.NewSimulator()
 	go sim.Run(ctx, transcriptText)
 
-	// Start VAD processor and Deepgram client manager
-	go vadAndDeepgramManager(ctx, audioChunks, transcriptText, stateManager, cfg)
+	// Start VAD processor and Deepgram client manager (settingsChangedCh wired after tray creation)
+	settingsChangedCh = make(chan struct{}, 1)
+	go vadAndDeepgramManager(ctx, audioChunks, transcriptText, stateManager, cfg, settingsChangedCh)
 
 	// Create and run system tray
 	fmt.Println("[Main] Creating system tray...")
-	trayManager := tray.NewManager(stateManager, cfg)
+	trayManager := tray.NewManager(stateManager, cfg, micNames, cfg.Audio.DeviceName)
+
+	// Forward settings changes from tray to VAD manager
+	go func() {
+		for range trayManager.SettingsChangedCh {
+			select {
+			case settingsChangedCh <- struct{}{}:
+			default:
+			}
+		}
+	}()
+
+	// Handle microphone changes from tray menu
+	go func() {
+		for deviceName := range trayManager.MicChangedCh {
+			displayName := deviceName
+			if displayName == "" {
+				displayName = "System Default"
+			}
+			logger.Info("[Main] Switching microphone to: %s", displayName)
+
+			// Find device
+			var newDevice *audio.CaptureDevice
+			if deviceName != "" {
+				for i, d := range micDevices {
+					if d.Name == deviceName {
+						newDevice = &micDevices[i]
+						break
+					}
+				}
+			}
+
+			// Restart audio capture with new device
+			audioCapture.Stop()
+			newCapture, err := audio.NewCapture(audioChunks, newDevice)
+			if err != nil {
+				logger.Error("[Main] Failed to switch microphone: %v", err)
+				fmt.Printf("[Main] Failed to switch microphone: %v\n", err)
+				// Try to restart with system default
+				newCapture, err = audio.NewCapture(audioChunks, nil)
+				if err != nil {
+					logger.Error("[Main] Failed to restart with default mic: %v", err)
+					fmt.Printf("[Main] CRITICAL: Failed to restart audio capture: %v\n", err)
+					continue
+				}
+			}
+			audioCapture = newCapture
+			fmt.Printf("[Main] Microphone switched to: %s\n", displayName)
+		}
+	}()
 
 	// Register hotkeys after tray is created
 	go registerHotkeys()
 
 	fmt.Printf("[Main] Dictation app v%s ready!\n", Version)
 	fmt.Println("[Main] - Ctrl+Alt+X: Pause/Resume")
-	fmt.Println("[Main] - Ctrl+Alt+Shift+L: Toggle language")
+	fmt.Println("[Main] - Ctrl+Alt+L: Toggle language (EN ↔ DE)")
 
 	// Run tray (blocks until exit)
 	trayManager.Run()
@@ -128,17 +205,17 @@ func registerHotkeys() {
 		}()
 	}
 
-	// Language toggle: Ctrl+Alt+Shift+L
-	hkLanguage := hotkey.New([]hotkey.Modifier{hotkey.ModCtrl, hotkey.ModAlt, hotkey.ModShift}, hotkey.KeyL)
+	// Language toggle: Ctrl+Alt+L
+	hkLanguage := hotkey.New([]hotkey.Modifier{hotkey.ModCtrl, hotkey.ModAlt}, hotkey.KeyL)
 	if err := hkLanguage.Register(); err != nil {
-		logger.Error("[Hotkey] Failed to register Ctrl+Alt+Shift+L: %v", err)
-		log.Printf("[Hotkey] Failed to register Ctrl+Alt+Shift+L: %v", err)
+		logger.Error("[Hotkey] Failed to register Ctrl+Alt+L: %v", err)
+		log.Printf("[Hotkey] Failed to register Ctrl+Alt+L: %v", err)
 	} else {
-		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+Shift+L")
-		log.Println("[Hotkey] Successfully registered Ctrl+Alt+Shift+L")
+		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+L")
+		log.Println("[Hotkey] Successfully registered Ctrl+Alt+L")
 		go func() {
 			for range hkLanguage.Keydown() {
-				logger.Info("[Hotkey] Ctrl+Alt+Shift+L pressed - toggling language")
+				logger.Info("[Hotkey] Ctrl+Alt+L pressed - toggling language")
 				// Toggle language
 				if cfg.Deepgram.Language == "en" {
 					cfg.Deepgram.Language = "de"
@@ -149,9 +226,15 @@ func registerHotkeys() {
 					logger.Error("Failed to save language change: %v", err)
 				}
 				logger.Info("Language switched to: %s", cfg.Deepgram.Language)
+				select {
+				case settingsChangedCh <- struct{}{}:
+				default:
+				}
 			}
 		}()
 	}
+
+	// Removed Ctrl+Alt+Q - user prefers to use tray Exit button
 }
 
 func vadAndDeepgramManager(
@@ -160,15 +243,26 @@ func vadAndDeepgramManager(
 	textTx chan<- string,
 	stateManager *state.Manager,
 	cfg *config.Config,
+	settingsChangedCh <-chan struct{},
 ) {
 	vad := audio.NewVAD(cfg.VAD.EnergyThreshold, cfg.Audio.SilenceThresholdMs)
-	ducker := audio.NewAudioDucker(cfg.Audio.DuckVolume)
+
+	// Per-app volume ducking for Chrome/Edge (master volume doesn't work on this system)
+	logger.Info("[AppVolumeDucker] Initializing with duck volume: %.0f%%", cfg.Audio.DuckVolume*100)
+	ducker := audio.NewAppVolumeDucker(cfg.Audio.DuckVolume)
 
 	var deepgramCtx context.Context
 	var deepgramCancel context.CancelFunc
 	var deepgramAudioTx chan []int16
 
 	for {
+		// When paused, disable audio processing entirely (zero CPU)
+		// Set audioRx to nil in select to block until state changes
+		var activeAudioRx <-chan []int16
+		if s := stateManager.Get(); s != state.Paused && s != state.MicConflict {
+			activeAudioRx = audioRx
+		}
+
 		select {
 		case <-ctx.Done():
 			if deepgramCancel != nil {
@@ -176,36 +270,61 @@ func vadAndDeepgramManager(
 			}
 			return
 
-		case audioChunk, ok := <-audioRx:
+		case <-stateManager.Changed():
+			// State changed (e.g. unpaused) - re-evaluate on next loop iteration
+			continue
+
+		case <-settingsChangedCh:
+			// Settings changed (language, punctuation, etc.) - close active Deepgram connection
+			// so the next speech burst picks up the new settings
+			if deepgramCancel != nil {
+				logger.Info("[VAD] Settings changed - closing active Deepgram connection")
+				fmt.Println("[VAD] Settings changed - reconnecting with new settings")
+				deepgramCancel()
+				deepgramCancel = nil
+			}
+			if deepgramAudioTx != nil {
+				close(deepgramAudioTx)
+				deepgramAudioTx = nil
+			}
+			vad.Reset()
+			stateManager.Set(state.AutoPaused)
+
+		case audioChunk, ok := <-activeAudioRx:
 			if !ok {
 				return
 			}
 
 			currentState := stateManager.Get()
 
-			// Skip processing if manually paused
-			if currentState == state.Paused || currentState == state.MicConflict {
-				continue
-			}
+			// Auto-pause ONLY when in an active meeting (NOT for media playback)
+			meetingActive := audio.IsMeetingActive()
+			mediaPlaying := audio.IsMediaPlaying()
 
-			// Auto-pause when media is playing (prevents transcribing video audio)
-			// BUT allow VAD to run so it can detect when user starts speaking (which overrides pause)
-			if audio.IsMediaPlaying() {
+			if meetingActive {
+				// Meeting detected - pause to avoid transcribing meeting audio
 				if currentState == state.Active || currentState == state.AutoPaused {
-					logger.Info("[Media] Media detected - auto-pausing (VAD still monitoring)")
+					logger.Info("[Meeting] Active call detected - auto-pausing")
+					fmt.Println("🔴 [Meeting] In a call - pausing dictation")
 					stateManager.Set(state.MediaPaused)
-					// Don't continue - let VAD process to detect speech
-				} else if currentState == state.Speaking {
-					// User is actively speaking while media plays - keep transcribing
-					// (volume is ducked, so their speech should be clear)
+				} else if currentState == state.MediaPaused {
+					// Stay paused during meeting
+					continue
 				}
-				// If MediaPaused, let VAD continue processing to detect speech override
 			} else {
-				// No media playing - resume to Active if we were media-paused
+				// No meeting - resume if we were paused
 				if currentState == state.MediaPaused {
-					logger.Info("[Media] Media stopped - resuming to Active")
+					logger.Info("[Meeting] Call ended - resuming")
+					fmt.Println("✅ [Meeting] Call ended - resuming dictation")
 					stateManager.Set(state.Active)
 				}
+			}
+
+			// Media detection: Just for visual indicator (amber icon), doesn't pause
+			// Auto-ducking will handle the volume when you speak
+			if mediaPlaying && currentState == state.Active {
+				// Optional: Set visual indicator (not implemented yet)
+				// Could add state.MediaDetected for amber icon without pausing
 			}
 
 			vadEvent := vad.Process(audioChunk)
@@ -215,8 +334,12 @@ func vadAndDeepgramManager(
 				logger.Info("[VAD] Speech started - opening Deepgram connection")
 				fmt.Println("[VAD] Speech started")
 
-				// Duck audio (even if media playing - this is what allows dictation over media!)
-				_ = ducker.Duck()
+				// Duck Chrome/Edge volume
+				if !meetingActive && cfg.Audio.DuckEnabled {
+					if err := ducker.Duck(); err != nil {
+						logger.Error("[AppVolumeDucker] Failed to duck: %v", err)
+					}
+				}
 
 				stateManager.Set(state.Speaking)
 
@@ -259,8 +382,10 @@ func vadAndDeepgramManager(
 				logger.Info("[VAD] Silence detected - closing Deepgram connection")
 				fmt.Println("[VAD] Silence detected")
 
-				// Restore audio volume
-				_ = ducker.Restore()
+				// Restore Chrome/Edge volume
+				if err := ducker.Restore(); err != nil {
+					logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
+				}
 
 				// Close Deepgram connection
 				if deepgramCancel != nil {

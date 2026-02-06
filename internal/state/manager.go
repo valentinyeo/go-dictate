@@ -59,14 +59,21 @@ func (s AppState) IsListening() bool {
 }
 
 type Manager struct {
-	mu    sync.RWMutex
-	state AppState
+	mu       sync.RWMutex
+	state    AppState
+	changeCh chan struct{} // signaled on every state change
 }
 
 func NewManager() *Manager {
 	return &Manager{
-		state: Active,
+		state:    Active,
+		changeCh: make(chan struct{}, 1),
 	}
+}
+
+// Changed returns a channel that receives a signal whenever the state changes.
+func (m *Manager) Changed() <-chan struct{} {
+	return m.changeCh
 }
 
 func (m *Manager) Get() AppState {
@@ -82,6 +89,11 @@ func (m *Manager) Set(newState AppState) {
 	if m.state != newState {
 		fmt.Printf("[State] %s -> %s\n", m.state, newState)
 		m.state = newState
+		// Non-blocking signal to wake up paused loops
+		select {
+		case m.changeCh <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -98,5 +110,10 @@ func (m *Manager) TogglePause() AppState {
 
 	fmt.Printf("[State] Toggle: %s -> %s\n", m.state, newState)
 	m.state = newState
+	// Non-blocking signal to wake up paused loops
+	select {
+	case m.changeCh <- struct{}{}:
+	default:
+	}
 	return newState
 }
