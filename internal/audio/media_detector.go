@@ -1,6 +1,7 @@
 package audio
 
 import (
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -73,8 +74,12 @@ func IsMediaPlaying() bool {
 
 // checkMediaPlayback performs the actual Windows API check
 func checkMediaPlayback() bool {
+	// Lock this goroutine to the current OS thread for COM safety
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
 	// Initialize COM
-	ret, _, _ := coInitializeEx.Call(0, 0x2) // COINIT_APARTMENTTHREADED
+	ret, _, _ := coInitializeEx.Call(0, 0x0) // COINIT_MULTITHREADED
 	if ret != 0 && ret != 0x00000001 { // S_OK or S_FALSE (already initialized)
 		return false
 	}

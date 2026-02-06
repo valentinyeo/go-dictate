@@ -76,7 +76,7 @@ func (s *Simulator) typeText(text string) {
 	for _, ch := range textToType {
 		s.sendUnicodeChar(ch)
 		s.lastChar = ch
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(2 * time.Millisecond)
 	}
 }
 

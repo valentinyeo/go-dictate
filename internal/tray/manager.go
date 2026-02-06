@@ -18,6 +18,7 @@ type Manager struct {
 	config       *config.Config
 	configMu     sync.RWMutex
 
+	versionItem   *systray.MenuItem
 	pauseItem     *systray.MenuItem
 	languageItem  *systray.MenuItem
 	autostartItem *systray.MenuItem
@@ -27,17 +28,36 @@ type Manager struct {
 	restartItem   *systray.MenuItem
 	exitItem      *systray.MenuItem
 
+	// Feature toggles
+	duckingItem       *systray.MenuItem
+	autoPauseItem     *systray.MenuItem
+	punctuateItem     *systray.MenuItem
+	fillerWordsItem   *systray.MenuItem
+
+	// Microphone selection
+	micNames     []string // device names from enumeration
+	selectedMic  string   // currently selected device name ("" = system default)
+	micItems     []*systray.MenuItem
+	MicChangedCh chan string // sends device name when user selects a new mic
+
+	// Signals VAD to reset (close active Deepgram connection and pick up new settings)
+	SettingsChangedCh chan struct{}
+
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-func NewManager(stateManager *state.Manager, cfg *config.Config) *Manager {
+func NewManager(stateManager *state.Manager, cfg *config.Config, micDevices []string, selectedMic string) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
 		stateManager: stateManager,
 		config:       cfg,
 		ctx:          ctx,
 		cancel:       cancel,
+		micNames:     micDevices,
+		selectedMic:  selectedMic,
+		MicChangedCh:      make(chan string, 1),
+		SettingsChangedCh: make(chan struct{}, 1),
 	}
 }
 
@@ -48,13 +68,35 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.3.3")
+	systray.SetTooltip("Dictation App v1.7.1")
 
-	// Create menu items
-	systray.AddMenuItem("v1.3.3 - Speech Overrides Media", "Current version").Disable()
+	// Create menu items - clicking version opens changelog
+	m.versionItem = systray.AddMenuItem("v1.7.1 - Stability Fix", "Click to view changelog")
 	systray.AddSeparator()
-	m.languageItem = systray.AddMenuItem("Language: English", "Toggle language")
+	m.languageItem = systray.AddMenuItem("Language: English", "Ctrl+Alt+L: Toggle language (EN ↔ DE)")
+
+	// Microphone submenu
+	micParent := systray.AddMenuItem("Microphone", "Select input device")
+	defaultChecked := m.selectedMic == ""
+	defaultItem := micParent.AddSubMenuItemCheckbox("System Default", "Use system default microphone", defaultChecked)
+	m.micItems = append(m.micItems, defaultItem)
+	for _, name := range m.micNames {
+		checked := name == m.selectedMic
+		item := micParent.AddSubMenuItemCheckbox(name, name, checked)
+		m.micItems = append(m.micItems, item)
+	}
+
 	m.autostartItem = systray.AddMenuItemCheckbox("Start on Boot", "Start application on boot", isAutostartEnabled())
+	systray.AddSeparator()
+
+	// Feature toggles
+	m.configMu.RLock()
+	m.duckingItem = systray.AddMenuItemCheckbox("Audio Ducking", "Lower other apps' volume while speaking", m.config.Audio.DuckEnabled)
+	m.autoPauseItem = systray.AddMenuItemCheckbox("Auto-pause in Meetings", "Pause dictation during calls", m.config.Audio.AutoPauseOnMedia)
+	m.punctuateItem = systray.AddMenuItemCheckbox("Punctuation", "Auto punctuation and capitalization", m.config.Deepgram.Punctuate)
+	m.fillerWordsItem = systray.AddMenuItemCheckbox("Remove Filler Words", "Remove um, uh, like, etc.", m.config.Deepgram.FillerWords)
+	m.configMu.RUnlock()
+
 	systray.AddSeparator()
 	m.settingsItem = systray.AddMenuItem("Open Config File", "Open configuration file")
 	m.logItem = systray.AddMenuItem("Open Debug Log", "Open debug log file")
@@ -68,9 +110,12 @@ func (m *Manager) onReady() {
 	m.updateLanguageMenu()
 
 	// Start event handlers
+	go m.handleMicClicks()
 	go m.handlePauseClick()
 	go m.handleLanguageClick()
 	go m.handleAutostartClick()
+	go m.handleVersionClick()
+	go m.handleFeatureToggles()
 	go m.handleSettingsClick()
 	go m.handleLogClick()
 	go m.handleDashboardClick()
@@ -81,6 +126,99 @@ func (m *Manager) onReady() {
 
 func (m *Manager) onExit() {
 	m.cancel()
+}
+
+func (m *Manager) handleVersionClick() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-m.versionItem.ClickedCh:
+			if err := openChangelog(); err != nil {
+				fmt.Printf("[Tray] Failed to open changelog: %v\n", err)
+			}
+		}
+	}
+}
+
+func openChangelog() error {
+	exeDir := getExeDir()
+	changelogPath := fmt.Sprintf("%s\\CHANGELOG.md", exeDir)
+
+	proc := &os.ProcAttr{
+		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+	}
+	_, err := os.StartProcess("C:\\Windows\\System32\\cmd.exe", []string{"/C", "start", "", changelogPath}, proc)
+	return err
+}
+
+func (m *Manager) notifySettingsChanged() {
+	select {
+	case m.SettingsChangedCh <- struct{}{}:
+	default:
+	}
+}
+
+func (m *Manager) handleMicClicks() {
+	// Launch a goroutine per mic item that forwards clicks to a single channel
+	clickCh := make(chan int, 1)
+	for i, item := range m.micItems {
+		go func(idx int, menuItem *systray.MenuItem) {
+			for {
+				select {
+				case <-m.ctx.Done():
+					return
+				case <-menuItem.ClickedCh:
+					select {
+					case clickCh <- idx:
+					default:
+					}
+				}
+			}
+		}(i, item)
+	}
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case idx := <-clickCh:
+			// Determine device name (index 0 = System Default = "")
+			var deviceName string
+			if idx > 0 {
+				deviceName = m.micNames[idx-1]
+			}
+
+			// Update checkmarks (radio behavior)
+			for j, item := range m.micItems {
+				if j == idx {
+					item.Check()
+				} else {
+					item.Uncheck()
+				}
+			}
+
+			// Save to config
+			m.configMu.Lock()
+			m.config.Audio.DeviceName = deviceName
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save config: %v\n", err)
+			}
+			m.configMu.Unlock()
+
+			// Notify main to restart audio capture
+			select {
+			case m.MicChangedCh <- deviceName:
+			default:
+			}
+
+			displayName := deviceName
+			if displayName == "" {
+				displayName = "System Default"
+			}
+			fmt.Printf("[Tray] Microphone switched to: %s\n", displayName)
+		}
+	}
 }
 
 func (m *Manager) handlePauseClick() {
@@ -114,14 +252,16 @@ func (m *Manager) handleLanguageClick() {
 			} else {
 				m.config.Deepgram.Language = "en"
 			}
-
 			if err := m.config.Save(); err != nil {
 				fmt.Printf("[Tray] Failed to save config: %v\n", err)
 			}
-
-			m.updateLanguageMenu()
-			fmt.Printf("[Tray] Language switched to: %s\n", m.config.Deepgram.Language)
+			lang := m.config.Deepgram.Language
 			m.configMu.Unlock()
+
+			// Update UI and notify outside lock (updateLanguageMenu acquires RLock)
+			m.updateLanguageMenu()
+			fmt.Printf("[Tray] Language switched to: %s\n", lang)
+			m.notifySettingsChanged()
 		}
 	}
 }
@@ -158,6 +298,72 @@ func (m *Manager) handleAutostartClick() {
 			}
 
 			fmt.Printf("[Tray] Autostart %s\n", map[bool]string{true: "enabled", false: "disabled"}[newState])
+		}
+	}
+}
+
+func (m *Manager) handleFeatureToggles() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-m.duckingItem.ClickedCh:
+			m.configMu.Lock()
+			m.config.Audio.DuckEnabled = !m.config.Audio.DuckEnabled
+			if m.config.Audio.DuckEnabled {
+				m.duckingItem.Check()
+			} else {
+				m.duckingItem.Uncheck()
+			}
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save config: %v\n", err)
+			}
+			fmt.Printf("[Tray] Audio ducking: %v\n", m.config.Audio.DuckEnabled)
+			m.configMu.Unlock()
+
+		case <-m.autoPauseItem.ClickedCh:
+			m.configMu.Lock()
+			m.config.Audio.AutoPauseOnMedia = !m.config.Audio.AutoPauseOnMedia
+			if m.config.Audio.AutoPauseOnMedia {
+				m.autoPauseItem.Check()
+			} else {
+				m.autoPauseItem.Uncheck()
+			}
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save config: %v\n", err)
+			}
+			fmt.Printf("[Tray] Auto-pause in meetings: %v\n", m.config.Audio.AutoPauseOnMedia)
+			m.configMu.Unlock()
+
+		case <-m.punctuateItem.ClickedCh:
+			m.configMu.Lock()
+			m.config.Deepgram.Punctuate = !m.config.Deepgram.Punctuate
+			if m.config.Deepgram.Punctuate {
+				m.punctuateItem.Check()
+			} else {
+				m.punctuateItem.Uncheck()
+			}
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save config: %v\n", err)
+			}
+			fmt.Printf("[Tray] Punctuation: %v\n", m.config.Deepgram.Punctuate)
+			m.configMu.Unlock()
+			m.notifySettingsChanged()
+
+		case <-m.fillerWordsItem.ClickedCh:
+			m.configMu.Lock()
+			m.config.Deepgram.FillerWords = !m.config.Deepgram.FillerWords
+			if m.config.Deepgram.FillerWords {
+				m.fillerWordsItem.Check()
+			} else {
+				m.fillerWordsItem.Uncheck()
+			}
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save config: %v\n", err)
+			}
+			fmt.Printf("[Tray] Remove filler words: %v\n", m.config.Deepgram.FillerWords)
+			m.configMu.Unlock()
+			m.notifySettingsChanged()
 		}
 	}
 }
@@ -283,6 +489,7 @@ func (m *Manager) handleIconUpdates() {
 	defer ticker.Stop()
 
 	var lastState state.AppState = state.Active
+	var lastLanguage string = ""
 
 	for {
 		select {
@@ -301,6 +508,16 @@ func (m *Manager) handleIconUpdates() {
 				}
 
 				lastState = currentState
+			}
+
+			// Check if language changed (from hotkey or menu click)
+			m.configMu.RLock()
+			currentLanguage := m.config.Deepgram.Language
+			m.configMu.RUnlock()
+
+			if currentLanguage != lastLanguage {
+				m.updateLanguageMenu()
+				lastLanguage = currentLanguage
 			}
 		}
 	}

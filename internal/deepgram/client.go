@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/gorilla/websocket"
 	"github.com/valen/go-dictate/internal/logger"
@@ -69,17 +70,26 @@ func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 	logger.Info("[Deepgram] Connected successfully")
 	fmt.Println("[Deepgram] Connected")
 
-	// Channel for coordinating shutdown
+	// Channel for coordinating shutdown (use sync.Once to prevent double-close panic)
 	done := make(chan struct{})
-	sendDone := make(chan struct{})
+	var doneOnce sync.Once
+	closeDone := func() { doneOnce.Do(func() { close(done) }) }
+
+	// Close websocket when context cancels to unblock ReadMessage
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.WriteMessage(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			conn.Close()
+		case <-done:
+		}
+	}()
 
 	// Goroutine to send audio
 	go func() {
-		defer close(sendDone)
 		for {
 			select {
-			case <-ctx.Done():
-				return
 			case <-done:
 				return
 			case audioChunk, ok := <-audioRx:
@@ -103,24 +113,17 @@ func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 
 	// Receive transcripts (blocking)
 	for {
-		select {
-		case <-ctx.Done():
-			close(done)
-			return nil
-		default:
-		}
-
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
-			close(done)
-			<-sendDone // Wait for send goroutine to finish
-			return fmt.Errorf("read error: %w", err)
+			// Context cancelled or connection closed - normal shutdown
+			closeDone()
+			return nil
 		}
 
 		if messageType == websocket.CloseMessage {
 			fmt.Println("[Deepgram] Connection closed")
-			close(done)
-			break
+			closeDone()
+			return nil
 		}
 
 		if messageType == websocket.TextMessage {
@@ -145,13 +148,10 @@ func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 				select {
 				case textTx <- *text:
 				case <-ctx.Done():
-					close(done)
+					closeDone()
 					return nil
 				}
 			}
 		}
 	}
-
-	<-sendDone // Wait for send goroutine
-	return nil
 }

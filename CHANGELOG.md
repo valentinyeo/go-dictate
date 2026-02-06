@@ -5,6 +5,101 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-02-06 "Stability Fix"
+
+### Fixed
+- **CRITICAL: COM threading violations causing random freezes** - All Windows COM calls now lock the goroutine to its OS thread with `runtime.LockOSThread()`. Previously, Go could migrate goroutines between threads mid-COM-call, corrupting COM state and causing hangs. Affected: media detection (every 5ms), meeting detection, volume ducking.
+- **Deepgram WebSocket ReadMessage blocking forever** - When context is cancelled, the websocket connection is now explicitly closed, unblocking `ReadMessage()`. Previously, leaked goroutines accumulated after each speech/silence cycle with network issues.
+- **Deepgram done channel double-close panic** - Used `sync.Once` to prevent `close(done)` from being called twice when context cancellation and read error happen simultaneously.
+- **Deepgram receive loop break bug** - `break` on CloseMessage only exited the `if` block, not the `for` loop. Changed to `return nil` so the function exits properly.
+- **Meeting cache data race** - Added `sync.Mutex` to `meetingCache` (was unprotected, unlike `mediaCache`).
+- **Kernel32 DLL created on every call** - Cached `kernel32.dll` procs at package level instead of creating new `LazyDLL` objects on every `getProcessName()` call (called hundreds of times per second).
+
+### Improved
+- **5x faster keyboard typing** - Reduced per-character delay from 10ms to 2ms, preventing transcript backpressure from blocking Deepgram receive loop.
+
+### Technical Details
+- Modified: `internal/audio/media_detector.go` - Added `runtime.LockOSThread()` to `checkMediaPlayback()`
+- Modified: `internal/audio/meeting_detector.go` - Added `runtime.LockOSThread()` to `checkActiveMeetingAudio()`, mutex to cache, cached kernel32 procs
+- Modified: `internal/audio/ducking.go` - Added `runtime.LockOSThread()` to `Duck()` and `Restore()`
+- Modified: `internal/audio/app_volume.go` - Added `runtime.LockOSThread()` to `Duck()` and `Restore()`
+- Modified: `internal/deepgram/client.go` - sync.Once for done channel, conn.Close() on context cancel, fixed break→return
+- Modified: `internal/keyboard/simulator.go` - Reduced typing delay 10ms→2ms
+
+---
+
+## [1.7.0] - 2026-02-06 "Feature Toggles"
+
+### Added
+- **Tray menu feature toggles** - Toggle settings without editing config.toml
+  - Audio Ducking (off by default - disabled until fixed)
+  - Auto-pause in Meetings
+  - Punctuation
+  - Remove Filler Words
+- **Instant settings** - Language, punctuation, and filler word changes take effect immediately
+  - No longer need to restart the app after changing settings
+  - Active Deepgram connection is closed and VAD resets on settings change
+- **Clickable version** - Click version number in tray menu to open CHANGELOG.md
+
+### Fixed
+- **Settings required app restart** - Language switch and other Deepgram settings now take effect on the next speech burst without restarting
+
+### Technical Details
+- Added: `SettingsChangedCh` channel in tray manager to signal VAD goroutine
+- Modified: `vadAndDeepgramManager` - Listens for settings changes, closes active Deepgram connection and resets VAD
+- Added: `DuckEnabled` bool in config to explicitly toggle ducking on/off
+- Added: `handleFeatureToggles()` in tray manager for checkbox menu items
+- Modified: Hotkey language toggle also signals settings changed
+
+---
+
+## [1.6.0] - 2026-02-06 "Microphone Selector"
+
+### Added
+- **Microphone selector** in tray right-click menu
+  - Lists all available capture devices
+  - "System Default" option plus all enumerated microphones
+  - Hot-switching: changes mic without restarting the app
+  - Selection persisted in config.toml (`device_name` field)
+- **Embedded application icon** - exe now has a green microphone icon
+  - Uses go-winres for Windows resource embedding
+  - Includes version info and manifest in the executable
+- **Start Menu entry** - "Go Dictate" shortcut in Start Menu
+- **Fixed executable name** - `go-dictate.exe` no longer includes version number
+  - Start Menu shortcuts survive rebuilds
+
+### Fixed
+- **Device enumeration crash** - WASAPI needs COM initialized on the calling thread
+  - Added `runtime.LockOSThread()` and `CoInitializeEx` in `ListCaptureDevices()`
+- **Capture Stop() crash** - Fixed `Free()` being called before `Uninit()`
+- **CGo pointer violation** - Used `DeviceID.Pointer()` instead of `unsafe.Pointer(&id)`
+
+### Technical Details
+- Added: `ListCaptureDevices()` in audio/capture.go with COM initialization
+- Modified: `NewCapture()` accepts optional `*CaptureDevice` for device selection
+- Added: Microphone submenu with radio-button behavior in tray manager
+- Added: `MicChangedCh` channel for signaling mic changes to main.go
+- Added: `winres/` directory with icon and Windows resource metadata
+
+---
+
+## [1.5.0] - 2026-02-05 "Per-App Volume Ducking"
+
+### Changed
+- **Per-app volume ducking** - Ducks individual app volumes instead of master volume
+  - Targets: Chrome, Edge, Firefox, Brave, Opera, VLC, Screenbox, Spotify
+  - Uses Windows IAudioSessionManager2 COM interface
+  - More precise control than master volume ducking
+- **Meeting detection** - Auto-pauses during active calls (Teams, Zoom, Slack, Discord, Skype)
+  - Only pauses during active audio sessions, not just when app is running
+
+### Technical Details
+- Added: `internal/audio/app_volume.go` - Per-app volume control via IAudioSessionManager2
+- Added: `internal/audio/meeting_detector.go` - Active call detection via audio sessions
+- Modified: `main.go` - Uses per-app ducking instead of master volume
+
+---
+
 ## [1.3.3] - 2026-02-05 "Speech Overrides Media"
 
 ### Changed
