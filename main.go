@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.design/x/hotkey"
 	"golang.design/x/hotkey/mainthread"
@@ -34,7 +36,33 @@ func main() {
 	mainthread.Init(run)
 }
 
+// enforceSingleInstance uses a Windows named mutex to ensure only one instance runs.
+// Returns a handle that must be kept alive for the process lifetime.
+func enforceSingleInstance() (uintptr, error) {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+	createMutex := kernel32.NewProc("CreateMutexW")
+	name, _ := syscall.UTF16PtrFromString("Global\\GoDictateAppMutex")
+	handle, _, err := createMutex.Call(0, 1, uintptr(unsafe.Pointer(name)))
+	if handle == 0 {
+		return 0, err
+	}
+	// ERROR_ALREADY_EXISTS = 183
+	if errno, ok := err.(syscall.Errno); ok && errno == 183 {
+		syscall.CloseHandle(syscall.Handle(handle))
+		return 0, fmt.Errorf("another instance is already running")
+	}
+	return handle, nil
+}
+
 func run() {
+	// Enforce single instance
+	mutexHandle, singleErr := enforceSingleInstance()
+	if singleErr != nil {
+		fmt.Println("[Main] Another instance is already running. Exiting.")
+		os.Exit(0)
+	}
+	defer syscall.CloseHandle(syscall.Handle(mutexHandle))
+
 	fmt.Printf("=== Dictation App v%s (%s) ===\n", Version, VersionName)
 
 	// Initialize logger
