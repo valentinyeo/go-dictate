@@ -30,13 +30,31 @@ There are no tests in this project. `-H windowsgui` hides the console window; om
 
 ## Version Tracking Workflow
 
-1. Update `version.go` (Version, BuildDate, VersionName)
+1. Update `version.go` (Version, BuildDate, VersionName, VersionSummary)
 2. Update `CHANGELOG.md` with new version header and changes
-3. Update `internal/tray/manager.go` tooltip and version menu item
+3. Update `internal/tray/manager.go` tooltip, version menu item, and summary line
 4. Make code changes
 5. Build
 6. Commit with format: `vX.X.X: Brief description`
 7. Push to GitHub
+
+### Tray Menu Version Pattern
+
+The top of the right-click tray menu MUST always have:
+1. **Version item** (top-most): `"vX.X.X - Version Name"` - clickable, opens CHANGELOG.md in default editor
+2. **Summary item** (below version): `"  One-line summary of what changed"` - disabled/greyed out, informational only
+3. **Separator** - then the rest of the menu
+
+Example:
+```
+v1.8.0 - Offline Mode                                          ← clickable → opens CHANGELOG.md
+  Added local speech-to-text with Vosk (no internet needed)     ← disabled, greyed out
+───────────────────────────────────────────────────────────────
+Online (Deepgram)
+...
+```
+
+The summary should be a brief one-liner describing the main feature/fix of the release.
 
 ## Architecture
 

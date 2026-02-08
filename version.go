@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.3"
+	Version        = "1.8.4"
 	BuildDate      = "2026-02-08"
-	VersionName    = "Fluent Icons"
-	VersionSummary = "Microsoft Fluent UI mic icons, multi-size ICO, theme-aware"
+	VersionName    = "Chat Sparkle Icons"
+	VersionSummary = "Fluent UI chat-with-sparkles icons for active/standby states"
 )
