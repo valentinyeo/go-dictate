@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.14"
+	Version        = "1.8.15"
 	BuildDate      = "2026-02-08"
-	VersionName    = "Black App Icon"
-	VersionSummary = "Start Menu icon updated to black speech bubble"
+	VersionName    = "Blue App Icon"
+	VersionSummary = "Windows blue #0078D4 app icon, works on both themes"
 )

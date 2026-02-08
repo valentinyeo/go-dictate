@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.15] - 2026-02-08 "Blue App Icon"
+
+### Changed
+- **Windows blue app icon** - Start Menu / exe icon now uses Windows blue `#0078D4`, visible on both light and dark themes. Tray icons remain separate (theme-adaptive standby, green active, red paused, amber media).
+
+---
+
 ## [1.8.14] - 2026-02-08 "Black App Icon"
 
 ### Fixed
