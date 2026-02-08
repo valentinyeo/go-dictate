@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.14] - 2026-02-08 "Black App Icon"
+
+### Fixed
+- **Start Menu icon now black speech bubble** - Regenerated embedded exe icon with black `#1a1a1a` tint instead of green. Matches the tray standby icon style.
+
+---
+
 ## [1.8.13] - 2026-02-08 "Zero CPU Theme"
 
 ### Changed

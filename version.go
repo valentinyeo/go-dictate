@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.13"
+	Version        = "1.8.14"
 	BuildDate      = "2026-02-08"
-	VersionName    = "Zero CPU Theme"
-	VersionSummary = "RegNotifyChangeKeyValue theme watcher (zero CPU)"
+	VersionName    = "Black App Icon"
+	VersionSummary = "Start Menu icon updated to black speech bubble"
 )
