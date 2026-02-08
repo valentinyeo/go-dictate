@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.10"
+	Version        = "1.8.11"
 	BuildDate      = "2026-02-08"
-	VersionName    = "Theme Adapt"
-	VersionSummary = "Tray icon adapts when Windows theme changes"
+	VersionName    = "Theme Watch"
+	VersionSummary = "Efficient theme detection via RegNotifyChangeKeyValue"
 )

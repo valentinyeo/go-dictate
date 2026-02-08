@@ -2,12 +2,15 @@ package tray
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"image"
 	"image/color"
 	"image/png"
 	"os"
 	"path/filepath"
+	"syscall"
+	"time"
 
 	"golang.org/x/image/draw"
 	"golang.org/x/sys/windows/registry"
@@ -67,6 +70,55 @@ func isLightTaskbar() bool {
 		return false
 	}
 	return val == 1
+}
+
+var (
+	advapi32                  = syscall.NewLazyDLL("advapi32.dll")
+	procRegNotifyChangeKeyValue = advapi32.NewProc("RegNotifyChangeKeyValue")
+)
+
+// watchThemeChanges uses RegNotifyChangeKeyValue to efficiently detect Windows
+// theme changes with zero CPU usage while waiting. Sends on the channel when
+// the theme registry key changes.
+func watchThemeChanges(ctx context.Context, changed chan<- struct{}) {
+	const REG_NOTIFY_CHANGE_LAST_SET = 0x00000004
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		k, err := registry.OpenKey(registry.CURRENT_USER,
+			`Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`,
+			registry.QUERY_VALUE|registry.NOTIFY)
+		if err != nil {
+			// Fallback: wait and retry
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		// Block until the key's values change (zero CPU while waiting)
+		ret, _, _ := procRegNotifyChangeKeyValue.Call(
+			uintptr(k),
+			0, // don't watch subtree
+			REG_NOTIFY_CHANGE_LAST_SET,
+			0,    // no event handle (synchronous)
+			0,    // asynchronous = false (blocks)
+		)
+		k.Close()
+
+		if ret != 0 {
+			time.Sleep(30 * time.Second)
+			continue
+		}
+
+		select {
+		case changed <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // loadAndBuildICO loads a PNG, scales to multiple sizes, tints, and builds a multi-size ICO.

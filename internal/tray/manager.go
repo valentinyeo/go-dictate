@@ -81,11 +81,11 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.8.10")
+	systray.SetTooltip("Dictation App v1.8.11")
 
 	// Create menu items - clicking version opens changelog
-	m.versionItem = systray.AddMenuItem("v1.8.10 - Theme Adapt", "Click to view changelog")
-	summaryItem := systray.AddMenuItem("  Tray icon adapts when Windows theme changes", "")
+	m.versionItem = systray.AddMenuItem("v1.8.11 - Theme Watch", "Click to view changelog")
+	summaryItem := systray.AddMenuItem("  Efficient theme detection via RegNotifyChangeKeyValue", "")
 	summaryItem.Disable()
 	systray.AddSeparator()
 
@@ -514,7 +514,7 @@ func (m *Manager) handleModeClicks() {
 			}
 			m.configMu.Unlock()
 			logger.Info("[Tray] Switched to Online (Deepgram)")
-			systray.SetTooltip("Dictation App v1.8.10 - Online (Deepgram)")
+			systray.SetTooltip("Dictation App v1.8.11 - Online (Deepgram)")
 			m.notifySettingsChanged()
 
 		case <-m.offlineItem.ClickedCh:
@@ -536,7 +536,7 @@ func (m *Manager) handleModeClicks() {
 				m.config.Save()
 				m.configMu.Unlock()
 				logger.Info("[Tray] Switched to Offline (Vosk) - already ready")
-				systray.SetTooltip("Dictation App v1.8.10 - Offline (Vosk)")
+				systray.SetTooltip("Dictation App v1.8.11 - Offline (Vosk)")
 				m.notifySettingsChanged()
 			} else {
 				logger.Info("[Tray] Starting offline preparation (download DLL + model)...")
@@ -562,7 +562,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 		}); err != nil {
 			logger.Error("[Offline] Failed to download vosk library: %v", err)
 			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.10")
+			systray.SetTooltip("Dictation App v1.8.11")
 			return
 		}
 		logger.Info("[Offline] Vosk library downloaded successfully")
@@ -583,7 +583,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 		}); err != nil {
 			logger.Error("[Offline] Failed to download model %s: %v", modelKey, err)
 			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.10")
+			systray.SetTooltip("Dictation App v1.8.11")
 			return
 		}
 		logger.Info("[Offline] Model %s downloaded successfully", modelKey)
@@ -601,7 +601,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 	m.config.Save()
 	m.configMu.Unlock()
 	logger.Info("[Offline] Offline mode ready!")
-	systray.SetTooltip("Dictation App v1.8.10 - Offline (Vosk)")
+	systray.SetTooltip("Dictation App v1.8.11 - Offline (Vosk)")
 	m.notifySettingsChanged()
 }
 
@@ -658,15 +658,19 @@ func (m *Manager) handleIconUpdates() {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
+	// Watch for Windows theme changes via RegNotifyChangeKeyValue (zero CPU)
+	themeChanged := make(chan struct{}, 1)
+	go watchThemeChanges(m.ctx, themeChanged)
+
 	var lastState state.AppState = state.Active
 	var lastLanguage string = ""
-	lastLightTheme := isLightTaskbar()
-	themeCheckCounter := 0
 
 	for {
 		select {
 		case <-m.ctx.Done():
 			return
+		case <-themeChanged:
+			m.updateIcon(m.stateManager.Get())
 		case <-ticker.C:
 			currentState := m.stateManager.Get()
 			if currentState != lastState {
@@ -680,17 +684,6 @@ func (m *Manager) handleIconUpdates() {
 				}
 
 				lastState = currentState
-			}
-
-			// Check theme change every ~2 seconds (20 ticks at 100ms)
-			themeCheckCounter++
-			if themeCheckCounter >= 20 {
-				themeCheckCounter = 0
-				currentLightTheme := isLightTaskbar()
-				if currentLightTheme != lastLightTheme {
-					lastLightTheme = currentLightTheme
-					m.updateIcon(m.stateManager.Get())
-				}
 			}
 
 			// Check if language changed (from hotkey or menu click)
