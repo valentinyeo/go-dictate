@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"sync"
 	"time"
 
@@ -51,7 +52,7 @@ func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 
 	if len(c.keywords) > 0 {
 		for _, kw := range c.keywords {
-			url += fmt.Sprintf("&keywords=%s", kw)
+			url += "&keywords=" + neturl.QueryEscape(kw)
 		}
 	}
 
