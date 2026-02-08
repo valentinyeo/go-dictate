@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.16] - 2026-02-08 "Grey+Yellow Icon"
+
+### Changed
+- **Two-color app icon** - Start Menu icon now has light grey bubble (`#94A3B8`) with yellow sparkle stars (`#FBBF24`). Works on both dark and light themes. Separate SVG (`icons/app-icon.svg`) keeps this independent from tray icons.
+
+---
+
 ## [1.8.15] - 2026-02-08 "Blue App Icon"
 
 ### Changed
