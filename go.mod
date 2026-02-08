@@ -1,6 +1,6 @@
 module github.com/valen/go-dictate
 
-go 1.21
+go 1.24.0
 
 require (
 	github.com/gen2brain/malgo v0.11.10
@@ -21,5 +21,6 @@ require (
 	github.com/go-stack/stack v1.8.0 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	golang.design/x/mainthread v0.3.0 // indirect
+	golang.org/x/image v0.35.0 // indirect
 	golang.org/x/net v0.17.0 // indirect
 )

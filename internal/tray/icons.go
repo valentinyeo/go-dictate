@@ -2,217 +2,163 @@ package tray
 
 import (
 	"bytes"
-	"encoding/binary"
 	"image"
 	"image/color"
-	"math"
+	"image/png"
 	"os"
 	"path/filepath"
 
-	"golang.org/x/sys/windows/registry"
+	"golang.org/x/image/draw"
 )
 
-// getIconData generates a multi-size ICO with a microphone icon.
 func getIconData(colorName string) []byte {
-	light := isLightTaskbar()
-	var col color.RGBA
-	var style string
+	var iconFile string
+	var tintColor color.RGBA
 
 	switch colorName {
-	case "blue": // Speaking
-		col = color.RGBA{0x10, 0xB9, 0x81, 0xFF}
-		style = "filled"
-	case "red": // Paused
-		col = color.RGBA{0xEF, 0x44, 0x44, 0xFF}
-		style = "slash"
-	case "media": // Media detected
-		col = color.RGBA{0xF5, 0x9E, 0x0B, 0xFF}
-		style = "outline"
-	default: // Standby / Active (grey)
-		if light {
-			col = color.RGBA{0x20, 0x20, 0x20, 0xFF} // Near-black for light taskbar
-		} else {
-			col = color.RGBA{0xD0, 0xD0, 0xD0, 0xFF} // Light grey for dark taskbar
+	case "blue":
+		iconFile = "mic-on.png" // Filled mic - Speaking
+		tintColor = color.RGBA{0x10, 0xB9, 0x81, 0xFF} // Green
+	case "red":
+		iconFile = "mic-off.png" // Prohibited mic - Paused
+		tintColor = color.RGBA{0xEF, 0x44, 0x44, 0xFF} // Red
+	case "media":
+		iconFile = "mic-media.png" // Media icon - Media paused
+		tintColor = color.RGBA{0xF5, 0x9E, 0x0B, 0xFF} // Amber/Orange
+	default: // grey
+		iconFile = "mic-standby.png" // Outline mic - Standby
+		tintColor = color.RGBA{0x9C, 0xA3, 0xAF, 0xFF} // Grey
+	}
+
+	// Try to load from multiple paths
+	possiblePaths := []string{
+		filepath.Join("icons", iconFile),
+		filepath.Join("..", "..", "icons", iconFile),
+		filepath.Join(getExeDir(), "icons", iconFile),
+		filepath.Join(getExeDir(), "..", "icons", iconFile),
+	}
+
+	for _, path := range possiblePaths {
+		if data := loadPNGIcon(path, tintColor); data != nil {
+			return data
 		}
-		style = "outline"
 	}
 
-	// Render at multiple sizes for crisp display at any DPI
-	sizes := []int{16, 20, 24, 32, 48}
-	images := make([]*image.RGBA, len(sizes))
-	for i, sz := range sizes {
-		images[i] = renderMic(sz, style, col)
-	}
-	return buildICO(images)
+	// Fallback
+	return createFallbackIcon(tintColor)
 }
 
-// isLightTaskbar checks Windows registry for light taskbar theme.
-func isLightTaskbar() bool {
-	k, err := registry.OpenKey(registry.CURRENT_USER,
-		`Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`,
-		registry.QUERY_VALUE)
+func loadPNGIcon(path string, tintColor color.RGBA) []byte {
+	// Read PNG file
+	file, err := os.Open(path)
 	if err != nil {
-		return false
+		return nil
 	}
-	defer k.Close()
-	val, _, err := k.GetIntegerValue("SystemUsesLightTheme")
+	defer file.Close()
+
+	// Decode PNG
+	img, err := png.Decode(file)
 	if err != nil {
-		return false
+		return nil
 	}
-	return val == 1
-}
 
-// --- SDF-based microphone icon rendering ---
-//
-// All geometry is in normalized [0,1] coordinates for resolution independence.
-// Signed distance fields give smooth anti-aliased edges at any size.
+	// Scale to 16x16 (Windows tray icon size)
+	w, h := 16, 16
+	scaledImg := image.NewRGBA(image.Rect(0, 0, w, h))
+	draw.CatmullRom.Scale(scaledImg, scaledImg.Bounds(), img, img.Bounds(), draw.Over, nil)
 
-func renderMic(size int, style string, col color.RGBA) *image.RGBA {
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
-	s := float64(size)
-	aa := 1.5 / s
-
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
-			px := (float64(x) + 0.5) / s
-			py := (float64(y) + 0.5) / s
-
-			a := micAlpha(px, py, style, aa)
-			if a > 0.003 {
-				img.SetRGBA(x, y, color.RGBA{
-					R: col.R, G: col.G, B: col.B,
-					A: uint8(clamp01(a) * 255),
+	// Apply color tint (replace non-transparent pixels with tint color)
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			c := scaledImg.RGBAAt(x, y)
+			// If pixel has some opacity, replace with tint color
+			if c.A > 0 {
+				scaledImg.SetRGBA(x, y, color.RGBA{
+					R: tintColor.R,
+					G: tintColor.G,
+					B: tintColor.B,
+					A: c.A, // Preserve original alpha for anti-aliasing
 				})
 			}
 		}
 	}
-	return img
+
+	// Convert to ICO
+	return convertToICO(scaledImg)
 }
 
-func micAlpha(px, py float64, style string, aa float64) float64 {
-	// Mic capsule
-	capD := stadiumSDF(px, py, 0.50, 0.28, 0.125, 0.19)
+func convertToICO(img *image.RGBA) []byte {
+	bounds := img.Bounds()
+	width := bounds.Dx()
+	height := bounds.Dy()
 
-	var a float64
-	const t = 0.032 // outline thickness
-
-	// Capsule body
-	if style == "filled" {
-		a = fill(capD, aa)
-	} else {
-		a = stroke(capD, t, aa)
-	}
-
-	// U-shaped holder (outline of larger stadium, clipped to bottom)
-	holdD := stadiumSDF(px, py, 0.50, 0.38, 0.185, 0.28)
-	hA := stroke(holdD, t, aa)
-	hA *= fill(-(py - 0.33), aa)                   // only below y=0.33
-	hA *= clamp01(0.5 + (capD-t*0.8)/aa)           // hide inside capsule
-	a = math.Max(a, hA)
-
-	// Stand (vertical)
-	stD := boxSDF(px, py, 0.50, 0.73, 0.028, 0.07)
-	a = math.Max(a, fill(stD, aa))
-
-	// Base (horizontal)
-	bD := boxSDF(px, py, 0.50, 0.82, 0.15, 0.028)
-	a = math.Max(a, fill(bD, aa))
-
-	// Slash for paused
-	if style == "slash" {
-		slD := segSDF(px, py, 0.15, 0.80, 0.85, 0.06, 0.038)
-		a = math.Max(a, fill(slD, aa))
-	}
-
-	return clamp01(a)
-}
-
-// --- SDF primitives ---
-
-// stadiumSDF: vertical capsule (rectangle with semicircular caps).
-func stadiumSDF(px, py, cx, cy, hw, hh float64) float64 {
-	// Clamp to straight section of capsule
-	nearY := math.Max(cy-hh+hw, math.Min(py, cy+hh-hw))
-	dx := px - cx
-	dy := py - nearY
-	return math.Sqrt(dx*dx+dy*dy) - hw
-}
-
-// boxSDF: axis-aligned rectangle.
-func boxSDF(px, py, cx, cy, hw, hh float64) float64 {
-	dx := math.Abs(px-cx) - hw
-	dy := math.Abs(py-cy) - hh
-	outside := math.Sqrt(math.Max(dx, 0)*math.Max(dx, 0) + math.Max(dy, 0)*math.Max(dy, 0))
-	inside := math.Min(math.Max(dx, dy), 0)
-	return -(outside + inside) // negate: negative outside, positive inside
-}
-
-// segSDF: line segment with half-thickness.
-func segSDF(px, py, x1, y1, x2, y2, ht float64) float64 {
-	dx, dy := x2-x1, y2-y1
-	t := math.Max(0, math.Min(((px-x1)*dx+(py-y1)*dy)/(dx*dx+dy*dy), 1))
-	ex := px - (x1 + t*dx)
-	ey := py - (y1 + t*dy)
-	return -(math.Sqrt(ex*ex+ey*ey) - ht) // negate: negative outside, positive inside
-}
-
-// fill: alpha for filled shape. Positive SDF = inside.
-func fill(d, aa float64) float64 {
-	return clamp01(0.5 + d/aa)
-}
-
-// stroke: alpha for outline of shape at distance d with thickness t.
-func stroke(d, t, aa float64) float64 {
-	return fill(-(math.Abs(d) - t), aa)
-}
-
-func clamp01(v float64) float64 {
-	if v < 0 {
-		return 0
-	}
-	if v > 1 {
-		return 1
-	}
-	return v
-}
-
-// --- Multi-size ICO builder ---
-
-func buildICO(images []*image.RGBA) []byte {
-	n := len(images)
-	bmps := make([][]byte, n)
-	for i, img := range images {
-		bmps[i] = bmpData(img)
+	if width > 256 || height > 256 {
+		return nil
 	}
 
 	var buf bytes.Buffer
-	// Header
-	binary.Write(&buf, binary.LittleEndian, [3]uint16{0, 1, uint16(n)})
 
-	// Directory entries
-	off := 6 + n*16
-	for i, img := range images {
-		w := img.Bounds().Dx()
-		h := img.Bounds().Dy()
-		bw, bh := byte(w), byte(h)
-		if w >= 256 {
-			bw = 0
+	// ICO header
+	buf.Write([]byte{0x00, 0x00, 0x01, 0x00, 0x01, 0x00})
+
+	// Image directory
+	buf.WriteByte(byte(width))
+	buf.WriteByte(byte(height))
+	buf.Write([]byte{0x00, 0x00, 0x01, 0x00, 0x20, 0x00})
+
+	sizeOffset := buf.Len()
+	buf.Write([]byte{0x00, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00})
+
+	// BMP header
+	bmpStart := buf.Len()
+	buf.Write([]byte{0x28, 0x00, 0x00, 0x00})
+	buf.WriteByte(byte(width))
+	buf.Write([]byte{0x00, 0x00, 0x00})
+	buf.WriteByte(byte(height * 2))
+	buf.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x00, 0x20, 0x00})
+	buf.Write(make([]byte, 20)) // Zeros for compression, size, etc.
+
+	// Pixel data (bottom-up)
+	for y := height - 1; y >= 0; y-- {
+		for x := 0; x < width; x++ {
+			c := img.RGBAAt(x, y)
+			buf.WriteByte(c.B)
+			buf.WriteByte(c.G)
+			buf.WriteByte(c.R)
+			buf.WriteByte(c.A)
 		}
-		if h >= 256 {
-			bh = 0
-		}
-		buf.Write([]byte{bw, bh, 0, 0})
-		binary.Write(&buf, binary.LittleEndian, uint16(1))
-		binary.Write(&buf, binary.LittleEndian, uint16(32))
-		binary.Write(&buf, binary.LittleEndian, uint32(len(bmps[i])))
-		binary.Write(&buf, binary.LittleEndian, uint32(off))
-		off += len(bmps[i])
 	}
 
-	for _, b := range bmps {
-		buf.Write(b)
+	// AND mask
+	rowSize := ((width + 31) / 32) * 4
+	buf.Write(make([]byte, rowSize*height))
+
+	// Update size
+	imageSize := buf.Len() - bmpStart
+	result := buf.Bytes()
+	result[sizeOffset] = byte(imageSize)
+	result[sizeOffset+1] = byte(imageSize >> 8)
+	result[sizeOffset+2] = byte(imageSize >> 16)
+	result[sizeOffset+3] = byte(imageSize >> 24)
+
+	return result
+}
+
+func createFallbackIcon(c color.RGBA) []byte {
+	size := 16
+	img := image.NewRGBA(image.Rect(0, 0, size, size))
+
+	// Simple mic
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			if (y >= 2 && y <= 7 && x >= 6 && x <= 9) ||
+				(y >= 8 && y <= 10 && x >= 7 && x <= 8) {
+				img.SetRGBA(x, y, c)
+			}
+		}
 	}
-	return buf.Bytes()
+
+	return convertToICO(img)
 }
 
 func getExeDir() string {
@@ -221,32 +167,4 @@ func getExeDir() string {
 		return "."
 	}
 	return filepath.Dir(exe)
-}
-
-func bmpData(img *image.RGBA) []byte {
-	w := img.Bounds().Dx()
-	h := img.Bounds().Dy()
-
-	var buf bytes.Buffer
-	// BITMAPINFOHEADER
-	binary.Write(&buf, binary.LittleEndian, uint32(40))
-	binary.Write(&buf, binary.LittleEndian, int32(w))
-	binary.Write(&buf, binary.LittleEndian, int32(h*2))
-	binary.Write(&buf, binary.LittleEndian, uint16(1))
-	binary.Write(&buf, binary.LittleEndian, uint16(32))
-	buf.Write(make([]byte, 24)) // rest of header zeros
-
-	// Pixels (BGRA, bottom-up)
-	for y := h - 1; y >= 0; y-- {
-		for x := 0; x < w; x++ {
-			c := img.RGBAAt(x, y)
-			buf.Write([]byte{c.B, c.G, c.R, c.A})
-		}
-	}
-
-	// AND mask
-	rowBytes := ((w + 31) / 32) * 4
-	buf.Write(make([]byte, rowBytes*h))
-
-	return buf.Bytes()
 }
