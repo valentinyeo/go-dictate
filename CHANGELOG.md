@@ -5,6 +5,16 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.9] - 2026-02-08 "Icon Polish"
+
+### Fixed
+- **Sparkle stars clipped on right edge** - SVG viewBox was exactly 32x32 but sparkle paths extended to ~31.8px. Added 1px padding on all sides (`viewBox="-1 -1 34 34"`) so anti-aliasing renders fully.
+
+### Changed
+- **Black app icon** - Start Menu / taskbar / exe icon is now black instead of green, matching standard Windows icon style.
+
+---
+
 ## [1.8.8] - 2026-02-08 "App Icon"
 
 ### Changed

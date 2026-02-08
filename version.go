@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.8"
+	Version        = "1.8.9"
 	BuildDate      = "2026-02-08"
-	VersionName    = "App Icon"
-	VersionSummary = "Chat sparkle app icon in exe and Start Menu"
+	VersionName    = "Icon Polish"
+	VersionSummary = "Black app icon, fixed sparkle stars clipping"
 )
