@@ -12,6 +12,7 @@ type Config struct {
 	Deepgram DeepgramConfig `toml:"deepgram"`
 	Audio    AudioConfig    `toml:"audio"`
 	VAD      VADConfig      `toml:"vad"`
+	Offline  OfflineConfig  `toml:"offline"`
 }
 
 type DeepgramConfig struct {
@@ -26,11 +27,18 @@ type DeepgramConfig struct {
 type AudioConfig struct {
 	SilenceThresholdMs uint64  `toml:"silence_threshold_ms"`
 	DuckVolume         float32 `toml:"duck_volume"`
+	DuckEnabled        bool    `toml:"duck_enabled"`
 	AutoPauseOnMedia   bool    `toml:"auto_pause_on_media"`
+	DeviceName         string  `toml:"device_name"`
 }
 
 type VADConfig struct {
 	EnergyThreshold float32 `toml:"energy_threshold"`
+}
+
+type OfflineConfig struct {
+	Enabled   bool   `toml:"enabled"`
+	ModelSize string `toml:"model_size"`
 }
 
 func Default() Config {
@@ -46,10 +54,15 @@ func Default() Config {
 		Audio: AudioConfig{
 			SilenceThresholdMs: 3000,
 			DuckVolume:         0.2,
-			AutoPauseOnMedia:   true, // Now uses proper audio detection!
+			DuckEnabled:        false,
+			AutoPauseOnMedia:   true,
 		},
 		VAD: VADConfig{
 			EnergyThreshold: 0.02,
+		},
+		Offline: OfflineConfig{
+			Enabled:   false,
+			ModelSize: "small",
 		},
 	}
 }
@@ -121,9 +134,16 @@ func (c *Config) Save() error {
 # Audio settings
 # silence_threshold_ms: Auto-pause after this many milliseconds of silence
 # duck_volume: Volume level (0.0-1.0) for other apps during dictation
+# duck_enabled: Enable/disable audio ducking (true/false)
+# device_name: Microphone to use (empty = system default, or exact device name)
 
 # VAD settings
 # energy_threshold: RMS threshold for speech detection (0.0-1.0)
+
+# Offline settings (Vosk)
+# enabled: Use offline speech recognition instead of Deepgram (true/false)
+# model_size: "small" (~50MB, fast) or "large" (~1.8GB, more accurate)
+# Models are downloaded automatically when you enable offline mode
 
 # Global Hotkeys
 # Ctrl+Alt+X: Pause/Resume dictation
@@ -138,7 +158,7 @@ func (c *Config) Save() error {
 }
 
 func (c *Config) Validate() error {
-	if c.Deepgram.APIKey == "" {
+	if !c.Offline.Enabled && c.Deepgram.APIKey == "" {
 		return fmt.Errorf("API key not set. Please edit config.toml and add your Deepgram API key")
 	}
 	return nil

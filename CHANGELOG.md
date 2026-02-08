@@ -5,6 +5,40 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-02-08 "Offline Mode"
+
+### Added
+- **Offline dictation with Vosk** - Speech-to-text without internet using local models
+  - Toggle between Online (Deepgram) and Offline (Vosk) via tray menu
+  - Two model sizes: Small (~50 MB, fast) and Large (~1.8 GB, more accurate)
+  - Models auto-download on first use with progress shown in tray menu
+  - Vosk DLL auto-downloaded on first use (~10 MB)
+  - Falls back to Deepgram if model not ready
+  - Language switching works in offline mode (downloads new model if needed)
+- **STT Engine interface** - Abstracted speech-to-text backend behind `stt.Engine` interface
+  - Both Deepgram and Vosk implement the same interface
+  - Easy to add more backends in the future
+- **Vosk DLL loaded at runtime** - No CGO dependency, DLL loaded via syscall
+  - App works without libvosk.dll (offline mode just won't be available)
+  - DLL searched next to exe, then system PATH
+
+### Changed
+- Renamed `vadAndDeepgramManager` to `vadAndSTTManager` (handles both engines)
+- Config validation skips API key check when offline mode is enabled
+- New `[offline]` config section: `enabled` and `model_size`
+
+### Technical Details
+- New: `internal/stt/engine.go` - STT Engine interface
+- New: `internal/vosk/dll.go` - Runtime DLL loading via syscall (no CGO)
+- New: `internal/vosk/engine.go` - Vosk STT engine implementation
+- New: `internal/vosk/model.go` - Model registry, download manager, DLL downloader
+- New: `internal/vosk/types.go` - Vosk JSON result types
+- Modified: `internal/config/config.go` - Added OfflineConfig struct
+- Modified: `internal/tray/manager.go` - Online/Offline radio toggle, model size submenu
+- Modified: `main.go` - STT engine abstraction, vosk integration
+
+---
+
 ## [1.7.1] - 2026-02-06 "Stability Fix"
 
 ### Fixed

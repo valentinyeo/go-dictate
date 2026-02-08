@@ -10,6 +10,7 @@ import (
 	"github.com/getlantern/systray"
 	"github.com/valen/go-dictate/internal/config"
 	"github.com/valen/go-dictate/internal/state"
+	"github.com/valen/go-dictate/internal/vosk"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -29,10 +30,19 @@ type Manager struct {
 	exitItem      *systray.MenuItem
 
 	// Feature toggles
-	duckingItem       *systray.MenuItem
-	autoPauseItem     *systray.MenuItem
-	punctuateItem     *systray.MenuItem
-	fillerWordsItem   *systray.MenuItem
+	duckingItem     *systray.MenuItem
+	autoPauseItem   *systray.MenuItem
+	punctuateItem   *systray.MenuItem
+	fillerWordsItem *systray.MenuItem
+
+	// STT mode selection
+	onlineItem  *systray.MenuItem
+	offlineItem *systray.MenuItem
+
+	// Offline model selection
+	modelParent    *systray.MenuItem
+	modelSmallItem *systray.MenuItem
+	modelLargeItem *systray.MenuItem
 
 	// Microphone selection
 	micNames     []string // device names from enumeration
@@ -68,10 +78,24 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.7.1")
+	systray.SetTooltip("Dictation App v1.8.0")
 
 	// Create menu items - clicking version opens changelog
-	m.versionItem = systray.AddMenuItem("v1.7.1 - Stability Fix", "Click to view changelog")
+	m.versionItem = systray.AddMenuItem("v1.8.0 - Offline Mode", "Click to view changelog")
+	systray.AddSeparator()
+
+	// STT mode selection
+	m.configMu.RLock()
+	offlineEnabled := m.config.Offline.Enabled
+	isLargeModel := m.config.Offline.ModelSize == "large"
+	m.configMu.RUnlock()
+
+	m.onlineItem = systray.AddMenuItemCheckbox("Online (Deepgram)", "Use Deepgram cloud API", !offlineEnabled)
+	m.offlineItem = systray.AddMenuItemCheckbox("Offline (Vosk)", "Use local Vosk model (no internet needed)", offlineEnabled)
+	m.modelParent = systray.AddMenuItem("Offline Model", "Select offline model size")
+	m.modelSmallItem = m.modelParent.AddSubMenuItemCheckbox("Small (~50 MB)", "Fast, lower accuracy", !isLargeModel)
+	m.modelLargeItem = m.modelParent.AddSubMenuItemCheckbox("Large (~1.8 GB)", "Slower, higher accuracy", isLargeModel)
+
 	systray.AddSeparator()
 	m.languageItem = systray.AddMenuItem("Language: English", "Ctrl+Alt+L: Toggle language (EN ↔ DE)")
 
@@ -110,6 +134,8 @@ func (m *Manager) onReady() {
 	m.updateLanguageMenu()
 
 	// Start event handlers
+	go m.handleModeClicks()
+	go m.handleModelClicks()
 	go m.handleMicClicks()
 	go m.handlePauseClick()
 	go m.handleLanguageClick()
@@ -469,6 +495,127 @@ func restartApplication() error {
 	}()
 
 	return nil
+}
+
+func (m *Manager) handleModeClicks() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-m.onlineItem.ClickedCh:
+			m.onlineItem.Check()
+			m.offlineItem.Uncheck()
+			m.configMu.Lock()
+			m.config.Offline.Enabled = false
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save: %v\n", err)
+			}
+			m.configMu.Unlock()
+			fmt.Println("[Tray] Switched to Online (Deepgram)")
+			m.notifySettingsChanged()
+
+		case <-m.offlineItem.ClickedCh:
+			m.configMu.RLock()
+			lang := m.config.Deepgram.Language
+			isLarge := m.config.Offline.ModelSize == "large"
+			m.configMu.RUnlock()
+
+			modelKey := vosk.ModelKeyForLanguage(lang, isLarge)
+
+			if vosk.IsAvailable() && vosk.IsModelDownloaded(modelKey) {
+				m.offlineItem.Check()
+				m.onlineItem.Uncheck()
+				m.configMu.Lock()
+				m.config.Offline.Enabled = true
+				m.config.Save()
+				m.configMu.Unlock()
+				fmt.Println("[Tray] Switched to Offline (Vosk)")
+				m.notifySettingsChanged()
+			} else {
+				go m.prepareOffline(modelKey)
+			}
+		}
+	}
+}
+
+func (m *Manager) prepareOffline(modelKey string) {
+	// Download DLL if needed
+	if !vosk.IsAvailable() {
+		m.offlineItem.SetTitle("Offline (downloading library...)")
+		if err := vosk.EnsureVoskLibrary(func(downloaded, total int64) {
+			if total > 0 {
+				pct := float64(downloaded) / float64(total) * 100
+				m.offlineItem.SetTitle(fmt.Sprintf("Offline (library %.0f%%)", pct))
+			}
+		}); err != nil {
+			m.offlineItem.SetTitle("Offline (Vosk)")
+			fmt.Printf("[Tray] Failed to download vosk library: %v\n", err)
+			return
+		}
+	}
+
+	// Download model if needed
+	if !vosk.IsModelDownloaded(modelKey) {
+		info := vosk.Models[modelKey]
+		m.offlineItem.SetTitle(fmt.Sprintf("Offline (downloading %s...)", info.Name))
+		if err := vosk.DownloadModel(modelKey, func(downloaded, total int64) {
+			if total > 0 {
+				pct := float64(downloaded) / float64(total) * 100
+				m.offlineItem.SetTitle(fmt.Sprintf("Offline (model %.0f%%)", pct))
+			}
+		}); err != nil {
+			m.offlineItem.SetTitle("Offline (Vosk)")
+			fmt.Printf("[Tray] Failed to download model: %v\n", err)
+			return
+		}
+	}
+
+	// All ready
+	m.offlineItem.SetTitle("Offline (Vosk)")
+	m.offlineItem.Check()
+	m.onlineItem.Uncheck()
+	m.configMu.Lock()
+	m.config.Offline.Enabled = true
+	m.config.Save()
+	m.configMu.Unlock()
+	fmt.Println("[Tray] Offline mode ready!")
+	m.notifySettingsChanged()
+}
+
+func (m *Manager) handleModelClicks() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-m.modelSmallItem.ClickedCh:
+			m.modelSmallItem.Check()
+			m.modelLargeItem.Uncheck()
+			m.configMu.Lock()
+			m.config.Offline.ModelSize = "small"
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save: %v\n", err)
+			}
+			m.configMu.Unlock()
+			fmt.Println("[Tray] Offline model: Small")
+			if m.config.Offline.Enabled {
+				m.notifySettingsChanged()
+			}
+
+		case <-m.modelLargeItem.ClickedCh:
+			m.modelLargeItem.Check()
+			m.modelSmallItem.Uncheck()
+			m.configMu.Lock()
+			m.config.Offline.ModelSize = "large"
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save: %v\n", err)
+			}
+			m.configMu.Unlock()
+			fmt.Println("[Tray] Offline model: Large")
+			if m.config.Offline.Enabled {
+				m.notifySettingsChanged()
+			}
+		}
+	}
 }
 
 func (m *Manager) handleExitClick() {

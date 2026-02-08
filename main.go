@@ -17,8 +17,10 @@ import (
 	"github.com/valen/go-dictate/internal/deepgram"
 	"github.com/valen/go-dictate/internal/keyboard"
 	"github.com/valen/go-dictate/internal/logger"
+	"github.com/valen/go-dictate/internal/stt"
 	"github.com/valen/go-dictate/internal/state"
 	"github.com/valen/go-dictate/internal/tray"
+	"github.com/valen/go-dictate/internal/vosk"
 )
 
 var (
@@ -140,9 +142,9 @@ func run() {
 	sim := keyboard.NewSimulator()
 	go sim.Run(ctx, transcriptText)
 
-	// Start VAD processor and Deepgram client manager (settingsChangedCh wired after tray creation)
+	// Start VAD processor and STT engine manager (settingsChangedCh wired after tray creation)
 	settingsChangedCh = make(chan struct{}, 1)
-	go vadAndDeepgramManager(ctx, audioChunks, transcriptText, stateManager, cfg, settingsChangedCh)
+	go vadAndSTTManager(ctx, audioChunks, transcriptText, stateManager, cfg, settingsChangedCh)
 
 	// Create and run system tray
 	fmt.Println("[Main] Creating system tray...")
@@ -265,7 +267,7 @@ func registerHotkeys() {
 	// Removed Ctrl+Alt+Q - user prefers to use tray Exit button
 }
 
-func vadAndDeepgramManager(
+func vadAndSTTManager(
 	ctx context.Context,
 	audioRx <-chan []int16,
 	textTx chan<- string,
@@ -282,17 +284,23 @@ func vadAndDeepgramManager(
 
 	vad := audio.NewVAD(cfg.VAD.EnergyThreshold, cfg.Audio.SilenceThresholdMs)
 
-	// Per-app volume ducking for Chrome/Edge (master volume doesn't work on this system)
+	// Per-app volume ducking for Chrome/Edge
 	logger.Info("[AppVolumeDucker] Initializing with duck volume: %.0f%%", cfg.Audio.DuckVolume*100)
 	ducker := audio.NewAppVolumeDucker(cfg.Audio.DuckVolume)
 
-	var deepgramCtx context.Context
-	var deepgramCancel context.CancelFunc
-	var deepgramAudioTx chan []int16
+	var sttCtx context.Context
+	var sttCancel context.CancelFunc
+	var sttAudioTx chan []int16
+	var voskEngine *vosk.Engine
+
+	defer func() {
+		if voskEngine != nil {
+			voskEngine.Close()
+		}
+	}()
 
 	for {
 		// When paused, disable audio processing entirely (zero CPU)
-		// Set audioRx to nil in select to block until state changes
 		var activeAudioRx <-chan []int16
 		if s := stateManager.Get(); s != state.Paused && s != state.MicConflict {
 			activeAudioRx = audioRx
@@ -300,27 +308,30 @@ func vadAndDeepgramManager(
 
 		select {
 		case <-ctx.Done():
-			if deepgramCancel != nil {
-				deepgramCancel()
+			if sttCancel != nil {
+				sttCancel()
 			}
 			return
 
 		case <-stateManager.Changed():
-			// State changed (e.g. unpaused) - re-evaluate on next loop iteration
 			continue
 
 		case <-settingsChangedCh:
-			// Settings changed (language, punctuation, etc.) - close active Deepgram connection
-			// so the next speech burst picks up the new settings
-			if deepgramCancel != nil {
-				logger.Info("[VAD] Settings changed - closing active Deepgram connection")
+			// Settings changed - close active STT connection
+			if sttCancel != nil {
+				logger.Info("[VAD] Settings changed - closing active STT connection")
 				fmt.Println("[VAD] Settings changed - reconnecting with new settings")
-				deepgramCancel()
-				deepgramCancel = nil
+				sttCancel()
+				sttCancel = nil
 			}
-			if deepgramAudioTx != nil {
-				close(deepgramAudioTx)
-				deepgramAudioTx = nil
+			if sttAudioTx != nil {
+				close(sttAudioTx)
+				sttAudioTx = nil
+			}
+			// Clear vosk engine so it reloads with new language/model
+			if voskEngine != nil {
+				voskEngine.Close()
+				voskEngine = nil
 			}
 			vad.Reset()
 			stateManager.Set(state.AutoPaused)
@@ -337,36 +348,30 @@ func vadAndDeepgramManager(
 			mediaPlaying := audio.IsMediaPlaying()
 
 			if meetingActive {
-				// Meeting detected - pause to avoid transcribing meeting audio
 				if currentState == state.Active || currentState == state.AutoPaused {
 					logger.Info("[Meeting] Active call detected - auto-pausing")
-					fmt.Println("🔴 [Meeting] In a call - pausing dictation")
+					fmt.Println("[Meeting] In a call - pausing dictation")
 					stateManager.Set(state.MediaPaused)
 				} else if currentState == state.MediaPaused {
-					// Stay paused during meeting
 					continue
 				}
 			} else {
-				// No meeting - resume if we were paused
 				if currentState == state.MediaPaused {
 					logger.Info("[Meeting] Call ended - resuming")
-					fmt.Println("✅ [Meeting] Call ended - resuming dictation")
+					fmt.Println("[Meeting] Call ended - resuming dictation")
 					stateManager.Set(state.Active)
 				}
 			}
 
-			// Media detection: Just for visual indicator (amber icon), doesn't pause
-			// Auto-ducking will handle the volume when you speak
 			if mediaPlaying && currentState == state.Active {
-				// Optional: Set visual indicator (not implemented yet)
-				// Could add state.MediaDetected for amber icon without pausing
+				// Visual indicator only
 			}
 
 			vadEvent := vad.Process(audioChunk)
 
 			switch vadEvent {
 			case audio.SpeechStarted:
-				logger.Info("[VAD] Speech started - opening Deepgram connection")
+				logger.Info("[VAD] Speech started")
 				fmt.Println("[VAD] Speech started")
 
 				// Duck Chrome/Edge volume
@@ -378,49 +383,70 @@ func vadAndDeepgramManager(
 
 				stateManager.Set(state.Speaking)
 
-				// Start Deepgram connection
-				client := deepgram.NewClient(
-					cfg.Deepgram.APIKey,
-					cfg.Deepgram.Language,
-					cfg.Deepgram.Model,
-					cfg.Deepgram.Punctuate,
-					cfg.Deepgram.FillerWords,
-					cfg.Deepgram.Keywords,
-				)
+				// Choose STT engine
+				var engine stt.Engine
+				if cfg.Offline.Enabled {
+					if voskEngine == nil {
+						modelKey := vosk.ModelKeyForLanguage(cfg.Deepgram.Language, cfg.Offline.ModelSize == "large")
+						if vosk.IsAvailable() && vosk.IsModelDownloaded(modelKey) {
+							modelPath, _ := vosk.GetModelPath(modelKey)
+							var err error
+							voskEngine, err = vosk.NewEngine(modelPath)
+							if err != nil {
+								logger.Error("[Vosk] Failed to load: %v", err)
+								fmt.Printf("[Vosk] Error: %v, falling back to Deepgram\n", err)
+							}
+						} else {
+							logger.Info("[Vosk] Model not ready, falling back to Deepgram")
+							fmt.Println("[Vosk] Model not ready, using Deepgram")
+						}
+					}
+					if voskEngine != nil {
+						engine = voskEngine
+					}
+				}
+				if engine == nil {
+					engine = deepgram.NewClient(
+						cfg.Deepgram.APIKey,
+						cfg.Deepgram.Language,
+						cfg.Deepgram.Model,
+						cfg.Deepgram.Punctuate,
+						cfg.Deepgram.FillerWords,
+						cfg.Deepgram.Keywords,
+					)
+				}
 
-				deepgramAudioTx = make(chan []int16, 100)
-				deepgramCtx, deepgramCancel = context.WithCancel(ctx)
+				sttAudioTx = make(chan []int16, 100)
+				sttCtx, sttCancel = context.WithCancel(ctx)
 
-				go func(dgCtx context.Context, dgAudioRx <-chan []int16) {
+				go func(e stt.Engine, eCtx context.Context, eAudioRx <-chan []int16) {
 					defer func() {
 						if r := recover(); r != nil {
-							logger.Error("[Deepgram] PANIC recovered: %v", r)
-							fmt.Printf("[Deepgram] PANIC recovered: %v\n", r)
+							logger.Error("[STT] PANIC recovered: %v", r)
+							fmt.Printf("[STT] PANIC recovered: %v\n", r)
 						}
 					}()
-					if err := client.StartStreaming(dgCtx, dgAudioRx, textTx); err != nil {
-						fmt.Printf("[Deepgram] Error: %v\n", err)
+					if err := e.StartStreaming(eCtx, eAudioRx, textTx); err != nil {
+						fmt.Printf("[STT] Error: %v\n", err)
 					}
-				}(deepgramCtx, deepgramAudioTx)
+				}(engine, sttCtx, sttAudioTx)
 
 				// Send this chunk
 				select {
-				case deepgramAudioTx <- audioChunk:
+				case sttAudioTx <- audioChunk:
 				default:
 				}
 
 			case audio.Speaking:
-				// Forward audio to Deepgram if connection is open
-				// (Don't check currentState - it might be stale if we just transitioned from MediaPaused)
-				if deepgramAudioTx != nil {
+				if sttAudioTx != nil {
 					select {
-					case deepgramAudioTx <- audioChunk:
+					case sttAudioTx <- audioChunk:
 					default:
 					}
 				}
 
 			case audio.SilenceDetected:
-				logger.Info("[VAD] Silence detected - closing Deepgram connection")
+				logger.Info("[VAD] Silence detected - closing STT connection")
 				fmt.Println("[VAD] Silence detected")
 
 				// Restore Chrome/Edge volume
@@ -428,19 +454,18 @@ func vadAndDeepgramManager(
 					logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
 				}
 
-				// Close Deepgram connection
-				if deepgramCancel != nil {
-					deepgramCancel()
-					deepgramCancel = nil
+				// Close STT connection
+				if sttCancel != nil {
+					sttCancel()
+					sttCancel = nil
 				}
-				if deepgramAudioTx != nil {
-					close(deepgramAudioTx)
-					deepgramAudioTx = nil
+				if sttAudioTx != nil {
+					close(sttAudioTx)
+					sttAudioTx = nil
 				}
 
 				vad.Reset()
 
-				// Return to MediaPaused if media is still playing, otherwise AutoPaused
 				if audio.IsMediaPlaying() {
 					logger.Info("[VAD] Media still playing - returning to MediaPaused")
 					stateManager.Set(state.MediaPaused)
