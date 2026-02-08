@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.7"
+	Version        = "1.8.8"
 	BuildDate      = "2026-02-08"
-	VersionName    = "Ducking Guard"
-	VersionSummary = "Fixed volume ducking ignoring disabled config"
+	VersionName    = "App Icon"
+	VersionSummary = "Chat sparkle app icon in exe and Start Menu"
 )
