@@ -50,6 +50,7 @@ type Manager struct {
 	// Microphone selection
 	micNames     []string // device names from enumeration
 	selectedMic  string   // currently selected device name ("" = system default)
+	micParent    *systray.MenuItem
 	micItems     []*systray.MenuItem
 	MicChangedCh chan string // sends device name when user selects a new mic
 
@@ -81,11 +82,11 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.8.17")
+	systray.SetTooltip("Dictation App v1.8.18")
 
 	// Create menu items - clicking version opens changelog
-	m.versionItem = systray.AddMenuItem("v1.8.17 - Audio Buffer", "Click to view changelog")
-	summaryItem := systray.AddMenuItem("  Buffer audio during Deepgram connection (no lost words)", "")
+	m.versionItem = systray.AddMenuItem("v1.8.18 - Mic Label", "Click to view changelog")
+	summaryItem := systray.AddMenuItem("  Show active microphone name in tray menu", "")
 	summaryItem.Disable()
 	systray.AddSeparator()
 
@@ -104,14 +105,18 @@ func (m *Manager) onReady() {
 	systray.AddSeparator()
 	m.languageItem = systray.AddMenuItem("Language: English", "Ctrl+Alt+L: Toggle language (EN ↔ DE)")
 
-	// Microphone submenu
-	micParent := systray.AddMenuItem("Microphone", "Select input device")
+	// Microphone submenu - show current mic in label
+	micLabel := "Microphone: System Default"
+	if m.selectedMic != "" {
+		micLabel = "Microphone: " + m.selectedMic
+	}
+	m.micParent = systray.AddMenuItem(micLabel, "Select input device")
 	defaultChecked := m.selectedMic == ""
-	defaultItem := micParent.AddSubMenuItemCheckbox("System Default", "Use system default microphone", defaultChecked)
+	defaultItem := m.micParent.AddSubMenuItemCheckbox("System Default", "Use system default microphone", defaultChecked)
 	m.micItems = append(m.micItems, defaultItem)
 	for _, name := range m.micNames {
 		checked := name == m.selectedMic
-		item := micParent.AddSubMenuItemCheckbox(name, name, checked)
+		item := m.micParent.AddSubMenuItemCheckbox(name, name, checked)
 		m.micItems = append(m.micItems, item)
 	}
 
@@ -247,6 +252,7 @@ func (m *Manager) handleMicClicks() {
 			if displayName == "" {
 				displayName = "System Default"
 			}
+			m.micParent.SetTitle("Microphone: " + displayName)
 			fmt.Printf("[Tray] Microphone switched to: %s\n", displayName)
 		}
 	}
@@ -514,7 +520,7 @@ func (m *Manager) handleModeClicks() {
 			}
 			m.configMu.Unlock()
 			logger.Info("[Tray] Switched to Online (Deepgram)")
-			systray.SetTooltip("Dictation App v1.8.17 - Online (Deepgram)")
+			systray.SetTooltip("Dictation App v1.8.18 - Online (Deepgram)")
 			m.notifySettingsChanged()
 
 		case <-m.offlineItem.ClickedCh:
@@ -536,7 +542,7 @@ func (m *Manager) handleModeClicks() {
 				m.config.Save()
 				m.configMu.Unlock()
 				logger.Info("[Tray] Switched to Offline (Vosk) - already ready")
-				systray.SetTooltip("Dictation App v1.8.17 - Offline (Vosk)")
+				systray.SetTooltip("Dictation App v1.8.18 - Offline (Vosk)")
 				m.notifySettingsChanged()
 			} else {
 				logger.Info("[Tray] Starting offline preparation (download DLL + model)...")
@@ -562,7 +568,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 		}); err != nil {
 			logger.Error("[Offline] Failed to download vosk library: %v", err)
 			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.17")
+			systray.SetTooltip("Dictation App v1.8.18")
 			return
 		}
 		logger.Info("[Offline] Vosk library downloaded successfully")
@@ -583,7 +589,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 		}); err != nil {
 			logger.Error("[Offline] Failed to download model %s: %v", modelKey, err)
 			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.17")
+			systray.SetTooltip("Dictation App v1.8.18")
 			return
 		}
 		logger.Info("[Offline] Model %s downloaded successfully", modelKey)
@@ -601,7 +607,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 	m.config.Save()
 	m.configMu.Unlock()
 	logger.Info("[Offline] Offline mode ready!")
-	systray.SetTooltip("Dictation App v1.8.17 - Offline (Vosk)")
+	systray.SetTooltip("Dictation App v1.8.18 - Offline (Vosk)")
 	m.notifySettingsChanged()
 }
 

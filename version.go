@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.17"
+	Version        = "1.8.18"
 	BuildDate      = "2026-02-08"
-	VersionName    = "Audio Buffer"
-	VersionSummary = "Buffer audio during Deepgram connection (no lost words)"
+	VersionName    = "Mic Label"
+	VersionSummary = "Show active microphone name in tray menu"
 )

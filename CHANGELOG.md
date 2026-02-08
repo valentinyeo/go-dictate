@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.18] - 2026-02-08 "Mic Label"
+
+### Changed
+- **Active microphone shown in tray menu** - Menu item now reads "Microphone: Lark M2" instead of just "Microphone". See current mic at a glance without opening the submenu. Updates when you switch mics.
+
+---
+
 ## [1.8.17] - 2026-02-08 "Audio Buffer"
 
 ### Fixed
