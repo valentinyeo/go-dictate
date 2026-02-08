@@ -26,10 +26,10 @@ func getIconData(colorName string) []byte {
 		iconFile = "mic-off.png"
 		tintColor = color.RGBA{0xEF, 0x44, 0x44, 0xFF}
 	case "media":
-		iconFile = "mic-media.png"
+		iconFile = "mic-on.png"
 		tintColor = color.RGBA{0xF5, 0x9E, 0x0B, 0xFF}
-	default: // grey - standby
-		iconFile = "mic-standby.png"
+	default: // standby
+		iconFile = "mic-on.png"
 		if light {
 			tintColor = color.RGBA{0x20, 0x20, 0x20, 0xFF}
 		} else {

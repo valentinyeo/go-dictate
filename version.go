@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.4"
+	Version        = "1.8.5"
 	BuildDate      = "2026-02-08"
-	VersionName    = "Chat Sparkle Icons"
-	VersionSummary = "Fluent UI chat-with-sparkles icons for active/standby states"
+	VersionName    = "Simplified Icons"
+	VersionSummary = "Same filled icon for all states, tinted by color"
 )
