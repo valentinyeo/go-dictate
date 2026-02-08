@@ -5,10 +5,14 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.8.11] - 2026-02-08 "Theme Watch"
+## [1.8.12] - 2026-02-08 "Theme Watch"
 
-### Changed
-- **Efficient theme detection** - Replaced 2-second polling with `RegNotifyChangeKeyValue` Windows API. A background goroutine blocks (zero CPU) until the theme registry key actually changes, then instantly re-renders the tray icon. This is the standard Windows approach for detecting settings changes.
+### Fixed
+- **RegNotifyChangeKeyValue crashed the app** - The synchronous blocking call caused the app to crash on theme change. Replaced with simple 30-second polling which is reliable and still negligible overhead for something that changes rarely.
+
+---
+
+## [1.8.11] - 2026-02-08 "Theme Watch" (crashed on theme change)
 
 ---
 

@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.11"
+	Version        = "1.8.12"
 	BuildDate      = "2026-02-08"
 	VersionName    = "Theme Watch"
-	VersionSummary = "Efficient theme detection via RegNotifyChangeKeyValue"
+	VersionSummary = "Stable theme detection, polls every 30s"
 )
