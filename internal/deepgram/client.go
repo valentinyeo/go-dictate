@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/valen/go-dictate/internal/logger"
@@ -60,7 +62,13 @@ func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 	logger.Info("[Deepgram] Connecting to %s", url)
 	fmt.Printf("[Deepgram] Connecting to %s\n", url)
 
-	conn, _, err := websocket.DefaultDialer.Dial(url, headers)
+	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
+		NetDialContext: (&net.Dialer{
+			Timeout: 10 * time.Second,
+		}).DialContext,
+	}
+	conn, _, err := dialer.Dial(url, headers)
 	if err != nil {
 		logger.Error("[Deepgram] Connection failed: %v", err)
 		return fmt.Errorf("failed to connect: %w", err)

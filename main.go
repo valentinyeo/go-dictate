@@ -273,6 +273,13 @@ func vadAndDeepgramManager(
 	cfg *config.Config,
 	settingsChangedCh <-chan struct{},
 ) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("[VAD] PANIC recovered: %v", r)
+			fmt.Printf("[VAD] PANIC recovered: %v\n", r)
+		}
+	}()
+
 	vad := audio.NewVAD(cfg.VAD.EnergyThreshold, cfg.Audio.SilenceThresholdMs)
 
 	// Per-app volume ducking for Chrome/Edge (master volume doesn't work on this system)
@@ -385,6 +392,12 @@ func vadAndDeepgramManager(
 				deepgramCtx, deepgramCancel = context.WithCancel(ctx)
 
 				go func(dgCtx context.Context, dgAudioRx <-chan []int16) {
+					defer func() {
+						if r := recover(); r != nil {
+							logger.Error("[Deepgram] PANIC recovered: %v", r)
+							fmt.Printf("[Deepgram] PANIC recovered: %v\n", r)
+						}
+					}()
 					if err := client.StartStreaming(dgCtx, dgAudioRx, textTx); err != nil {
 						fmt.Printf("[Deepgram] Error: %v\n", err)
 					}
