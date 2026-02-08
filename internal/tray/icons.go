@@ -9,11 +9,18 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
-	"time"
+	"syscall"
 
 	"golang.org/x/image/draw"
 	"golang.org/x/sys/windows/registry"
 )
+
+var (
+	advapi32                    = syscall.NewLazyDLL("advapi32.dll")
+	procRegNotifyChangeKeyValue = advapi32.NewProc("RegNotifyChangeKeyValue")
+)
+
+const regNotifyChangeLastSet = 0x00000004
 
 func getIconData(colorName string) []byte {
 	light := isLightTaskbar()
@@ -71,27 +78,40 @@ func isLightTaskbar() bool {
 	return val == 1
 }
 
-// watchThemeChanges polls the theme registry key every 30 seconds and sends
-// on the channel when the theme changes.
+// watchThemeChanges uses RegNotifyChangeKeyValue to block until the Windows
+// theme registry key changes, then sends on the channel. Uses zero CPU while
+// waiting (no polling). Same pattern as screencast2-go/theme.go.
 func watchThemeChanges(ctx context.Context, changed chan<- struct{}) {
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-
-	lastLight := isLightTaskbar()
+	k, err := registry.OpenKey(registry.CURRENT_USER,
+		`Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`,
+		registry.QUERY_VALUE|registry.NOTIFY)
+	if err != nil {
+		return
+	}
+	defer k.Close()
 
 	for {
+		ret, _, _ := procRegNotifyChangeKeyValue.Call(
+			uintptr(k),
+			0,                      // don't watch subtree
+			regNotifyChangeLastSet, // watch value changes
+			0,                      // no event handle (synchronous)
+			0,                      // synchronous - blocks until change
+		)
+		if ret != 0 {
+			return
+		}
+
+		// Check if we should stop
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			current := isLightTaskbar()
-			if current != lastLight {
-				lastLight = current
-				select {
-				case changed <- struct{}{}:
-				default:
-				}
-			}
+		default:
+		}
+
+		select {
+		case changed <- struct{}{}:
+		default:
 		}
 	}
 }
