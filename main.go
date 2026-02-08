@@ -284,6 +284,12 @@ func vadAndSTTManager(
 
 	vad := audio.NewVAD(cfg.VAD.EnergyThreshold, cfg.Audio.SilenceThresholdMs)
 
+	// Pre-roll ring buffer: keeps last ~500ms of audio so first words aren't lost.
+	// VAD needs audio to detect speech - by the time it fires SpeechStarted,
+	// the beginning of the utterance has already passed. Pre-roll captures it.
+	const preRollSize = 25 // ~500ms at ~20ms/chunk
+	preRoll := make([][]int16, 0, preRollSize)
+
 	// Per-app volume ducking for Chrome/Edge
 	logger.Info("[AppVolumeDucker] Initializing with duck volume: %.0f%%", cfg.Audio.DuckVolume*100)
 	ducker := audio.NewAppVolumeDucker(cfg.Audio.DuckVolume)
@@ -431,7 +437,19 @@ func vadAndSTTManager(
 					}
 				}(engine, sttCtx, sttAudioTx)
 
-				// Send this chunk
+				// Flush pre-roll buffer (captures audio BEFORE VAD fired)
+				if len(preRoll) > 0 {
+					logger.Info("[VAD] Flushing %d pre-roll chunks (~%dms)", len(preRoll), len(preRoll)*20)
+					for _, chunk := range preRoll {
+						select {
+						case sttAudioTx <- chunk:
+						default:
+						}
+					}
+					preRoll = preRoll[:0]
+				}
+
+				// Send the current chunk that triggered SpeechStarted
 				select {
 				case sttAudioTx <- audioChunk:
 				default:
@@ -467,6 +485,7 @@ func vadAndSTTManager(
 				}
 
 				vad.Reset()
+				preRoll = preRoll[:0] // Clear pre-roll for next utterance
 
 				if audio.IsMediaPlaying() {
 					logger.Info("[VAD] Media still playing - returning to MediaPaused")
@@ -476,7 +495,14 @@ func vadAndSTTManager(
 				}
 
 			case audio.Silence:
-				// Continue listening
+				// Collect into pre-roll ring buffer for next speech start
+				if len(preRoll) >= preRollSize {
+					// Shift left: drop oldest, append newest
+					copy(preRoll, preRoll[1:])
+					preRoll[len(preRoll)-1] = audioChunk
+				} else {
+					preRoll = append(preRoll, audioChunk)
+				}
 			}
 		}
 	}

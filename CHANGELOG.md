@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.19] - 2026-02-08 "Pre-Roll Buffer"
+
+### Fixed
+- **No more missing first words** - Added a 500ms pre-roll ring buffer that continuously records the last ~25 audio chunks. When VAD detects speech start, the buffer is flushed to the STT engine before the triggering chunk, so the beginning of the utterance is never lost. Previously "what do I need to do" would arrive as "I need to do" because VAD consumed the first words before firing SpeechStarted.
+
+---
+
 ## [1.8.18] - 2026-02-08 "Mic Label"
 
 ### Changed
