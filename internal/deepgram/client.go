@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	neturl "net/url"
 	"sync"
 	"time"
 
@@ -50,11 +49,8 @@ func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 		url += "&filler_words=true"
 	}
 
-	if len(c.keywords) > 0 {
-		for _, kw := range c.keywords {
-			url += "&keywords=" + neturl.QueryEscape(kw+":2")
-		}
-	}
+	// Note: keywords parameter not supported by Nova-3 streaming API
+	// Kept in config for future use when Deepgram adds support
 
 	headers := http.Header{}
 	headers.Set("Authorization", fmt.Sprintf("Token %s", c.apiKey))
