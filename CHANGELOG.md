@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.6] - 2026-02-08 "Chat X Icon"
+
+### Changed
+- **Chat bubble with X for paused/off** - Replaced slashed mic with Fluent UI chat-dismiss icon (chat bubble with X). All tray icons now use the chat bubble theme.
+
+---
+
 ## [1.8.5] - 2026-02-08 "Simplified Icons"
 
 ### Changed
