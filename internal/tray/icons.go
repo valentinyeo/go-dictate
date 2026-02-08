@@ -2,6 +2,7 @@ package tray
 
 import (
 	"bytes"
+	"encoding/binary"
 	"image"
 	"image/color"
 	"image/png"
@@ -9,28 +10,33 @@ import (
 	"path/filepath"
 
 	"golang.org/x/image/draw"
+	"golang.org/x/sys/windows/registry"
 )
 
 func getIconData(colorName string) []byte {
+	light := isLightTaskbar()
 	var iconFile string
 	var tintColor color.RGBA
 
 	switch colorName {
 	case "blue":
-		iconFile = "mic-on.png" // Filled mic - Speaking
-		tintColor = color.RGBA{0x10, 0xB9, 0x81, 0xFF} // Green
+		iconFile = "mic-on.png"
+		tintColor = color.RGBA{0x10, 0xB9, 0x81, 0xFF}
 	case "red":
-		iconFile = "mic-off.png" // Prohibited mic - Paused
-		tintColor = color.RGBA{0xEF, 0x44, 0x44, 0xFF} // Red
+		iconFile = "mic-off.png"
+		tintColor = color.RGBA{0xEF, 0x44, 0x44, 0xFF}
 	case "media":
-		iconFile = "mic-media.png" // Media icon - Media paused
-		tintColor = color.RGBA{0xF5, 0x9E, 0x0B, 0xFF} // Amber/Orange
-	default: // grey
-		iconFile = "mic-standby.png" // Outline mic - Standby
-		tintColor = color.RGBA{0x9C, 0xA3, 0xAF, 0xFF} // Grey
+		iconFile = "mic-media.png"
+		tintColor = color.RGBA{0xF5, 0x9E, 0x0B, 0xFF}
+	default: // grey - standby
+		iconFile = "mic-standby.png"
+		if light {
+			tintColor = color.RGBA{0x20, 0x20, 0x20, 0xFF}
+		} else {
+			tintColor = color.RGBA{0xD0, 0xD0, 0xD0, 0xFF}
+		}
 	}
 
-	// Try to load from multiple paths
 	possiblePaths := []string{
 		filepath.Join("icons", iconFile),
 		filepath.Join("..", "..", "icons", iconFile),
@@ -39,126 +45,153 @@ func getIconData(colorName string) []byte {
 	}
 
 	for _, path := range possiblePaths {
-		if data := loadPNGIcon(path, tintColor); data != nil {
+		if data := loadAndBuildICO(path, tintColor); data != nil {
 			return data
 		}
 	}
 
-	// Fallback
 	return createFallbackIcon(tintColor)
 }
 
-func loadPNGIcon(path string, tintColor color.RGBA) []byte {
-	// Read PNG file
+// isLightTaskbar checks Windows registry for light taskbar theme.
+func isLightTaskbar() bool {
+	k, err := registry.OpenKey(registry.CURRENT_USER,
+		`Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`,
+		registry.QUERY_VALUE)
+	if err != nil {
+		return false
+	}
+	defer k.Close()
+	val, _, err := k.GetIntegerValue("SystemUsesLightTheme")
+	if err != nil {
+		return false
+	}
+	return val == 1
+}
+
+// loadAndBuildICO loads a PNG, scales to multiple sizes, tints, and builds a multi-size ICO.
+func loadAndBuildICO(path string, tintColor color.RGBA) []byte {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil
 	}
 	defer file.Close()
 
-	// Decode PNG
-	img, err := png.Decode(file)
+	srcImg, err := png.Decode(file)
 	if err != nil {
 		return nil
 	}
 
-	// Scale to 16x16 (Windows tray icon size)
-	w, h := 16, 16
-	scaledImg := image.NewRGBA(image.Rect(0, 0, w, h))
-	draw.CatmullRom.Scale(scaledImg, scaledImg.Bounds(), img, img.Bounds(), draw.Over, nil)
+	// Generate multiple sizes for crisp display at any DPI
+	sizes := []int{16, 20, 24, 32, 48}
+	images := make([]*image.RGBA, len(sizes))
 
-	// Apply color tint (replace non-transparent pixels with tint color)
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			c := scaledImg.RGBAAt(x, y)
-			// If pixel has some opacity, replace with tint color
-			if c.A > 0 {
-				scaledImg.SetRGBA(x, y, color.RGBA{
-					R: tintColor.R,
-					G: tintColor.G,
-					B: tintColor.B,
-					A: c.A, // Preserve original alpha for anti-aliasing
-				})
+	for i, sz := range sizes {
+		scaled := image.NewRGBA(image.Rect(0, 0, sz, sz))
+		draw.CatmullRom.Scale(scaled, scaled.Bounds(), srcImg, srcImg.Bounds(), draw.Over, nil)
+
+		// Tint: replace color, preserve alpha
+		for y := 0; y < sz; y++ {
+			for x := 0; x < sz; x++ {
+				c := scaled.RGBAAt(x, y)
+				if c.A > 0 {
+					scaled.SetRGBA(x, y, color.RGBA{
+						R: tintColor.R,
+						G: tintColor.G,
+						B: tintColor.B,
+						A: c.A,
+					})
+				}
 			}
 		}
+		images[i] = scaled
 	}
 
-	// Convert to ICO
-	return convertToICO(scaledImg)
+	return buildMultiSizeICO(images)
 }
 
-func convertToICO(img *image.RGBA) []byte {
-	bounds := img.Bounds()
-	width := bounds.Dx()
-	height := bounds.Dy()
-
-	if width > 256 || height > 256 {
-		return nil
+// buildMultiSizeICO creates an ICO file with multiple image sizes.
+func buildMultiSizeICO(images []*image.RGBA) []byte {
+	n := len(images)
+	bmps := make([][]byte, n)
+	for i, img := range images {
+		bmps[i] = imageToBMP(img)
 	}
 
 	var buf bytes.Buffer
 
-	// ICO header
-	buf.Write([]byte{0x00, 0x00, 0x01, 0x00, 0x01, 0x00})
+	// ICO header (6 bytes)
+	binary.Write(&buf, binary.LittleEndian, uint16(0)) // reserved
+	binary.Write(&buf, binary.LittleEndian, uint16(1)) // type: ICO
+	binary.Write(&buf, binary.LittleEndian, uint16(n)) // count
 
-	// Image directory
-	buf.WriteByte(byte(width))
-	buf.WriteByte(byte(height))
-	buf.Write([]byte{0x00, 0x00, 0x01, 0x00, 0x20, 0x00})
+	// Directory entries (16 bytes each)
+	dataOffset := 6 + n*16
+	for i, img := range images {
+		w := img.Bounds().Dx()
+		h := img.Bounds().Dy()
+		bw, bh := byte(w), byte(h)
+		if w >= 256 {
+			bw = 0
+		}
+		if h >= 256 {
+			bh = 0
+		}
+		buf.Write([]byte{bw, bh, 0, 0})                               // width, height, palette, reserved
+		binary.Write(&buf, binary.LittleEndian, uint16(1))             // planes
+		binary.Write(&buf, binary.LittleEndian, uint16(32))            // bpp
+		binary.Write(&buf, binary.LittleEndian, uint32(len(bmps[i])))  // data size
+		binary.Write(&buf, binary.LittleEndian, uint32(dataOffset))    // data offset
+		dataOffset += len(bmps[i])
+	}
 
-	sizeOffset := buf.Len()
-	buf.Write([]byte{0x00, 0x00, 0x00, 0x00, 0x16, 0x00, 0x00, 0x00})
+	for _, b := range bmps {
+		buf.Write(b)
+	}
+	return buf.Bytes()
+}
 
-	// BMP header
-	bmpStart := buf.Len()
-	buf.Write([]byte{0x28, 0x00, 0x00, 0x00})
-	buf.WriteByte(byte(width))
-	buf.Write([]byte{0x00, 0x00, 0x00})
-	buf.WriteByte(byte(height * 2))
-	buf.Write([]byte{0x00, 0x00, 0x00, 0x01, 0x00, 0x20, 0x00})
-	buf.Write(make([]byte, 20)) // Zeros for compression, size, etc.
+// imageToBMP converts an RGBA image to ICO-compatible BMP data.
+func imageToBMP(img *image.RGBA) []byte {
+	w := img.Bounds().Dx()
+	h := img.Bounds().Dy()
 
-	// Pixel data (bottom-up)
-	for y := height - 1; y >= 0; y-- {
-		for x := 0; x < width; x++ {
+	var buf bytes.Buffer
+
+	// BITMAPINFOHEADER (40 bytes)
+	binary.Write(&buf, binary.LittleEndian, uint32(40))  // header size
+	binary.Write(&buf, binary.LittleEndian, int32(w))     // width
+	binary.Write(&buf, binary.LittleEndian, int32(h*2))   // height (doubled for ICO)
+	binary.Write(&buf, binary.LittleEndian, uint16(1))    // planes
+	binary.Write(&buf, binary.LittleEndian, uint16(32))   // bpp
+	buf.Write(make([]byte, 24))                           // rest zeros
+
+	// Pixel data (BGRA, bottom-up)
+	for y := h - 1; y >= 0; y-- {
+		for x := 0; x < w; x++ {
 			c := img.RGBAAt(x, y)
-			buf.WriteByte(c.B)
-			buf.WriteByte(c.G)
-			buf.WriteByte(c.R)
-			buf.WriteByte(c.A)
+			buf.Write([]byte{c.B, c.G, c.R, c.A})
 		}
 	}
 
 	// AND mask
-	rowSize := ((width + 31) / 32) * 4
-	buf.Write(make([]byte, rowSize*height))
+	rowBytes := ((w + 31) / 32) * 4
+	buf.Write(make([]byte, rowBytes*h))
 
-	// Update size
-	imageSize := buf.Len() - bmpStart
-	result := buf.Bytes()
-	result[sizeOffset] = byte(imageSize)
-	result[sizeOffset+1] = byte(imageSize >> 8)
-	result[sizeOffset+2] = byte(imageSize >> 16)
-	result[sizeOffset+3] = byte(imageSize >> 24)
-
-	return result
+	return buf.Bytes()
 }
 
 func createFallbackIcon(c color.RGBA) []byte {
-	size := 16
-	img := image.NewRGBA(image.Rect(0, 0, size, size))
-
-	// Simple mic
-	for y := 0; y < size; y++ {
-		for x := 0; x < size; x++ {
+	img := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	for y := 0; y < 16; y++ {
+		for x := 0; x < 16; x++ {
 			if (y >= 2 && y <= 7 && x >= 6 && x <= 9) ||
 				(y >= 8 && y <= 10 && x >= 7 && x <= 8) {
 				img.SetRGBA(x, y, c)
 			}
 		}
 	}
-
-	return convertToICO(img)
+	return buildMultiSizeICO([]*image.RGBA{img})
 }
 
 func getExeDir() string {

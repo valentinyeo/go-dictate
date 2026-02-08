@@ -5,12 +5,18 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.8.2] - 2026-02-08 "Crisp Icons"
+## [1.8.3] - 2026-02-08 "Fluent Icons"
 
-### Fixed
-- **Blurry tray icon** - Was single 16x16 ICO upscaled on high-DPI displays. Now multi-size ICO (16, 20, 24, 32, 48) so Windows picks the right size for any DPI
-- **Low contrast on light taskbar** - Icon now detects Windows taskbar theme via registry. Dark icons on light taskbar, light icons on dark taskbar
-- **Icons now rendered programmatically** - SDF (signed distance field) based rendering produces crisp anti-aliased microphone shapes at any size. No more dependency on external PNG files
+### Changed
+- **Microsoft Fluent UI microphone icons** - Replaced custom icons with official Fluent UI System Icons
+  - Filled mic for speaking (green)
+  - Outline mic for standby (theme-aware grey)
+  - Slashed mic for paused (red)
+  - 128x128 source PNGs rendered from SVGs for maximum detail
+- **Multi-size ICO** (16, 20, 24, 32, 48) for crisp display at any DPI
+- **Theme-aware standby icon** - Detects Windows taskbar theme via registry. Dark icon on light taskbar, light icon on dark taskbar
+
+## [1.8.2] - 2026-02-08 "Crisp Icons" (reverted)
 
 ## [1.8.1] - 2026-02-08 "Offline Fix"
 
