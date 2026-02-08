@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.17] - 2026-02-08 "Audio Buffer"
+
+### Fixed
+- **No more lost words on slow internet** - Audio chunks are now buffered while waiting for Deepgram WebSocket to connect. Previously, with ~2 second connection delays on slow internet, the beginning of every utterance was lost. Now the Deepgram client dials in a background goroutine while collecting audio, then flushes the entire buffer once connected. Zero impact on fast connections.
+
+---
+
 ## [1.8.16] - 2026-02-08 "Grey+Yellow Icon"
 
 ### Changed

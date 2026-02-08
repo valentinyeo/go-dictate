@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.16"
+	Version        = "1.8.17"
 	BuildDate      = "2026-02-08"
-	VersionName    = "Grey+Yellow Icon"
-	VersionSummary = "Light grey bubble + yellow sparkle stars app icon"
+	VersionName    = "Audio Buffer"
+	VersionSummary = "Buffer audio during Deepgram connection (no lost words)"
 )

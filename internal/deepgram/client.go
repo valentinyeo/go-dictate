@@ -50,7 +50,6 @@ func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 	}
 
 	if len(c.keywords) > 0 {
-		// URL encode keywords array
 		for _, kw := range c.keywords {
 			url += fmt.Sprintf("&keywords=%s", kw)
 		}
@@ -60,23 +59,62 @@ func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 	headers.Set("Authorization", fmt.Sprintf("Token %s", c.apiKey))
 
 	logger.Info("[Deepgram] Connecting to %s", url)
-	fmt.Printf("[Deepgram] Connecting to %s\n", url)
 
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-		NetDialContext: (&net.Dialer{
-			Timeout: 10 * time.Second,
-		}).DialContext,
+	// Dial in background so we can buffer audio while connecting
+	type dialResult struct {
+		conn *websocket.Conn
+		err  error
 	}
-	conn, _, err := dialer.Dial(url, headers)
-	if err != nil {
-		logger.Error("[Deepgram] Connection failed: %v", err)
-		return fmt.Errorf("failed to connect: %w", err)
+	dialCh := make(chan dialResult, 1)
+	go func() {
+		dialer := websocket.Dialer{
+			HandshakeTimeout: 10 * time.Second,
+			NetDialContext: (&net.Dialer{
+				Timeout: 10 * time.Second,
+			}).DialContext,
+		}
+		conn, _, err := dialer.Dial(url, headers)
+		dialCh <- dialResult{conn, err}
+	}()
+
+	// Buffer audio chunks while waiting for connection
+	var preBuffer [][]byte
+waitLoop:
+	for {
+		select {
+		case result := <-dialCh:
+			if result.err != nil {
+				logger.Error("[Deepgram] Connection failed: %v", result.err)
+				return fmt.Errorf("failed to connect: %w", result.err)
+			}
+			// Connection ready - break out to flush buffer and start streaming
+			dialCh <- result // put it back for reading below
+			break waitLoop
+		case chunk, ok := <-audioRx:
+			if !ok {
+				return nil
+			}
+			bytes := make([]byte, len(chunk)*2)
+			for i, s := range chunk {
+				binary.LittleEndian.PutUint16(bytes[i*2:], uint16(s))
+			}
+			preBuffer = append(preBuffer, bytes)
+		case <-ctx.Done():
+			return nil
+		}
 	}
+
+	conn := (<-dialCh).conn
 	defer conn.Close()
 
-	logger.Info("[Deepgram] Connected successfully")
-	fmt.Println("[Deepgram] Connected")
+	// Flush pre-buffered audio
+	logger.Info("[Deepgram] Connected successfully, flushing %d buffered chunks", len(preBuffer))
+	for _, b := range preBuffer {
+		if err := conn.WriteMessage(websocket.BinaryMessage, b); err != nil {
+			return fmt.Errorf("failed to send buffered audio: %w", err)
+		}
+	}
+	preBuffer = nil
 
 	// Channel for coordinating shutdown (use sync.Once to prevent double-close panic)
 	done := make(chan struct{})
@@ -105,7 +143,6 @@ func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 					return
 				}
 
-				// Convert i16 samples to little-endian bytes
 				bytes := make([]byte, len(audioChunk)*2)
 				for i, sample := range audioChunk {
 					binary.LittleEndian.PutUint16(bytes[i*2:], uint16(sample))
