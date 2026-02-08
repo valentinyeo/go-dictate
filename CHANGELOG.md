@@ -5,6 +5,12 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-02-08 "Offline Fix"
+
+### Fixed
+- **Vosk DLL download URL** - v0.3.50 release has no assets; switched to v0.3.45 which has the actual win64 zip
+- **Restart broken by single-instance mutex** - Old process held the mutex while new process tried to start, causing it to exit immediately. Now uses cmd.exe with a delay so old process exits first, releasing the mutex before the new instance launches.
+
 ## [1.8.0] - 2026-02-08 "Offline Mode"
 
 ### Added

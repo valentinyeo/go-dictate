@@ -56,7 +56,7 @@ var Models = map[string]ModelInfo{
 	},
 }
 
-const voskDLLURL = "https://github.com/alphacep/vosk-api/releases/download/v0.3.50/vosk-win64-0.3.50.zip"
+const voskDLLURL = "https://github.com/alphacep/vosk-api/releases/download/v0.3.45/vosk-win64-0.3.45.zip"
 
 // GetModelsDir returns the path to the models directory.
 func GetModelsDir() (string, error) {

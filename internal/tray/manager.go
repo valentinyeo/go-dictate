@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/getlantern/systray"
 	"github.com/valen/go-dictate/internal/config"
+	"github.com/valen/go-dictate/internal/logger"
 	"github.com/valen/go-dictate/internal/state"
 	"github.com/valen/go-dictate/internal/vosk"
 	"golang.org/x/sys/windows/registry"
@@ -78,10 +81,12 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.8.0")
+	systray.SetTooltip("Dictation App v1.8.1")
 
 	// Create menu items - clicking version opens changelog
-	m.versionItem = systray.AddMenuItem("v1.8.0 - Offline Mode", "Click to view changelog")
+	m.versionItem = systray.AddMenuItem("v1.8.1 - Offline Fix", "Click to view changelog")
+	summaryItem := systray.AddMenuItem("  Added local speech-to-text with Vosk (no internet needed)", "")
+	summaryItem.Disable()
 	systray.AddSeparator()
 
 	// STT mode selection
@@ -478,22 +483,18 @@ func restartApplication() error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	// Start new instance
-	proc := &os.ProcAttr{
-		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
-	}
-	_, err = os.StartProcess(exePath, []string{}, proc)
-	if err != nil {
-		return fmt.Errorf("failed to start new instance: %w", err)
+	// Use cmd.exe to wait 2 seconds then launch new instance.
+	// This ensures the current process exits and releases the single-instance
+	// mutex before the new process starts.
+	cmd := exec.Command("cmd", "/c", fmt.Sprintf(`ping 127.0.0.1 -n 3 >nul & start "" "%s"`, exePath))
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to schedule restart: %w", err)
 	}
 
-	// Exit current instance after a small delay to let the new one start
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		systray.Quit()
-		os.Exit(0)
-	}()
-
+	// Exit immediately so mutex is released
+	systray.Quit()
+	os.Exit(0)
 	return nil
 }
 
@@ -503,24 +504,29 @@ func (m *Manager) handleModeClicks() {
 		case <-m.ctx.Done():
 			return
 		case <-m.onlineItem.ClickedCh:
+			logger.Info("[Tray] User clicked Online (Deepgram)")
 			m.onlineItem.Check()
 			m.offlineItem.Uncheck()
 			m.configMu.Lock()
 			m.config.Offline.Enabled = false
 			if err := m.config.Save(); err != nil {
-				fmt.Printf("[Tray] Failed to save: %v\n", err)
+				logger.Error("[Tray] Failed to save config: %v", err)
 			}
 			m.configMu.Unlock()
-			fmt.Println("[Tray] Switched to Online (Deepgram)")
+			logger.Info("[Tray] Switched to Online (Deepgram)")
+			systray.SetTooltip("Dictation App v1.8.1 - Online (Deepgram)")
 			m.notifySettingsChanged()
 
 		case <-m.offlineItem.ClickedCh:
+			logger.Info("[Tray] User clicked Offline (Vosk)")
 			m.configMu.RLock()
 			lang := m.config.Deepgram.Language
 			isLarge := m.config.Offline.ModelSize == "large"
 			m.configMu.RUnlock()
 
 			modelKey := vosk.ModelKeyForLanguage(lang, isLarge)
+			logger.Info("[Tray] Offline model key: %s (DLL available: %v, model downloaded: %v)",
+				modelKey, vosk.IsAvailable(), vosk.IsModelDownloaded(modelKey))
 
 			if vosk.IsAvailable() && vosk.IsModelDownloaded(modelKey) {
 				m.offlineItem.Check()
@@ -529,9 +535,11 @@ func (m *Manager) handleModeClicks() {
 				m.config.Offline.Enabled = true
 				m.config.Save()
 				m.configMu.Unlock()
-				fmt.Println("[Tray] Switched to Offline (Vosk)")
+				logger.Info("[Tray] Switched to Offline (Vosk) - already ready")
+				systray.SetTooltip("Dictation App v1.8.1 - Offline (Vosk)")
 				m.notifySettingsChanged()
 			} else {
+				logger.Info("[Tray] Starting offline preparation (download DLL + model)...")
 				go m.prepareOffline(modelKey)
 			}
 		}
@@ -541,33 +549,44 @@ func (m *Manager) handleModeClicks() {
 func (m *Manager) prepareOffline(modelKey string) {
 	// Download DLL if needed
 	if !vosk.IsAvailable() {
+		logger.Info("[Offline] Downloading Vosk library...")
 		m.offlineItem.SetTitle("Offline (downloading library...)")
+		systray.SetTooltip("Downloading Vosk library...")
 		if err := vosk.EnsureVoskLibrary(func(downloaded, total int64) {
 			if total > 0 {
 				pct := float64(downloaded) / float64(total) * 100
-				m.offlineItem.SetTitle(fmt.Sprintf("Offline (library %.0f%%)", pct))
+				msg := fmt.Sprintf("Offline (library %.0f%%)", pct)
+				m.offlineItem.SetTitle(msg)
+				systray.SetTooltip(fmt.Sprintf("Downloading Vosk library... %.0f%%", pct))
 			}
 		}); err != nil {
-			m.offlineItem.SetTitle("Offline (Vosk)")
-			fmt.Printf("[Tray] Failed to download vosk library: %v\n", err)
+			logger.Error("[Offline] Failed to download vosk library: %v", err)
+			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
+			systray.SetTooltip("Dictation App v1.8.1")
 			return
 		}
+		logger.Info("[Offline] Vosk library downloaded successfully")
 	}
 
 	// Download model if needed
 	if !vosk.IsModelDownloaded(modelKey) {
 		info := vosk.Models[modelKey]
+		logger.Info("[Offline] Downloading model: %s (%s)...", info.Name, info.Size)
 		m.offlineItem.SetTitle(fmt.Sprintf("Offline (downloading %s...)", info.Name))
+		systray.SetTooltip(fmt.Sprintf("Downloading %s model...", info.Name))
 		if err := vosk.DownloadModel(modelKey, func(downloaded, total int64) {
 			if total > 0 {
 				pct := float64(downloaded) / float64(total) * 100
 				m.offlineItem.SetTitle(fmt.Sprintf("Offline (model %.0f%%)", pct))
+				systray.SetTooltip(fmt.Sprintf("Downloading %s... %.0f%%", info.Name, pct))
 			}
 		}); err != nil {
-			m.offlineItem.SetTitle("Offline (Vosk)")
-			fmt.Printf("[Tray] Failed to download model: %v\n", err)
+			logger.Error("[Offline] Failed to download model %s: %v", modelKey, err)
+			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
+			systray.SetTooltip("Dictation App v1.8.1")
 			return
 		}
+		logger.Info("[Offline] Model %s downloaded successfully", modelKey)
 	}
 
 	// All ready
@@ -576,9 +595,13 @@ func (m *Manager) prepareOffline(modelKey string) {
 	m.onlineItem.Uncheck()
 	m.configMu.Lock()
 	m.config.Offline.Enabled = true
+	if m.config.Offline.ModelSize == "" {
+		m.config.Offline.ModelSize = "small"
+	}
 	m.config.Save()
 	m.configMu.Unlock()
-	fmt.Println("[Tray] Offline mode ready!")
+	logger.Info("[Offline] Offline mode ready!")
+	systray.SetTooltip("Dictation App v1.8.1 - Offline (Vosk)")
 	m.notifySettingsChanged()
 }
 
