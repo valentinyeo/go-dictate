@@ -450,8 +450,10 @@ func vadAndSTTManager(
 				fmt.Println("[VAD] Silence detected")
 
 				// Restore Chrome/Edge volume
-				if err := ducker.Restore(); err != nil {
-					logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
+				if cfg.Audio.DuckEnabled {
+					if err := ducker.Restore(); err != nil {
+						logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
+					}
 				}
 
 				// Close STT connection
