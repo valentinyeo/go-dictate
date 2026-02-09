@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -294,9 +295,16 @@ func vadAndSTTManager(
 	logger.Info("[AppVolumeDucker] Initializing with duck volume: %.0f%%", cfg.Audio.DuckVolume*100)
 	ducker := audio.NewAppVolumeDucker(cfg.Audio.DuckVolume)
 
+	// Ghost speech detection: if VAD says "speaking" but Deepgram returns no
+	// actual text for this long, background noise is triggering the VAD.
+	// Force-close the STT connection so the icon goes back to standby.
+	const noTextTimeout = 15 * time.Second
+	var lastTextNano atomic.Int64 // tracks when real text was last received
+
 	var sttCtx context.Context
 	var sttCancel context.CancelFunc
 	var sttAudioTx chan []int16
+	var textBridge chan string // intermediary channel to track text timing
 	var voskEngine *vosk.Engine
 
 	defer func() {
@@ -333,6 +341,10 @@ func vadAndSTTManager(
 			if sttAudioTx != nil {
 				close(sttAudioTx)
 				sttAudioTx = nil
+			}
+			if textBridge != nil {
+				close(textBridge)
+				textBridge = nil
 			}
 			// Clear vosk engine so it reloads with new language/model
 			if voskEngine != nil {
@@ -389,6 +401,9 @@ func vadAndSTTManager(
 
 				stateManager.Set(state.Speaking)
 
+				// Reset ghost speech timer
+				lastTextNano.Store(time.Now().UnixNano())
+
 				// Choose STT engine
 				var engine stt.Engine
 				if cfg.Offline.Enabled {
@@ -425,17 +440,31 @@ func vadAndSTTManager(
 				sttAudioTx = make(chan []int16, 100)
 				sttCtx, sttCancel = context.WithCancel(ctx)
 
-				go func(e stt.Engine, eCtx context.Context, eAudioRx <-chan []int16) {
+				// Text bridge: forwards text to keyboard simulator while tracking
+				// the last time real text was received (for ghost speech detection)
+				textBridge = make(chan string, 10)
+				go func(bridge <-chan string) {
+					for text := range bridge {
+						lastTextNano.Store(time.Now().UnixNano())
+						select {
+						case textTx <- text:
+						case <-ctx.Done():
+							return
+						}
+					}
+				}(textBridge)
+
+				go func(e stt.Engine, eCtx context.Context, eAudioRx <-chan []int16, eTx chan<- string) {
 					defer func() {
 						if r := recover(); r != nil {
 							logger.Error("[STT] PANIC recovered: %v", r)
 							fmt.Printf("[STT] PANIC recovered: %v\n", r)
 						}
 					}()
-					if err := e.StartStreaming(eCtx, eAudioRx, textTx); err != nil {
+					if err := e.StartStreaming(eCtx, eAudioRx, eTx); err != nil {
 						fmt.Printf("[STT] Error: %v\n", err)
 					}
-				}(engine, sttCtx, sttAudioTx)
+				}(engine, sttCtx, sttAudioTx, textBridge)
 
 				// Flush pre-roll buffer (captures audio BEFORE VAD fired)
 				if len(preRoll) > 0 {
@@ -457,6 +486,33 @@ func vadAndSTTManager(
 
 			case audio.Speaking:
 				if sttAudioTx != nil {
+					// Ghost speech check: no real text for too long = background noise
+					lastText := time.Unix(0, lastTextNano.Load())
+					if time.Since(lastText) > noTextTimeout {
+						logger.Info("[VAD] Ghost speech detected - no text for %v, closing STT", noTextTimeout)
+						fmt.Println("[VAD] Ghost speech detected - background noise, closing connection")
+
+						if cfg.Audio.DuckEnabled {
+							if err := ducker.Restore(); err != nil {
+								logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
+							}
+						}
+						if sttCancel != nil {
+							sttCancel()
+							sttCancel = nil
+						}
+						close(sttAudioTx)
+						sttAudioTx = nil
+						if textBridge != nil {
+							close(textBridge)
+							textBridge = nil
+						}
+						vad.Reset()
+						preRoll = preRoll[:0]
+						stateManager.Set(state.AutoPaused)
+						continue
+					}
+
 					select {
 					case sttAudioTx <- audioChunk:
 					default:
@@ -482,6 +538,10 @@ func vadAndSTTManager(
 				if sttAudioTx != nil {
 					close(sttAudioTx)
 					sttAudioTx = nil
+				}
+				if textBridge != nil {
+					close(textBridge)
+					textBridge = nil
 				}
 
 				vad.Reset()

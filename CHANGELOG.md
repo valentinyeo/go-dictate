@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.21] - 2026-02-10 "Ghost Speech Fix"
+
+### Fixed
+- **Ghost speech detection** - When background audio (TV, music, podcasts) keeps the VAD triggered but Deepgram returns no actual text for 15 seconds, the STT connection is now force-closed and the icon returns to standby. Previously, background noise could keep the icon green and connection open indefinitely, occasionally typing stray words into the active window.
+
+---
+
 ## [1.8.20] - 2026-02-09 "Restart Fix"
 
 ### Fixed
