@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.20] - 2026-02-09 "Restart Fix"
+
+### Fixed
+- **Restart menu item works** - Fixed "Windows cannot find '\\'" error when clicking Restart in tray. Go's `exec.Command` was escaping quotes in the `cmd /c start` command, breaking the path. Now uses `CmdLine` directly to bypass argument escaping.
+
+---
+
 ## [1.8.19] - 2026-02-08 "Pre-Roll Buffer"
 
 ### Fixed
