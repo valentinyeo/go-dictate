@@ -393,10 +393,7 @@ func vadAndSTTManager(
 				close(sttAudioTx)
 				sttAudioTx = nil
 			}
-			if textBridge != nil {
-				close(textBridge)
-				textBridge = nil
-			}
+			textBridge = nil // don't close - bridge goroutine exits via sttCtx
 			// Clear vosk engine so it reloads with new language/model
 			if voskEngine != nil {
 				voskEngine.Close()
@@ -504,18 +501,29 @@ func vadAndSTTManager(
 				sttCtx, sttCancel = context.WithCancel(ctx)
 
 				// Text bridge: forwards text to keyboard simulator while tracking
-				// the last time real text was received (for ghost speech detection)
+				// the last time real text was received (for ghost speech detection).
+				// Uses sttCtx so it exits when the STT session ends. We never close
+				// textBridge directly to avoid "send on closed channel" panics -
+				// the channel is GC'd when both writer and reader goroutines exit.
 				textBridge = make(chan string, 10)
-				go func(bridge <-chan string) {
-					for text := range bridge {
-						lastTextNano.Store(time.Now().UnixNano())
+				go func(bridge <-chan string, bridgeCtx context.Context) {
+					for {
 						select {
-						case textTx <- text:
-						case <-ctx.Done():
+						case text, ok := <-bridge:
+							if !ok {
+								return
+							}
+							lastTextNano.Store(time.Now().UnixNano())
+							select {
+							case textTx <- text:
+							case <-bridgeCtx.Done():
+								return
+							}
+						case <-bridgeCtx.Done():
 							return
 						}
 					}
-				}(textBridge)
+				}(textBridge, sttCtx)
 
 				go func(e stt.Engine, eCtx context.Context, eAudioRx <-chan []int16, eTx chan<- string) {
 					defer func() {
@@ -567,10 +575,7 @@ func vadAndSTTManager(
 						}
 						close(sttAudioTx)
 						sttAudioTx = nil
-						if textBridge != nil {
-							close(textBridge)
-							textBridge = nil
-						}
+						textBridge = nil // don't close - bridge goroutine exits via sttCtx
 						vad.Reset()
 						preRoll = preRoll[:0]
 						stateManager.Set(state.AutoPaused)
@@ -603,10 +608,7 @@ func vadAndSTTManager(
 					close(sttAudioTx)
 					sttAudioTx = nil
 				}
-				if textBridge != nil {
-					close(textBridge)
-					textBridge = nil
-				}
+				textBridge = nil // don't close - bridge goroutine exits via sttCtx
 
 				vad.Reset()
 				preRoll = preRoll[:0] // Clear pre-roll for next utterance

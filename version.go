@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.23"
+	Version        = "1.8.24"
 	BuildDate      = "2026-02-10"
-	VersionName    = "Audio Watchdog"
-	VersionSummary = "Auto-restart audio capture after sleep/disconnect"
+	VersionName    = "Crash Fix"
+	VersionSummary = "Fix send-on-closed-channel panic that crashed the app"
 )

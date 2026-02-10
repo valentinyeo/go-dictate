@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.24] - 2026-02-10 "Crash Fix"
+
+### Fixed
+- **Fix crash from send-on-closed-channel** - The text bridge channel introduced in v1.8.21 was being closed while the Deepgram STT goroutine might still be writing to it. This caused a "send on closed channel" panic that silently killed the process (no console with `-H windowsgui`). Fixed by never closing the text bridge channel directly - instead, the bridge goroutine watches the STT context and exits naturally when cancelled. The channel is garbage collected when no goroutines reference it.
+
+---
+
 ## [1.8.23] - 2026-02-10 "Audio Watchdog"
 
 ### Fixed
