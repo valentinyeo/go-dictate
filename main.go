@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -125,7 +126,8 @@ func run() {
 		}
 	}
 
-	// Start audio capture
+	// Start audio capture (protected by mutex for watchdog + mic change access)
+	var audioMu sync.Mutex
 	fmt.Println("[Main] Starting audio capture...")
 	audioCapture, err := audio.NewCapture(audioChunks, selectedDevice)
 	if err != nil {
@@ -133,7 +135,7 @@ func run() {
 		time.Sleep(5 * time.Second)
 		os.Exit(1)
 	}
-	defer func() { audioCapture.Stop() }()
+	defer func() { audioMu.Lock(); audioCapture.Stop(); audioMu.Unlock() }()
 
 	// Start keyboard simulator
 	fmt.Println("[Main] Starting keyboard simulator...")
@@ -182,6 +184,7 @@ func run() {
 			}
 
 			// Restart audio capture with new device
+			audioMu.Lock()
 			audioCapture.Stop()
 			newCapture, err := audio.NewCapture(audioChunks, newDevice)
 			if err != nil {
@@ -192,11 +195,54 @@ func run() {
 				if err != nil {
 					logger.Error("[Main] Failed to restart with default mic: %v", err)
 					fmt.Printf("[Main] CRITICAL: Failed to restart audio capture: %v\n", err)
+					audioMu.Unlock()
 					continue
 				}
 			}
 			audioCapture = newCapture
+			audioMu.Unlock()
 			fmt.Printf("[Main] Microphone switched to: %s\n", displayName)
+		}
+	}()
+
+	// Audio watchdog: detect dead audio devices (e.g., after sleep/wake)
+	// and automatically restart capture.
+	go func() {
+		const watchdogInterval = 5 * time.Second
+		const watchdogTimeout = 10 * time.Second
+		ticker := time.NewTicker(watchdogInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				audioMu.Lock()
+				alive := audioCapture.IsAlive(watchdogTimeout)
+				if !alive {
+					logger.Info("[Watchdog] Audio device silent for >%v - restarting capture", watchdogTimeout)
+					fmt.Println("[Watchdog] Audio device died (sleep/disconnect?) - restarting...")
+					audioCapture.Stop()
+					time.Sleep(1 * time.Second)
+
+					newCapture, err := audio.NewCapture(audioChunks, selectedDevice)
+					if err != nil {
+						logger.Error("[Watchdog] Failed to restart with selected device: %v", err)
+						// Fall back to system default
+						newCapture, err = audio.NewCapture(audioChunks, nil)
+						if err != nil {
+							logger.Error("[Watchdog] Failed to restart with default device: %v", err)
+							audioMu.Unlock()
+							continue
+						}
+						logger.Info("[Watchdog] Fell back to system default mic")
+					}
+					audioCapture = newCapture
+					logger.Info("[Watchdog] Audio capture restarted successfully")
+					fmt.Println("[Watchdog] Audio capture restarted")
+				}
+				audioMu.Unlock()
+			}
 		}
 	}()
 

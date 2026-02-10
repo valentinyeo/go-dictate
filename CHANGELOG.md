@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.23] - 2026-02-10 "Audio Watchdog"
+
+### Fixed
+- **Audio watchdog** - Automatically detects when the audio capture device stops producing audio (e.g., after sleep/wake, USB disconnect) and restarts it within 10 seconds. Falls back to system default mic if the selected device fails. Previously, the app would freeze silently after sleep with no way to recover except manual restart.
+
+---
+
 ## [1.8.22] - 2026-02-10 "Ghost Cooldown"
 
 ### Fixed

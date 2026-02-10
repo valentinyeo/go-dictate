@@ -3,6 +3,8 @@ package audio
 import (
 	"fmt"
 	"runtime"
+	"sync/atomic"
+	"time"
 
 	"github.com/gen2brain/malgo"
 )
@@ -50,8 +52,9 @@ func ListCaptureDevices() ([]CaptureDevice, error) {
 }
 
 type Capture struct {
-	device *malgo.Device
-	ctx    *malgo.AllocatedContext
+	device           *malgo.Device
+	ctx              *malgo.AllocatedContext
+	lastCallbackNano atomic.Int64 // UnixNano timestamp of last audio callback
 }
 
 // NewCapture creates a new audio capture. Pass a *CaptureDevice to select a
@@ -78,10 +81,15 @@ func NewCapture(audioChunks chan<- []int16, selectedDevice *CaptureDevice) (*Cap
 	// Buffer size for ~100ms chunks (1600 samples at 16kHz)
 	deviceConfig.PeriodSizeInFrames = 1600
 
-	var device *malgo.Device
 	sizeInBytes := uint32(1600 * 2) // 1600 samples * 2 bytes per sample
 
+	// Create capture object first so callback can reference it
+	c := &Capture{ctx: ctx}
+	c.lastCallbackNano.Store(time.Now().UnixNano())
+
 	onRecvFrames := func(pOutputSample, pInputSamples []byte, framecount uint32) {
+		c.lastCallbackNano.Store(time.Now().UnixNano())
+
 		// Convert bytes to int16 samples
 		samples := make([]int16, framecount)
 		for i := uint32(0); i < framecount; i++ {
@@ -98,13 +106,14 @@ func NewCapture(audioChunks chan<- []int16, selectedDevice *CaptureDevice) (*Cap
 		}
 	}
 
-	device, err = malgo.InitDevice(ctx.Context, deviceConfig, malgo.DeviceCallbacks{
+	device, err := malgo.InitDevice(ctx.Context, deviceConfig, malgo.DeviceCallbacks{
 		Data: onRecvFrames,
 	})
 	if err != nil {
 		ctx.Free()
 		return nil, fmt.Errorf("failed to initialize audio device: %w", err)
 	}
+	c.device = device
 
 	// Device info
 	if selectedDevice != nil {
@@ -122,10 +131,16 @@ func NewCapture(audioChunks chan<- []int16, selectedDevice *CaptureDevice) (*Cap
 		return nil, fmt.Errorf("failed to start audio device: %w", err)
 	}
 
-	return &Capture{
-		device: device,
-		ctx:    ctx,
-	}, nil
+	return c, nil
+}
+
+// IsAlive returns true if the audio device callback has fired within the given timeout.
+func (c *Capture) IsAlive(timeout time.Duration) bool {
+	last := c.lastCallbackNano.Load()
+	if last == 0 {
+		return true // not started yet
+	}
+	return time.Since(time.Unix(0, last)) < timeout
 }
 
 func (c *Capture) Stop() {
