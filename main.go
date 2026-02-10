@@ -301,6 +301,11 @@ func vadAndSTTManager(
 	const noTextTimeout = 15 * time.Second
 	var lastTextNano atomic.Int64 // tracks when real text was last received
 
+	// After ghost speech is detected, suppress VAD for a cooldown period
+	// to prevent immediate re-triggering from the same background noise.
+	const ghostCooldown = 30 * time.Second
+	var ghostCooldownUntil time.Time
+
 	var sttCtx context.Context
 	var sttCancel context.CancelFunc
 	var sttAudioTx chan []int16
@@ -383,6 +388,18 @@ func vadAndSTTManager(
 
 			if mediaPlaying && currentState == state.Active {
 				// Visual indicator only
+			}
+
+			// Skip VAD during ghost speech cooldown
+			if time.Now().Before(ghostCooldownUntil) {
+				// Still collect pre-roll so first words aren't lost when cooldown ends
+				if len(preRoll) >= preRollSize {
+					copy(preRoll, preRoll[1:])
+					preRoll[len(preRoll)-1] = audioChunk
+				} else {
+					preRoll = append(preRoll, audioChunk)
+				}
+				continue
 			}
 
 			vadEvent := vad.Process(audioChunk)
@@ -489,8 +506,9 @@ func vadAndSTTManager(
 					// Ghost speech check: no real text for too long = background noise
 					lastText := time.Unix(0, lastTextNano.Load())
 					if time.Since(lastText) > noTextTimeout {
-						logger.Info("[VAD] Ghost speech detected - no text for %v, closing STT", noTextTimeout)
-						fmt.Println("[VAD] Ghost speech detected - background noise, closing connection")
+						ghostCooldownUntil = time.Now().Add(ghostCooldown)
+						logger.Info("[VAD] Ghost speech detected - no text for %v, closing STT (cooldown %v)", noTextTimeout, ghostCooldown)
+						fmt.Println("[VAD] Ghost speech detected - background noise, cooling down 30s")
 
 						if cfg.Audio.DuckEnabled {
 							if err := ducker.Restore(); err != nil {

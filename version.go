@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.21"
+	Version        = "1.8.22"
 	BuildDate      = "2026-02-10"
-	VersionName    = "Ghost Speech Fix"
-	VersionSummary = "Auto-close STT when background noise keeps icon green"
+	VersionName    = "Ghost Cooldown"
+	VersionSummary = "30s cooldown after ghost speech prevents re-trigger loop"
 )
