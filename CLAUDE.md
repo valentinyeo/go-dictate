@@ -30,7 +30,7 @@ There are no tests in this project. `-H windowsgui` hides the console window; om
 
 ## Version Tracking Workflow
 
-Current version: **1.8.4 "Chat Sparkle Icons"**
+Current version: **1.8.26 "Crash Logging"**
 
 1. Update `version.go` (Version, BuildDate, VersionName, VersionSummary)
 2. Update `CHANGELOG.md` with new version header and changes
@@ -47,7 +47,7 @@ The top of the right-click tray menu MUST always have:
 2. **Summary item** (below version): `"  One-line summary of what changed"` - disabled/greyed out, informational only
 3. **Separator** - then the rest of the menu
 
-The tooltip string `"Dictation App vX.X.X"` appears in 3 places in manager.go (onReady, handleModeClicks online, prepareOffline). Update all of them - use `replace_all` when editing.
+The tooltip string `"Dictation App vX.X.X"` appears in 6 places in manager.go (onReady, handleModeClicks online/offline/error/default, prepareOffline). Update all of them - use `replace_all` when editing.
 
 ## Architecture
 
@@ -62,8 +62,11 @@ main thread (systray.Run - blocks)
   |     +-- VAD processes each audio chunk (RMS energy)
   |     +-- SpeechStarted -> opens STT engine (Deepgram or Vosk)
   |     +-- SilenceDetected -> closes STT connection
-  |     +-- Media/meeting detection (Windows COM) -> auto-pause
+  |     +-- Ghost speech detection (15s no-text timeout + 30s cooldown)
+  |     +-- Media/meeting/recording detection -> auto-pause
   |     +-- Per-app volume ducking (Chrome/Edge/etc)
+  +-- Text Bridge goroutine (STT -> keyboard, tracks last-text time for ghost detection)
+  +-- Audio Watchdog (5s check, 10s timeout -> restart capture)
   +-- Keyboard Simulator <- transcriptText chan string (buf:10)
   +-- Hotkey listeners (Ctrl+Alt+X pause, Ctrl+Alt+L language)
   +-- Tray menu handlers (settings, mic switch, feature toggles, STT mode)
@@ -71,7 +74,7 @@ main thread (systray.Run - blocks)
 
 ### Key Packages
 
-- **internal/audio/**: WASAPI capture (`malgo`), VAD (RMS energy), media detection (IAudioSessionManager2 COM), meeting detection, volume ducking (IAudioEndpointVolume, ISimpleAudioVolume)
+- **internal/audio/**: WASAPI capture (`malgo`) with watchdog heartbeat, VAD (RMS energy), media detection (IAudioSessionManager2 COM), meeting detection, recording detection (process/window enumeration), volume ducking (IAudioEndpointVolume, ISimpleAudioVolume)
 - **internal/stt/**: `Engine` interface - abstraction for speech-to-text backends
 - **internal/deepgram/**: WebSocket streaming client with send/receive goroutines, JSON response types. Implements `stt.Engine`.
 - **internal/vosk/**: Offline speech-to-text via Vosk. DLL loaded at runtime via syscall (no CGO). Model download manager with progress reporting. Implements `stt.Engine`.
@@ -81,7 +84,7 @@ main thread (systray.Run - blocks)
   - `icons.go` - Loads 128x128 source PNGs from `icons/` folder, scales to multi-size ICO (16/20/24/32/48), tints by state, theme-aware standby color
   - `manager.go` - Menu construction, event handlers, online/offline toggle, model selection
 - **internal/config/**: TOML config at `%APPDATA%\dictation\config.toml`
-- **internal/logger/**: File logger at `%APPDATA%\dictation\debug.log`
+- **internal/logger/**: File logger at `%APPDATA%\dictation\debug.log`, crash log redirect (`crash.log`) for capturing panics in windowsgui builds
 
 ### Icons
 
@@ -104,11 +107,15 @@ All Windows COM API calls (media detection, meeting detection, ducking) MUST use
 
 Active (grey) -> Speaking (green, STT engine open) -> AutoPaused (grey, 3s silence) -> Active (speech detected)
 
-Side states: Paused (red, manual), MediaPaused (amber, meeting detected), MicConflict (red)
+Side states: Paused (red, manual), MediaPaused (amber, meeting/recording detected), MicConflict (red)
+
+Ghost speech: if Speaking for 15s with no text from STT, force-close connection and enter 30s cooldown (VAD suppressed). Prevents background noise (TV, podcasts) from keeping the app stuck in Speaking state.
 
 ### Connection Lifecycle
 
 STT connections open only when speech starts and close after silence. This minimizes Deepgram API cost (nova-3 at $0.36/hr). The `vadAndSTTManager` goroutine owns the connection lifecycle. When paused, the audio channel is set to nil in the select to achieve zero CPU usage.
+
+A `textBridge` channel sits between the STT engine and keyboard simulator. The bridge goroutine tracks the last-text timestamp for ghost speech detection. NEVER close `textBridge` directly (causes "send on closed channel" panics) - instead set it to nil and let the bridge goroutine exit via its context.
 
 ### Offline Mode (Vosk)
 
@@ -118,6 +125,22 @@ STT connections open only when speech starts and close after silence. This minim
 - Models stored at `%APPDATA%\dictation\models\`
 - DLL loaded at runtime via syscall - no CGO dependency for Vosk
 - App works without libvosk.dll (offline mode just won't be available)
+
+### Audio Watchdog
+
+The audio capture callback updates an atomic timestamp on every frame. A watchdog goroutine checks every 5s - if no audio for 10s (e.g. after sleep/wake, USB disconnect), it restarts the capture device. Falls back to system default mic if the selected device fails. Protected by `audioMu sync.Mutex`.
+
+### Recording Detection
+
+Auto-pauses dictation during screen recording. Uses Windows Toolhelp32 process snapshots and EnumWindows:
+- **screencast2-go/OBS**: Detects `ffmpeg.exe` process (only spawned during active recording)
+- **Loom**: Detects visible Loom windows (hides to tray when idle, shows recording UI when recording)
+- Results cached for 2s to avoid expensive syscalls
+- `syscall.NewCallback` created ONCE at init (Go has a global limit of ~2000) - never per-call
+
+### Crash Logging
+
+`logger.RedirectStderr()` redirects Windows stderr to `%APPDATA%\dictation\crash.log` via `SetStdHandle`. Since `-H windowsgui` has no console, panics would otherwise vanish silently.
 
 ### Single Instance
 
