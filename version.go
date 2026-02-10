@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.24"
+	Version        = "1.8.25"
 	BuildDate      = "2026-02-10"
-	VersionName    = "Crash Fix"
-	VersionSummary = "Fix send-on-closed-channel panic that crashed the app"
+	VersionName    = "Recording Pause"
+	VersionSummary = "Auto-pause during screen recording (screencast2-go, Loom)"
 )

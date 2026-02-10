@@ -5,6 +5,16 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.25] - 2026-02-10 "Recording Pause"
+
+### Added
+- **Auto-pause during screen recording** - Dictation now auto-pauses when screen recording is detected and resumes when recording stops. Detection methods:
+  - **screencast2-go**: Detects `ffmpeg.exe` process (only spawned during active recording)
+  - **Loom**: Detects visible Loom windows (Loom hides to tray when not recording, shows recording controls when recording)
+  - Also covers OBS and any tool that spawns ffmpeg for recording
+
+---
+
 ## [1.8.24] - 2026-02-10 "Crash Fix"
 
 ### Fixed
