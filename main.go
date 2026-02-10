@@ -69,6 +69,9 @@ func run() {
 
 	fmt.Printf("=== Dictation App v%s (%s) ===\n", Version, VersionName)
 
+	// Redirect stderr to crash.log so panics are captured (no console with -H windowsgui)
+	logger.RedirectStderr()
+
 	// Initialize logger
 	if err := logger.Init(); err != nil {
 		fmt.Printf("[Logger] Warning: Failed to initialize logger: %v\n", err)

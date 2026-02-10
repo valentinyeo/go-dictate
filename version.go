@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.25"
+	Version        = "1.8.26"
 	BuildDate      = "2026-02-10"
-	VersionName    = "Recording Pause"
-	VersionSummary = "Auto-pause during screen recording (screencast2-go, Loom)"
+	VersionName    = "Crash Logging"
+	VersionSummary = "Crash log capture + fix callback leak in recording detector"
 )

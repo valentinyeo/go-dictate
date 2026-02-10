@@ -5,6 +5,14 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.26] - 2026-02-10 "Crash Logging"
+
+### Fixed
+- **Fix `syscall.NewCallback` resource leak** - The recording detector was creating a new Windows callback on every call to `IsRecordingActive()`. Go has a global limit of ~2000 callbacks, so after enough checks the app would crash. Fixed by creating the callback once at init time and reusing it via shared state protected by the existing mutex.
+- **Crash log capture** - Panics in `-H windowsgui` builds vanish silently since there's no console. Added `RedirectStderr()` which redirects the Windows stderr handle to `%APPDATA%\dictation\crash.log`, capturing panic stack traces for diagnosis.
+
+---
+
 ## [1.8.25] - 2026-02-10 "Recording Pause"
 
 ### Added

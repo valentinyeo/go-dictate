@@ -1,7 +1,7 @@
 package audio
 
 import (
-	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,11 +19,11 @@ var (
 )
 
 var (
-	kernel32Snap    = syscall.NewLazyDLL("kernel32.dll")
-	procCreateSnap  = kernel32Snap.NewProc("CreateToolhelp32Snapshot")
-	procProcess32   = kernel32Snap.NewProc("Process32FirstW")
-	procProcess32N  = kernel32Snap.NewProc("Process32NextW")
-	procCloseSnap   = kernel32Snap.NewProc("CloseHandle")
+	kernel32Snap   = syscall.NewLazyDLL("kernel32.dll")
+	procCreateSnap = kernel32Snap.NewProc("CreateToolhelp32Snapshot")
+	procProcess32  = kernel32Snap.NewProc("Process32FirstW")
+	procProcess32N = kernel32Snap.NewProc("Process32NextW")
+	procCloseSnap  = kernel32Snap.NewProc("CloseHandle")
 
 	user32DLL           = syscall.NewLazyDLL("user32.dll")
 	procEnumWindows     = user32DLL.NewProc("EnumWindows")
@@ -59,9 +59,29 @@ var recordingWindowApps = []string{
 	"loom.exe",
 }
 
+// Shared state for the EnumWindows callback (protected by recordingCache.Mutex)
+var enumState struct {
+	pids  map[uint32]bool
+	found bool
+}
+
+// Create the callback ONCE at init (Go has a global limit of ~2000 callbacks)
+var enumWindowsCallback = syscall.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
+	visible, _, _ := procIsWindowVisible.Call(hwnd)
+	if visible == 0 {
+		return 1 // continue
+	}
+
+	var pid uint32
+	procGetWindowTID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
+	if enumState.pids[pid] {
+		enumState.found = true
+		return 0 // stop enumeration
+	}
+	return 1 // continue
+})
+
 // IsRecordingActive detects if a screen recording is in progress.
-// Checks for recording indicator processes (ffmpeg) and visible windows
-// from recording apps that normally hide to the system tray (Loom).
 func IsRecordingActive() bool {
 	recordingCache.Lock()
 	defer recordingCache.Unlock()
@@ -77,7 +97,6 @@ func IsRecordingActive() bool {
 }
 
 func checkRecording() bool {
-	// Build a snapshot of all processes
 	snap, _, _ := procCreateSnap.Call(TH32CS_SNAPPROCESS, 0)
 	if snap == uintptr(syscall.InvalidHandle) {
 		return false
@@ -87,22 +106,18 @@ func checkRecording() bool {
 	var entry processEntry32W
 	entry.dwSize = uint32(unsafe.Sizeof(entry))
 
-	// Map of process names -> PIDs (for window checks later)
 	windowAppPIDs := make(map[uint32]bool)
 
 	ret, _, _ := procProcess32.Call(snap, uintptr(unsafe.Pointer(&entry)))
 	for ret != 0 {
 		name := strings.ToLower(syscall.UTF16ToString(entry.szExeFile[:]))
 
-		// Check if this is a recording indicator process
 		for _, rp := range recordingProcesses {
 			if name == rp {
-				fmt.Printf("[RecordingDetector] Recording detected: %s (PID %d)\n", name, entry.th32ProcessID)
 				return true
 			}
 		}
 
-		// Collect PIDs for window-based apps
 		for _, wa := range recordingWindowApps {
 			if name == wa {
 				windowAppPIDs[entry.th32ProcessID] = true
@@ -113,44 +128,27 @@ func checkRecording() bool {
 		ret, _, _ = procProcess32N.Call(snap, uintptr(unsafe.Pointer(&entry)))
 	}
 
-	// Check if any window-based recording apps have visible windows
 	if len(windowAppPIDs) > 0 {
-		if hasVisibleWindowFromPIDs(windowAppPIDs) {
-			return true
-		}
+		return hasVisibleWindowFromPIDs(windowAppPIDs)
 	}
 
 	return false
 }
 
 // hasVisibleWindowFromPIDs checks if any visible top-level window belongs to the given PIDs.
+// Uses the pre-allocated enumWindowsCallback (no resource leak).
+// Must be called under recordingCache.Mutex.
 func hasVisibleWindowFromPIDs(pids map[uint32]bool) bool {
-	type callbackData struct {
-		pids  map[uint32]bool
-		found bool
-	}
-	data := &callbackData{pids: pids}
+	enumState.pids = pids
+	enumState.found = false
 
-	cb := syscall.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
-		d := (*callbackData)(unsafe.Pointer(lParam))
+	procEnumWindows.Call(enumWindowsCallback, 0)
 
-		// Check if window is visible
-		visible, _, _ := procIsWindowVisible.Call(hwnd)
-		if visible == 0 {
-			return 1 // continue
-		}
+	result := enumState.found
 
-		// Get the process ID owning this window
-		var pid uint32
-		procGetWindowTID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-		if d.pids[pid] {
-			fmt.Printf("[RecordingDetector] Loom recording detected (visible window, PID %d)\n", pid)
-			d.found = true
-			return 0 // stop enumeration
-		}
-		return 1 // continue
-	})
+	// Keep pids alive until after EnumWindows returns
+	runtime.KeepAlive(pids)
 
-	procEnumWindows.Call(cb, uintptr(unsafe.Pointer(data)))
-	return data.found
+	enumState.pids = nil
+	return result
 }
