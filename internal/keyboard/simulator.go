@@ -11,8 +11,9 @@ import (
 )
 
 const (
-	inputKeyboard = 1
+	inputKeyboard    = 1
 	keyeventfUnicode = 0x0004
+	keyeventfKeyUp   = 0x0002
 )
 
 type keyboardInput struct {
@@ -81,21 +82,31 @@ func (s *Simulator) typeText(text string) {
 }
 
 func (s *Simulator) sendUnicodeChar(ch rune) {
-	inp := input{
-		inputType: inputKeyboard,
-		ki: keyboardInput{
-			wVk:     0,
-			wScan:   uint16(ch),
-			dwFlags: keyeventfUnicode,
-			time:    0,
-			dwExtraInfo: 0,
+	// Send both key-down and key-up in a single atomic SendInput call.
+	// Without the key-up event, consecutive identical characters (e.g. "rr", "ll")
+	// get coalesced by the target application because it never sees a release
+	// between the two presses.
+	inputs := [2]input{
+		{
+			inputType: inputKeyboard,
+			ki: keyboardInput{
+				wScan:   uint16(ch),
+				dwFlags: keyeventfUnicode,
+			},
+		},
+		{
+			inputType: inputKeyboard,
+			ki: keyboardInput{
+				wScan:   uint16(ch),
+				dwFlags: keyeventfUnicode | keyeventfKeyUp,
+			},
 		},
 	}
 
 	ret, _, err := sendInputProc.Call(
-		uintptr(1),
-		uintptr(unsafe.Pointer(&inp)),
-		uintptr(unsafe.Sizeof(inp)),
+		uintptr(2),
+		uintptr(unsafe.Pointer(&inputs[0])),
+		uintptr(unsafe.Sizeof(inputs[0])),
 	)
 
 	if ret == 0 {

@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.29] - 2026-02-11 "Double Letter Fix"
+
+### Fixed
+- **Fix dropped duplicate letters** - Words like "tomorrow", "really", "essentially" were being typed as "tomorow", "realy", "esentialy". The keyboard simulator was only sending key-down events via `SendInput` but never key-up events. When two identical characters came back-to-back, the target application saw a held key rather than two distinct presses, so the second character was swallowed. Now sends both DOWN and UP events in a single atomic `SendInput` call for each character.
+
+---
+
 ## [1.8.28] - 2026-02-11 "Idle CPU Fix"
 
 ### Fixed
