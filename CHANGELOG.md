@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.27] - 2026-02-11 "WebSocket Fix"
+
+### Fixed
+- **Fix concurrent websocket write panic** - The Deepgram client had two goroutines writing to the same websocket connection: the audio sender and the context-cancel closer. gorilla/websocket does not allow concurrent writes, causing `panic: concurrent write to websocket connection`. Added a write mutex to serialize all websocket writes. This was the crash caught by the new crash.log from v1.8.26.
+
+---
+
 ## [1.8.26] - 2026-02-10 "Crash Logging"
 
 ### Fixed

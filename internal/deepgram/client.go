@@ -118,12 +118,17 @@ waitLoop:
 	var doneOnce sync.Once
 	closeDone := func() { doneOnce.Do(func() { close(done) }) }
 
+	// Mutex to protect websocket writes (gorilla/websocket does NOT allow concurrent writes)
+	var wsMu sync.Mutex
+
 	// Close websocket when context cancels to unblock ReadMessage
 	go func() {
 		select {
 		case <-ctx.Done():
+			wsMu.Lock()
 			conn.WriteMessage(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			wsMu.Unlock()
 			conn.Close()
 		case <-done:
 		}
@@ -145,8 +150,11 @@ waitLoop:
 					binary.LittleEndian.PutUint16(bytes[i*2:], uint16(sample))
 				}
 
-				if err := conn.WriteMessage(websocket.BinaryMessage, bytes); err != nil {
-					fmt.Printf("[Deepgram] Send error: %v\n", err)
+				wsMu.Lock()
+				err := conn.WriteMessage(websocket.BinaryMessage, bytes)
+				wsMu.Unlock()
+				if err != nil {
+					logger.Debug("[Deepgram] Send error: %v", err)
 					return
 				}
 			}
