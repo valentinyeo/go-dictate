@@ -16,7 +16,7 @@ var (
 		isInMeeting bool
 		lastCheck   time.Time
 	}
-	meetingCacheDuration = 1000 * time.Millisecond // Check every 1 second (less frequent than media)
+	meetingCacheDuration = 3 * time.Second // Check every 3 seconds
 
 	// Cached kernel32 procs for getProcessName (avoid creating on every call)
 	kernel32DLL                  = syscall.NewLazyDLL("kernel32.dll")

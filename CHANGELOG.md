@@ -5,6 +5,15 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.28] - 2026-02-11 "Idle CPU Fix"
+
+### Fixed
+- **Icon update polling replaced with event-driven** - The tray icon was polling every 100ms (10x/sec) just to check if the state changed. Replaced with event-driven updates via `stateManager.Changed()` channel - now zero CPU when idle. Language menu polling also removed since `handleLanguageClick()` already updates the menu directly.
+- **Media detection cache 5ms -> 3s** - `IsMediaPlaying()` had a 5ms cache, meaning full COM enumeration of all audio sessions happened ~200x/sec. Media playback state doesn't change on a millisecond timescale. Increased to 3 seconds.
+- **Meeting detection cache 1s -> 3s** - `IsMeetingActive()` was doing COM + process enumeration every second. Meeting state changes slowly. Increased to 3 seconds.
+
+---
+
 ## [1.8.27] - 2026-02-11 "WebSocket Fix"
 
 ### Fixed
