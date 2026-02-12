@@ -10,10 +10,18 @@ import (
 
 var (
 	user32DLL            = syscall.NewLazyDLL("user32.dll")
+	kernel32Click        = syscall.NewLazyDLL("kernel32.dll")
 	procSetWindowLongPtr = user32DLL.NewProc("SetWindowLongPtrW")
 	procCallWindowProc   = user32DLL.NewProc("CallWindowProcW")
 	procFindWindow       = user32DLL.NewProc("FindWindowW")
 	procPostMessage      = user32DLL.NewProc("PostMessageW")
+
+	// For forcing foreground window when another app has focus
+	procGetForegroundWindow      = user32DLL.NewProc("GetForegroundWindow")
+	procGetWindowThreadProcessId = user32DLL.NewProc("GetWindowThreadProcessId")
+	procAttachThreadInput        = user32DLL.NewProc("AttachThreadInput")
+	procSetForegroundWindow      = user32DLL.NewProc("SetForegroundWindow")
+	procGetCurrentThreadId       = kernel32Click.NewProc("GetCurrentThreadId")
 )
 
 const (
@@ -29,6 +37,7 @@ var gwlpWndProc = ^uintptr(3)
 var (
 	originalWndProc uintptr
 	clickManager    *Manager
+	systrayHwnd     uintptr
 
 	// Create callback ONCE at init - syscall.NewCallback has a global ~2000 limit.
 	subclassedWndProc = syscall.NewCallback(trayWndProc)
@@ -36,12 +45,7 @@ var (
 
 // EnableLeftClick subclasses the systray hidden window to:
 //   - Toggle pause on left-click (instead of showing the menu)
-//   - Fix right-click menu reliability (PostMessage WM_NULL after TrackPopupMenu)
-//
-// The getlantern/systray library is missing the PostMessage(WM_NULL) call after
-// TrackPopupMenu, which is required by Microsoft KB Q135788. Without it, the
-// popup menu fails to appear on subsequent right-clicks because Windows doesn't
-// properly release the foreground lock.
+//   - Fix right-click menu reliability (PostMessage WM_NULL + AttachThreadInput)
 func (m *Manager) EnableLeftClick() {
 	clickManager = m
 
@@ -51,6 +55,7 @@ func (m *Manager) EnableLeftClick() {
 		fmt.Println("[Tray] WARNING: Could not find systray window for click handler")
 		return
 	}
+	systrayHwnd = hwnd
 
 	oldProc, _, _ := procSetWindowLongPtr.Call(
 		hwnd,
@@ -63,6 +68,28 @@ func (m *Manager) EnableLeftClick() {
 	}
 	originalWndProc = oldProc
 	fmt.Println("[Tray] Click handler installed (left-click=toggle, right-click menu fix)")
+}
+
+// forceforeground temporarily attaches our thread's input queue to the
+// foreground window's thread, making SetForegroundWindow work even when
+// another app (like Teams, Chrome) has focus. This is the standard Windows
+// workaround for the foreground lock.
+func forceForeground() {
+	fgHwnd, _, _ := procGetForegroundWindow.Call()
+	if fgHwnd == 0 || fgHwnd == systrayHwnd {
+		return // Already foreground or no foreground window
+	}
+
+	fgTID, _, _ := procGetWindowThreadProcessId.Call(fgHwnd, 0)
+	ourTID, _, _ := procGetCurrentThreadId.Call()
+	if fgTID == ourTID || fgTID == 0 {
+		return
+	}
+
+	// Attach to foreground thread's input queue so SetForegroundWindow works
+	procAttachThreadInput.Call(ourTID, fgTID, 1) // TRUE = attach
+	procSetForegroundWindow.Call(systrayHwnd)
+	procAttachThreadInput.Call(ourTID, fgTID, 0) // FALSE = detach
 }
 
 // trayWndProc is our subclassed window procedure that intercepts tray icon messages.
@@ -85,11 +112,15 @@ func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			return 0
 
 		case wmRButtonUp:
-			// Right-click: let the original handler call TrackPopupMenu (blocking),
-			// then post WM_NULL to fix the foreground-lock bug (KB Q135788).
+			// Force our window to foreground before the library calls TrackPopupMenu.
+			// Without this, the menu silently fails when Teams/Chrome has focus.
+			forceForeground()
+
+			// Let the original handler call TrackPopupMenu (blocking).
 			ret, _, _ := procCallWindowProc.Call(
 				originalWndProc, hwnd, uintptr(msg), wParam, lParam,
 			)
+			// Fix: KB Q135788 - PostMessage WM_NULL ensures menu dismisses properly.
 			procPostMessage.Call(hwnd, wmNull, 0, 0)
 			return ret
 		}

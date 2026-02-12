@@ -5,6 +5,21 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.33] - 2026-02-12 "Registry Mic Detection"
+
+### Fixed
+- **Detect meetings via Windows mic privacy registry** - Previous approaches (WASAPI capture sessions, process names, window titles) all failed for Google Meet in Edge because: Chrome/Edge mic sessions don't appear in WASAPI, the Meet tab might not be the active tab (so window title doesn't match), and process name matching is fragile. New approach reads `HKCU\...\CapabilityAccessManager\ConsentStore\microphone\NonPackaged` where Windows tracks per-exe mic usage with start/stop timestamps. If `LastUsedTimeStop == 0`, the app is actively using the mic. Works for ALL meeting apps in ALL browsers regardless of tab focus.
+
+---
+
+## [1.8.32] - 2026-02-12 "Meeting + Menu Fix"
+
+### Fixed
+- **Detect Google Meet (and browser meetings) by window title** - WASAPI capture sessions don't expose Chrome/Edge mic usage. Added window title scanning as fallback: detects "Meet - " (Google Meet in-call), "Zoom Meeting", "| Microsoft Teams" in any visible window. Combined with mic capture check for native apps.
+- **Force tray menu foreground with AttachThreadInput** - Right-click menu was blocked when Chrome/Teams had focus because `SetForegroundWindow` silently fails for background processes. Now temporarily attaches to the foreground app's input queue before showing the menu, which is the standard Windows workaround.
+
+---
+
 ## [1.8.31] - 2026-02-12 "Meeting Detection Fix"
 
 ### Fixed
