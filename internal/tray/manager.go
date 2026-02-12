@@ -81,11 +81,11 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.8.29")
+	systray.SetTooltip("Dictation App v1.8.30")
 
 	// Create menu items - clicking version opens changelog
-	m.versionItem = systray.AddMenuItem("v1.8.29 - Double Letter Fix", "Click to view changelog")
-	summaryItem := systray.AddMenuItem("  Fix dropped duplicate letters (tomorrow->tomorow, really->realy)", "")
+	m.versionItem = systray.AddMenuItem("v1.8.30 - Tray Menu Fix", "Click to view changelog")
+	summaryItem := systray.AddMenuItem("  Fix right-click menu not appearing + left-click to toggle pause", "")
 	summaryItem.Disable()
 	systray.AddSeparator()
 
@@ -157,6 +157,9 @@ func (m *Manager) onReady() {
 	go m.handleRestartClick()
 	go m.handleExitClick()
 	go m.handleIconUpdates()
+
+	// Subclass systray window for left-click toggle + right-click menu fix
+	m.EnableLeftClick()
 }
 
 func (m *Manager) onExit() {
@@ -523,7 +526,7 @@ func (m *Manager) handleModeClicks() {
 			}
 			m.configMu.Unlock()
 			logger.Info("[Tray] Switched to Online (Deepgram)")
-			systray.SetTooltip("Dictation App v1.8.29 - Online (Deepgram)")
+			systray.SetTooltip("Dictation App v1.8.30 - Online (Deepgram)")
 			m.notifySettingsChanged()
 
 		case <-m.offlineItem.ClickedCh:
@@ -545,7 +548,7 @@ func (m *Manager) handleModeClicks() {
 				m.config.Save()
 				m.configMu.Unlock()
 				logger.Info("[Tray] Switched to Offline (Vosk) - already ready")
-				systray.SetTooltip("Dictation App v1.8.29 - Offline (Vosk)")
+				systray.SetTooltip("Dictation App v1.8.30 - Offline (Vosk)")
 				m.notifySettingsChanged()
 			} else {
 				logger.Info("[Tray] Starting offline preparation (download DLL + model)...")
@@ -571,7 +574,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 		}); err != nil {
 			logger.Error("[Offline] Failed to download vosk library: %v", err)
 			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.29")
+			systray.SetTooltip("Dictation App v1.8.30")
 			return
 		}
 		logger.Info("[Offline] Vosk library downloaded successfully")
@@ -592,7 +595,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 		}); err != nil {
 			logger.Error("[Offline] Failed to download model %s: %v", modelKey, err)
 			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.29")
+			systray.SetTooltip("Dictation App v1.8.30")
 			return
 		}
 		logger.Info("[Offline] Model %s downloaded successfully", modelKey)
@@ -610,7 +613,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 	m.config.Save()
 	m.configMu.Unlock()
 	logger.Info("[Offline] Offline mode ready!")
-	systray.SetTooltip("Dictation App v1.8.29 - Offline (Vosk)")
+	systray.SetTooltip("Dictation App v1.8.30 - Offline (Vosk)")
 	m.notifySettingsChanged()
 }
 

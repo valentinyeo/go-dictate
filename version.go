@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.29"
-	BuildDate      = "2026-02-11"
-	VersionName    = "Double Letter Fix"
-	VersionSummary = "Fix dropped duplicate letters (tomorrow->tomorow, really->realy)"
+	Version        = "1.8.30"
+	BuildDate      = "2026-02-12"
+	VersionName    = "Tray Menu Fix"
+	VersionSummary = "Fix right-click menu not appearing + left-click to toggle pause"
 )

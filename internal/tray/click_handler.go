@@ -9,68 +9,95 @@ import (
 )
 
 var (
-	user32DLL              = syscall.NewLazyDLL("user32.dll")
-	procSetWindowLongPtr   = user32DLL.NewProc("SetWindowLongPtrW")
-	procCallWindowProc     = user32DLL.NewProc("CallWindowProcW")
-	procFindWindow         = user32DLL.NewProc("FindWindowW")
-	procGetCursorPos       = user32DLL.NewProc("GetCursorPos")
+	user32DLL            = syscall.NewLazyDLL("user32.dll")
+	procSetWindowLongPtr = user32DLL.NewProc("SetWindowLongPtrW")
+	procCallWindowProc   = user32DLL.NewProc("CallWindowProcW")
+	procFindWindow       = user32DLL.NewProc("FindWindowW")
+	procPostMessage      = user32DLL.NewProc("PostMessageW")
 )
 
 const (
-	WM_LBUTTONUP = 0x0202
-	GWLP_WNDPROC = -4
+	wmNull      = 0x0000
+	wmLButtonUp = 0x0202
+	wmRButtonUp = 0x0205
+	wmUser      = 0x0400
 )
 
-type POINT struct {
-	X, Y int32
-}
+// GWLP_WNDPROC = -4, expressed as uintptr (two's complement)
+var gwlpWndProc = ^uintptr(3)
 
 var (
 	originalWndProc uintptr
-	globalManager   *Manager
+	clickManager    *Manager
+
+	// Create callback ONCE at init - syscall.NewCallback has a global ~2000 limit.
+	subclassedWndProc = syscall.NewCallback(trayWndProc)
 )
 
-// EnableLeftClick sets up a window procedure hook to capture left-clicks on the tray icon
+// EnableLeftClick subclasses the systray hidden window to:
+//   - Toggle pause on left-click (instead of showing the menu)
+//   - Fix right-click menu reliability (PostMessage WM_NULL after TrackPopupMenu)
+//
+// The getlantern/systray library is missing the PostMessage(WM_NULL) call after
+// TrackPopupMenu, which is required by Microsoft KB Q135788. Without it, the
+// popup menu fails to appear on subsequent right-clicks because Windows doesn't
+// properly release the foreground lock.
 func (m *Manager) EnableLeftClick() {
-	globalManager = m
+	clickManager = m
 
-	// The systray library creates a hidden window for message processing
-	// We need to find it and hook into its window procedure
-	fmt.Println("[Tray] Setting up left-click handler...")
+	className, _ := syscall.UTF16PtrFromString("SystrayClass")
+	hwnd, _, _ := procFindWindow.Call(uintptr(unsafe.Pointer(className)), 0)
+	if hwnd == 0 {
+		fmt.Println("[Tray] WARNING: Could not find systray window for click handler")
+		return
+	}
 
-	// Note: This is a best-effort approach. The systray library doesn't officially
-	// support left-click handlers, so we can't reliably hook into it without
-	// modifying the library itself.
-
-	// For now, we'll rely on the hotkey (Ctrl+Alt+X) as the primary pause method
+	oldProc, _, _ := procSetWindowLongPtr.Call(
+		hwnd,
+		uintptr(gwlpWndProc),
+		subclassedWndProc,
+	)
+	if oldProc == 0 {
+		fmt.Println("[Tray] WARNING: Failed to install click handler")
+		return
+	}
+	originalWndProc = oldProc
+	fmt.Println("[Tray] Click handler installed (left-click=toggle, right-click menu fix)")
 }
 
-// newWndProc is our custom window procedure that intercepts messages
-func newWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
-	if msg == WM_LBUTTONUP && globalManager != nil {
-		// Check if click is in tray area (approximate)
-		var pt POINT
-		procGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+// trayWndProc is our subclassed window procedure that intercepts tray icon messages.
+func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
+	const wmSystrayMessage = wmUser + 1
 
-		// Toggle pause when clicking in tray area
-		fmt.Println("[Tray] Left-click detected, toggling pause")
-		newState := globalManager.stateManager.TogglePause()
-		globalManager.updateIcon(newState)
+	if msg == wmSystrayMessage {
+		switch lParam {
+		case wmLButtonUp:
+			// Left-click: toggle pause instead of showing the context menu.
+			if clickManager != nil {
+				newState := clickManager.stateManager.TogglePause()
+				clickManager.updateIcon(newState)
+				if newState == state.Paused {
+					clickManager.pauseItem.SetTitle("Resume")
+				} else {
+					clickManager.pauseItem.SetTitle("Pause")
+				}
+			}
+			return 0
 
-		if newState == state.Paused {
-			globalManager.pauseItem.SetTitle("Resume")
-		} else {
-			globalManager.pauseItem.SetTitle("Pause")
+		case wmRButtonUp:
+			// Right-click: let the original handler call TrackPopupMenu (blocking),
+			// then post WM_NULL to fix the foreground-lock bug (KB Q135788).
+			ret, _, _ := procCallWindowProc.Call(
+				originalWndProc, hwnd, uintptr(msg), wParam, lParam,
+			)
+			procPostMessage.Call(hwnd, wmNull, 0, 0)
+			return ret
 		}
 	}
 
-	// Call original window procedure
+	// Everything else: pass through to the original wndProc.
 	ret, _, _ := procCallWindowProc.Call(
-		originalWndProc,
-		hwnd,
-		uintptr(msg),
-		wParam,
-		lParam,
+		originalWndProc, hwnd, uintptr(msg), wParam, lParam,
 	)
 	return ret
 }

@@ -5,6 +5,14 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.30] - 2026-02-12 "Tray Menu Fix"
+
+### Fixed
+- **Fix right-click menu not appearing** - The `getlantern/systray` library is missing the required `PostMessage(WM_NULL)` call after `TrackPopupMenu` (Microsoft KB Q135788). Without it, Windows doesn't release the foreground lock, causing the context menu to silently fail on subsequent right-clicks — especially when another app like Teams has focus. Fixed by subclassing the systray hidden window and adding the PostMessage fix.
+- **Left-click tray icon now toggles pause** - Previously both left and right clicks showed the context menu (library default). Now left-click toggles pause/resume for quick one-click control without opening the menu.
+
+---
+
 ## [1.8.29] - 2026-02-11 "Double Letter Fix"
 
 ### Fixed
