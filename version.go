@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.30"
+	Version        = "1.8.31"
 	BuildDate      = "2026-02-12"
-	VersionName    = "Tray Menu Fix"
-	VersionSummary = "Fix right-click menu not appearing + left-click to toggle pause"
+	VersionName    = "Meeting Detection Fix"
+	VersionSummary = "Detect meetings by mic usage instead of process names"
 )

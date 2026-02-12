@@ -51,6 +51,7 @@ var (
 const (
 	CLSCTX_INPROC_SERVER = 0x1
 	eRender              = 0 // Audio rendering (speakers)
+	eCapture             = 1 // Audio capture (microphone)
 	eConsole             = 0 // Console audio device
 	AudioSessionStateActive = 1 // Active audio session
 )
