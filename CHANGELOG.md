@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.34] - 2026-02-12 "Fix Open File Actions"
+
+### Fixed
+- **Fix Open Debug Log, Changelog, and Dashboard menu items** - These tray menu actions silently failed in `-H windowsgui` builds because `os.StartProcess` was called with `os.Stdin/Stdout/Stderr` which are nil when there's no console. Switched all three to `exec.Command` with `SysProcAttr{HideWindow: true, CmdLine: ...}` pattern (same as restart).
+
+---
+
 ## [1.8.33] - 2026-02-12 "Registry Mic Detection"
 
 ### Fixed
