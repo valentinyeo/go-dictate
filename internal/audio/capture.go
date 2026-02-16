@@ -2,6 +2,7 @@ package audio
 
 import (
 	"fmt"
+	"math"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -55,6 +56,7 @@ type Capture struct {
 	device           *malgo.Device
 	ctx              *malgo.AllocatedContext
 	lastCallbackNano atomic.Int64 // UnixNano timestamp of last audio callback
+	peakRMS          atomic.Uint64 // Peak RMS (float64 bits) over recent window, reset on read
 }
 
 // NewCapture creates a new audio capture. Pass a *CaptureDevice to select a
@@ -95,6 +97,25 @@ func NewCapture(audioChunks chan<- []int16, selectedDevice *CaptureDevice) (*Cap
 		for i := uint32(0); i < framecount; i++ {
 			// Little-endian conversion
 			samples[i] = int16(pInputSamples[i*2]) | int16(pInputSamples[i*2+1])<<8
+		}
+
+		// Track peak RMS for watchdog audio quality monitoring
+		var sumSquares float64
+		for _, s := range samples {
+			normalized := float64(s) / float64(math.MaxInt16)
+			sumSquares += normalized * normalized
+		}
+		rms := math.Sqrt(sumSquares / float64(len(samples)))
+		// Atomically update peak: load current, store if new is higher
+		for {
+			old := c.peakRMS.Load()
+			oldRMS := math.Float64frombits(old)
+			if rms <= oldRMS {
+				break
+			}
+			if c.peakRMS.CompareAndSwap(old, math.Float64bits(rms)) {
+				break
+			}
 		}
 
 		// Send to channel (non-blocking)
@@ -141,6 +162,13 @@ func (c *Capture) IsAlive(timeout time.Duration) bool {
 		return true // not started yet
 	}
 	return time.Since(time.Unix(0, last)) < timeout
+}
+
+// PeakRMS returns the peak RMS value since the last call and resets it to zero.
+// Used by the watchdog to detect "alive but silent/noisy" microphones.
+func (c *Capture) PeakRMS() float64 {
+	bits := c.peakRMS.Swap(0)
+	return math.Float64frombits(bits)
 }
 
 func (c *Capture) Stop() {

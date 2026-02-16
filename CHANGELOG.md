@@ -5,6 +5,14 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.35] - 2026-02-16 "Audio Watchdog RMS"
+
+### Fixed
+- **Detect dead-but-noisy microphone** - The audio watchdog previously only checked if the capture callback was firing. A mic could enter a degraded state (e.g., after sleep/wake) where it delivers low-level noise but no actual speech — VAD triggers on the noise, Deepgram returns empty text, and this cycles indefinitely. Now the watchdog tracks peak RMS per interval. If audio stays below RMS 0.005 for 60 consecutive seconds, the capture device is automatically restarted.
+- **Periodic RMS logging** - Debug log now includes `[Watchdog] Peak RMS: X.XXXXXX` every ~30s for diagnosing audio quality issues.
+
+---
+
 ## [1.8.34] - 2026-02-12 "Fix Open File Actions"
 
 ### Fixed

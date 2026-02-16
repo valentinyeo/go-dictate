@@ -209,10 +209,18 @@ func run() {
 	}()
 
 	// Audio watchdog: detect dead audio devices (e.g., after sleep/wake)
-	// and automatically restart capture.
+	// and automatically restart capture. Also detects "alive but dead" mics
+	// where the callback fires but audio is silent/flat (broken driver state).
 	go func() {
 		const watchdogInterval = 5 * time.Second
 		const watchdogTimeout = 10 * time.Second
+		// If peak RMS stays below this for flatLineMax consecutive checks,
+		// the mic is probably in a bad state (delivering noise but no speech).
+		// 0.005 is well below any real speech but above pure digital silence.
+		const flatLineRMSThreshold = 0.005
+		const flatLineMax = 12 // 12 * 5s = 60s of flat audio before restart
+		flatLineCount := 0
+
 		ticker := time.NewTicker(watchdogInterval)
 		defer ticker.Stop()
 		for {
@@ -222,9 +230,33 @@ func run() {
 			case <-ticker.C:
 				audioMu.Lock()
 				alive := audioCapture.IsAlive(watchdogTimeout)
+				peakRMS := audioCapture.PeakRMS()
+
+				needsRestart := false
+				reason := ""
+
 				if !alive {
-					logger.Info("[Watchdog] Audio device silent for >%v - restarting capture", watchdogTimeout)
-					fmt.Println("[Watchdog] Audio device died (sleep/disconnect?) - restarting...")
+					needsRestart = true
+					reason = fmt.Sprintf("callback silent for >%v", watchdogTimeout)
+				} else if peakRMS < flatLineRMSThreshold {
+					flatLineCount++
+					if flatLineCount >= flatLineMax {
+						needsRestart = true
+						reason = fmt.Sprintf("flat audio (peak RMS %.6f) for %ds", peakRMS, flatLineCount*5)
+						flatLineCount = 0
+					}
+				} else {
+					flatLineCount = 0
+				}
+
+				// Periodic RMS logging (every ~30s when not flat)
+				if flatLineCount == 0 || flatLineCount%6 == 0 {
+					logger.Debug("[Watchdog] Peak RMS: %.6f (flat count: %d/%d)", peakRMS, flatLineCount, flatLineMax)
+				}
+
+				if needsRestart {
+					logger.Info("[Watchdog] Audio device problem: %s - restarting capture", reason)
+					fmt.Printf("[Watchdog] %s - restarting...\n", reason)
 					audioCapture.Stop()
 					time.Sleep(1 * time.Second)
 
@@ -241,6 +273,7 @@ func run() {
 						logger.Info("[Watchdog] Fell back to system default mic")
 					}
 					audioCapture = newCapture
+					flatLineCount = 0
 					logger.Info("[Watchdog] Audio capture restarted successfully")
 					fmt.Println("[Watchdog] Audio capture restarted")
 				}
