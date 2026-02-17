@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.38] - 2026-02-18 "Watchdog Monitor Mode"
+
+### Fixed
+- **Stop restarting after 5 failures** - Previous versions kept restarting the audio device indefinitely (84+ restarts observed), leaking memory (21MB → 39MB) and freezing the tray UI. Now: 5 quick restart attempts (first 2 with configured device, last 3 with system default), then enter "monitor mode" — just watches the RMS passively with zero resource churn. If the mic comes back naturally (wireless reconnect), it auto-recovers and logs it.
+
+---
+
 ## [1.8.37] - 2026-02-17 "Watchdog Backoff"
 
 ### Fixed
