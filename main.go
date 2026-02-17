@@ -208,18 +208,19 @@ func run() {
 		}
 	}()
 
-	// Audio watchdog: detect dead audio devices (e.g., after sleep/wake)
-	// and automatically restart capture. Also detects "alive but dead" mics
-	// where the callback fires but audio is silent/flat (broken driver state).
+	// Audio watchdog: detect dead audio devices (e.g., after sleep/wake,
+	// wireless mic dropout) and automatically restart capture. Also detects
+	// "alive but dead" mics where the callback fires but audio is flat.
 	go func() {
 		const watchdogInterval = 5 * time.Second
 		const watchdogTimeout = 10 * time.Second
 		// If peak RMS stays below this for flatLineMax consecutive checks,
-		// the mic is probably in a bad state (delivering noise but no speech).
+		// the mic is probably in a bad state (wireless dropout, driver issue).
 		// 0.005 is well below any real speech but above pure digital silence.
 		const flatLineRMSThreshold = 0.005
-		const flatLineMax = 12 // 12 * 5s = 60s of flat audio before restart
+		const flatLineMax = 4 // 4 * 5s = 20s of flat audio before restart
 		flatLineCount := 0
+		consecutiveRestartFails := 0
 
 		ticker := time.NewTicker(watchdogInterval)
 		defer ticker.Stop()
@@ -243,36 +244,54 @@ func run() {
 					if flatLineCount >= flatLineMax {
 						needsRestart = true
 						reason = fmt.Sprintf("flat audio (peak RMS %.6f) for %ds", peakRMS, flatLineCount*5)
-						flatLineCount = 0
 					}
 				} else {
 					flatLineCount = 0
+					consecutiveRestartFails = 0 // healthy audio = reset failure counter
 				}
 
 				// Periodic RMS logging (every ~30s when not flat)
 				if flatLineCount == 0 || flatLineCount%6 == 0 {
-					logger.Debug("[Watchdog] Peak RMS: %.6f (flat count: %d/%d)", peakRMS, flatLineCount, flatLineMax)
+					logger.Debug("[Watchdog] Peak RMS: %.6f (flat count: %d/%d, restart fails: %d)", peakRMS, flatLineCount, flatLineMax, consecutiveRestartFails)
 				}
 
 				if needsRestart {
-					logger.Info("[Watchdog] Audio device problem: %s - restarting capture", reason)
+					logger.Info("[Watchdog] Audio device problem: %s - restarting capture (fail streak: %d)", reason, consecutiveRestartFails)
 					fmt.Printf("[Watchdog] %s - restarting...\n", reason)
 					audioCapture.Stop()
-					time.Sleep(1 * time.Second)
+					time.Sleep(500 * time.Millisecond)
 
-					newCapture, err := audio.NewCapture(audioChunks, selectedDevice)
+					// After 3 consecutive restart failures with the selected device,
+					// try system default (wireless mic may have fully disconnected)
+					useDevice := selectedDevice
+					if consecutiveRestartFails >= 3 && selectedDevice != nil {
+						logger.Info("[Watchdog] %d consecutive restart failures - trying system default mic", consecutiveRestartFails)
+						useDevice = nil
+					}
+
+					newCapture, err := audio.NewCapture(audioChunks, useDevice)
 					if err != nil {
-						logger.Error("[Watchdog] Failed to restart with selected device: %v", err)
-						// Fall back to system default
-						newCapture, err = audio.NewCapture(audioChunks, nil)
-						if err != nil {
-							logger.Error("[Watchdog] Failed to restart with default device: %v", err)
+						logger.Error("[Watchdog] Failed to restart capture: %v", err)
+						if useDevice != nil {
+							// Try system default as fallback
+							newCapture, err = audio.NewCapture(audioChunks, nil)
+							if err != nil {
+								logger.Error("[Watchdog] Failed with default device too: %v", err)
+								consecutiveRestartFails++
+								flatLineCount = 0
+								audioMu.Unlock()
+								continue
+							}
+							logger.Info("[Watchdog] Fell back to system default mic")
+						} else {
+							consecutiveRestartFails++
+							flatLineCount = 0
 							audioMu.Unlock()
 							continue
 						}
-						logger.Info("[Watchdog] Fell back to system default mic")
 					}
 					audioCapture = newCapture
+					consecutiveRestartFails++
 					flatLineCount = 0
 					logger.Info("[Watchdog] Audio capture restarted successfully")
 					fmt.Println("[Watchdog] Audio capture restarted")

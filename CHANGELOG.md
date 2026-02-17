@@ -5,6 +5,15 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.36] - 2026-02-17 "Fast Wireless Mic Recovery"
+
+### Fixed
+- **Faster flat-line detection** - Reduced from 60s to 20s (4 checks instead of 12). Wireless mics like the Lark M2 drop their wireless link frequently, delivering complete digital silence (0.000000 RMS) while the USB dongle stays connected. Previous 60s timeout meant the mic sat dead for a full minute before recovery.
+- **Fallback to system default mic** - After 3 consecutive restart failures with the configured device, automatically tries the system default mic. The wireless mic receiver may have fully disconnected, and a built-in mic is better than nothing.
+- **Faster restart cycle** - Reduced post-stop delay from 1s to 500ms for quicker recovery.
+
+---
+
 ## [1.8.35] - 2026-02-16 "Audio Watchdog RMS"
 
 ### Fixed
