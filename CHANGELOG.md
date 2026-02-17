@@ -5,6 +5,14 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.37] - 2026-02-17 "Watchdog Backoff"
+
+### Fixed
+- **Exponential backoff on restart failures** - v1.8.36's aggressive 20s restart cycle caused the watchdog to hammer audio device init/deinit every 20 seconds when no mic worked (48+ restarts observed), making the tray UI unresponsive. Now: first 3 restarts are immediate (quick recovery), then backoff kicks in: 20s, 40s, 60s... capped at 60s between attempts. App stays responsive while waiting for the mic to come back.
+- **Cleaner recovery logging** - logs when audio actually recovers after failures.
+
+---
+
 ## [1.8.36] - 2026-02-17 "Fast Wireless Mic Recovery"
 
 ### Fixed

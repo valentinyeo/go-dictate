@@ -211,16 +211,19 @@ func run() {
 	// Audio watchdog: detect dead audio devices (e.g., after sleep/wake,
 	// wireless mic dropout) and automatically restart capture. Also detects
 	// "alive but dead" mics where the callback fires but audio is flat.
+	// Uses exponential backoff to avoid hammering restarts when no mic works.
 	go func() {
 		const watchdogInterval = 5 * time.Second
 		const watchdogTimeout = 10 * time.Second
 		// If peak RMS stays below this for flatLineMax consecutive checks,
 		// the mic is probably in a bad state (wireless dropout, driver issue).
-		// 0.005 is well below any real speech but above pure digital silence.
 		const flatLineRMSThreshold = 0.005
 		const flatLineMax = 4 // 4 * 5s = 20s of flat audio before restart
 		flatLineCount := 0
 		consecutiveRestartFails := 0
+		// Backoff: skip N watchdog ticks before attempting next restart
+		backoffTicks := 0
+		backoffRemaining := 0
 
 		ticker := time.NewTicker(watchdogInterval)
 		defer ticker.Stop()
@@ -247,25 +250,40 @@ func run() {
 					}
 				} else {
 					flatLineCount = 0
-					consecutiveRestartFails = 0 // healthy audio = reset failure counter
+					if consecutiveRestartFails > 0 {
+						logger.Info("[Watchdog] Audio recovered after %d restart attempts", consecutiveRestartFails)
+					}
+					consecutiveRestartFails = 0
+					backoffTicks = 0
+					backoffRemaining = 0
 				}
 
-				// Periodic RMS logging (every ~30s when not flat)
+				// Periodic RMS logging (every ~30s)
 				if flatLineCount == 0 || flatLineCount%6 == 0 {
-					logger.Debug("[Watchdog] Peak RMS: %.6f (flat count: %d/%d, restart fails: %d)", peakRMS, flatLineCount, flatLineMax, consecutiveRestartFails)
+					if backoffRemaining > 0 {
+						logger.Debug("[Watchdog] Peak RMS: %.6f (backing off: %ds until next restart)", peakRMS, backoffRemaining*5)
+					} else {
+						logger.Debug("[Watchdog] Peak RMS: %.6f (flat count: %d/%d)", peakRMS, flatLineCount, flatLineMax)
+					}
+				}
+
+				// Respect backoff
+				if needsRestart && backoffRemaining > 0 {
+					backoffRemaining--
+					needsRestart = false
+					flatLineCount = 0 // reset so we re-measure after backoff
 				}
 
 				if needsRestart {
-					logger.Info("[Watchdog] Audio device problem: %s - restarting capture (fail streak: %d)", reason, consecutiveRestartFails)
+					logger.Info("[Watchdog] Restarting capture: %s (attempt %d)", reason, consecutiveRestartFails+1)
 					fmt.Printf("[Watchdog] %s - restarting...\n", reason)
 					audioCapture.Stop()
 					time.Sleep(500 * time.Millisecond)
 
-					// After 3 consecutive restart failures with the selected device,
-					// try system default (wireless mic may have fully disconnected)
+					// After 3 consecutive failures, try system default mic
 					useDevice := selectedDevice
 					if consecutiveRestartFails >= 3 && selectedDevice != nil {
-						logger.Info("[Watchdog] %d consecutive restart failures - trying system default mic", consecutiveRestartFails)
+						logger.Info("[Watchdog] Trying system default mic (configured device failed %dx)", consecutiveRestartFails)
 						useDevice = nil
 					}
 
@@ -273,28 +291,31 @@ func run() {
 					if err != nil {
 						logger.Error("[Watchdog] Failed to restart capture: %v", err)
 						if useDevice != nil {
-							// Try system default as fallback
 							newCapture, err = audio.NewCapture(audioChunks, nil)
 							if err != nil {
 								logger.Error("[Watchdog] Failed with default device too: %v", err)
-								consecutiveRestartFails++
-								flatLineCount = 0
-								audioMu.Unlock()
-								continue
 							}
-							logger.Info("[Watchdog] Fell back to system default mic")
-						} else {
-							consecutiveRestartFails++
-							flatLineCount = 0
-							audioMu.Unlock()
-							continue
 						}
 					}
-					audioCapture = newCapture
+					if err == nil {
+						audioCapture = newCapture
+						logger.Info("[Watchdog] Audio capture restarted successfully")
+					}
+
 					consecutiveRestartFails++
 					flatLineCount = 0
-					logger.Info("[Watchdog] Audio capture restarted successfully")
-					fmt.Println("[Watchdog] Audio capture restarted")
+
+					// Exponential backoff: 0, 0, 0, 20s, 40s, 60s... capped at 60s
+					// First 3 attempts have no backoff for quick recovery.
+					// After that, slow down to avoid hammering and UI freezes.
+					if consecutiveRestartFails > 3 {
+						backoffTicks = consecutiveRestartFails - 3
+						if backoffTicks > 12 {
+							backoffTicks = 12 // cap at 60s (12 * 5s)
+						}
+						backoffRemaining = backoffTicks
+						logger.Info("[Watchdog] Backing off %ds before next restart attempt", backoffTicks*5)
+					}
 				}
 				audioMu.Unlock()
 			}
