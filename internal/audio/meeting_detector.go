@@ -58,48 +58,64 @@ func IsMeetingActive() bool {
 //	LastUsedTimeStart (REG_QWORD) - FILETIME when mic access started
 //	LastUsedTimeStop  (REG_QWORD) - FILETIME when mic access stopped (0 = still active)
 func checkMicPrivacyRegistry() bool {
-	const regPath = `Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone\NonPackaged`
-
-	key, err := registry.OpenKey(registry.CURRENT_USER, regPath, registry.READ)
-	if err != nil {
-		return false
-	}
-	defer key.Close()
+	const basePath = `Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone`
 
 	// Get our own exe name to exclude it
 	ourExeName := strings.ToLower("go-dictate.exe")
 
-	subKeys, err := key.ReadSubKeyNames(-1)
-	if err != nil {
-		return false
+	// Check both NonPackaged apps (e.g. Chrome, Firefox) and Packaged apps
+	// (e.g. new Teams "MSTeams_8wekyb3d8bbwe"). Packaged app keys are direct
+	// sub-keys of the microphone key; NonPackaged apps are under NonPackaged\.
+	regPaths := []string{
+		basePath + `\NonPackaged`,
+		basePath,
 	}
 
-	for _, subKeyName := range subKeys {
-		subKey, err := registry.OpenKey(key, subKeyName, registry.READ)
+	for _, regPath := range regPaths {
+		key, err := registry.OpenKey(registry.CURRENT_USER, regPath, registry.READ)
 		if err != nil {
 			continue
 		}
 
-		start, _, errStart := subKey.GetIntegerValue("LastUsedTimeStart")
-		stop, _, errStop := subKey.GetIntegerValue("LastUsedTimeStop")
-		subKey.Close()
-
-		if errStart != nil || start == 0 {
+		subKeys, err := key.ReadSubKeyNames(-1)
+		key.Close()
+		if err != nil {
 			continue
 		}
 
-		// Active if start > 0 and stop == 0 (still using mic)
-		if stop == 0 || (errStop != nil && start > 0) {
-			// Check it's not our own exe
-			nameLower := strings.ToLower(subKeyName)
-			if strings.Contains(nameLower, ourExeName) {
+		for _, subKeyName := range subKeys {
+			// Skip the "NonPackaged" sub-key when scanning the base path
+			// (we already scan it separately above)
+			if strings.EqualFold(subKeyName, "NonPackaged") {
 				continue
 			}
 
-			// Extract a readable app name from the registry key
-			appName := registryKeyToAppName(subKeyName)
-			fmt.Printf("[MeetingDetector] Mic actively used by: %s\n", appName)
-			return true
+			subKey, err := registry.OpenKey(registry.CURRENT_USER, regPath+`\`+subKeyName, registry.READ)
+			if err != nil {
+				continue
+			}
+
+			start, _, errStart := subKey.GetIntegerValue("LastUsedTimeStart")
+			stop, _, errStop := subKey.GetIntegerValue("LastUsedTimeStop")
+			subKey.Close()
+
+			if errStart != nil || start == 0 {
+				continue
+			}
+
+			// Active if start > 0 and stop == 0 (still using mic)
+			if stop == 0 || (errStop != nil && start > 0) {
+				// Check it's not our own exe
+				nameLower := strings.ToLower(subKeyName)
+				if strings.Contains(nameLower, ourExeName) {
+					continue
+				}
+
+				// Extract a readable app name from the registry key
+				appName := registryKeyToAppName(subKeyName)
+				fmt.Printf("[MeetingDetector] Mic actively used by: %s\n", appName)
+				return true
+			}
 		}
 	}
 

@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.43"
+	Version        = "1.8.44"
 	BuildDate      = "2026-02-18"
 	VersionName    = "Mic Sync"
-	VersionSummary = "Sync app mic selection with Windows default input device"
+	VersionSummary = "Mic sync + detect packaged apps (new Teams) for auto-pause"
 )

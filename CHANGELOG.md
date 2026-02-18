@@ -5,13 +5,16 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.8.43] - 2026-02-18 "Mic Sync"
+## [1.8.44] - 2026-02-18 "Mic Sync"
 
 ### Added
 - **Two-way sync between app mic selection and Windows default input device**
   - **App → Windows**: When you pick a named mic in the tray menu, the Windows default input device is also changed to match (uses `IPolicyConfig::SetDefaultEndpoint`, same undocumented but stable COM interface used by EarTrumpet and SoundSwitch). Sets all three roles (Console, Multimedia, Communications).
   - **Windows → App**: When the app is on "System Default" mode, a 5-second poller detects changes to the Windows default capture device (e.g. changed via Sound Settings) and restarts audio capture to pick up the new device automatically.
   - Prevents the silent-mic problem where the app opens one mic while Windows has a different default.
+
+### Fixed
+- **Detect packaged apps (new Teams) for meeting auto-pause** - The meeting detector only checked `NonPackaged` registry keys, missing Microsoft Store apps like the new Teams (MSIX). Now also scans packaged app keys directly under `CapabilityAccessManager\ConsentStore\microphone\` (e.g. `MSTeams_8wekyb3d8bbwe`).
 
 ---
 
