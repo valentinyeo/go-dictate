@@ -444,9 +444,11 @@ func vadAndSTTManager(
 	}()
 
 	// Independent meeting/recording detection ticker.
-	// Runs every 3s regardless of audio flow so auto-pause works even when
+	// Runs every 1s regardless of audio flow so auto-pause works even when
 	// the mic is dead, in monitor mode, or the audio channel is nil.
-	meetingTicker := time.NewTicker(3 * time.Second)
+	// The detectors themselves have internal caches (3s meeting, 2s recording)
+	// so the actual syscalls are throttled despite the fast ticker.
+	meetingTicker := time.NewTicker(1 * time.Second)
 	defer meetingTicker.Stop()
 
 	for {
