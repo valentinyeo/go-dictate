@@ -443,6 +443,12 @@ func vadAndSTTManager(
 		}
 	}()
 
+	// Independent meeting/recording detection ticker.
+	// Runs every 3s regardless of audio flow so auto-pause works even when
+	// the mic is dead, in monitor mode, or the audio channel is nil.
+	meetingTicker := time.NewTicker(3 * time.Second)
+	defer meetingTicker.Stop()
+
 	for {
 		// When paused, disable audio processing entirely (zero CPU)
 		var activeAudioRx <-chan []int16
@@ -480,6 +486,46 @@ func vadAndSTTManager(
 			}
 			vad.Reset()
 			stateManager.Set(state.AutoPaused)
+
+		case <-meetingTicker.C:
+			// Independent meeting/recording check - fires even when mic is dead
+			// or audio channel is nil (paused). This ensures Zoom/Teams calls
+			// are detected regardless of audio capture state.
+			currentState := stateManager.Get()
+			if currentState == state.Paused {
+				continue // respect manual pause
+			}
+			meetingActive := audio.IsMeetingActive()
+			recordingActive := audio.IsRecordingActive()
+
+			if meetingActive || recordingActive {
+				if currentState != state.MediaPaused {
+					if recordingActive {
+						logger.Info("[Meeting] Screen recording detected via ticker - auto-pausing")
+						fmt.Println("[Recording] Screen recording active - pausing dictation")
+					} else {
+						logger.Info("[Meeting] Active call detected via ticker - auto-pausing")
+						fmt.Println("[Meeting] In a call - pausing dictation")
+					}
+					// Close any active STT connection
+					if sttCancel != nil {
+						sttCancel()
+						sttCancel = nil
+					}
+					if sttAudioTx != nil {
+						close(sttAudioTx)
+						sttAudioTx = nil
+					}
+					textBridge = nil
+					vad.Reset()
+					preRoll = preRoll[:0]
+					stateManager.Set(state.MediaPaused)
+				}
+			} else if currentState == state.MediaPaused {
+				logger.Info("[Meeting] Call/recording ended via ticker - resuming")
+				fmt.Println("[Meeting] Call/recording ended - resuming dictation")
+				stateManager.Set(state.Active)
+			}
 
 		case audioChunk, ok := <-activeAudioRx:
 			if !ok {

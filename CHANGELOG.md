@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.40] - 2026-02-18 "Independent Meeting Detection"
+
+### Fixed
+- **Meeting detection now works when mic is dead** - Previously, Zoom/Teams call detection only ran when audio chunks were flowing. If the mic was silent (watchdog monitor mode) or the audio channel was nil, meeting detection never triggered and the app wouldn't auto-pause. Now runs on an independent 3-second ticker, completely decoupled from audio capture state.
+
+---
+
 ## [1.8.39] - 2026-02-18 "Sound Settings Shortcut"
 
 ### Added
