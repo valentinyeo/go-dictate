@@ -208,6 +208,10 @@ func run() {
 		}
 	}()
 
+	// Start Windows power event monitor for sleep/wake detection
+	powerMon := audio.NewPowerMonitor()
+	defer powerMon.Stop()
+
 	// Audio watchdog: detect dead audio devices (e.g., after sleep/wake,
 	// wireless mic dropout) and automatically restart capture. Also detects
 	// "alive but dead" mics where the callback fires but audio is flat.
@@ -223,12 +227,10 @@ func run() {
 		const maxRestartAttempts = 5    // stop restarting after this many failures
 		const monitorOnlyLogInterval = 60 // log every 60 ticks (5 min) while monitoring
 		const monitorRetryInterval = 60   // retry from monitor mode every 60 ticks (5 min)
-		const sleepWakeThreshold = 30 * time.Second // time gap > 30s = sleep/wake
 		flatLineCount := 0
 		restartAttempts := 0
 		monitorOnly := false // true = gave up restarting, just watching RMS
 		monitorTicks := 0
-		lastTickTime := time.Now()
 
 		ticker := time.NewTicker(watchdogInterval)
 		defer ticker.Stop()
@@ -236,21 +238,34 @@ func run() {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				now := time.Now()
-				elapsed := now.Sub(lastTickTime)
-				lastTickTime = now
 
-				// Detect sleep/wake: if time jumped by more than 30s,
-				// the machine was asleep. Reset to active mode and retry.
-				if elapsed > sleepWakeThreshold {
-					logger.Info("[Watchdog] Sleep/wake detected (gap: %v) - resetting to retry audio capture", elapsed.Round(time.Second))
-					monitorOnly = false
-					restartAttempts = 0
-					flatLineCount = 0
-					monitorTicks = 0
+			case <-powerMon.Wake:
+				// Windows power event: system resumed from sleep/hibernate.
+				// Wait a few seconds for audio subsystem to settle, then
+				// force a fresh capture restart.
+				logger.Info("[Watchdog] Wake event received - waiting 5s for audio subsystem to settle")
+				time.Sleep(5 * time.Second)
+				logger.Info("[Watchdog] Restarting audio capture after wake")
+				audioMu.Lock()
+				audioCapture.Stop()
+				time.Sleep(500 * time.Millisecond)
+				newCapture, err := audio.NewCapture(audioChunks, selectedDevice)
+				if err != nil {
+					logger.Error("[Watchdog] Post-wake restart failed: %v", err)
+					newCapture, err = audio.NewCapture(audioChunks, nil)
 				}
+				if err == nil {
+					audioCapture = newCapture
+					logger.Info("[Watchdog] Audio capture restarted after wake")
+				}
+				monitorOnly = false
+				restartAttempts = 0
+				flatLineCount = 0
+				monitorTicks = 0
+				audioMu.Unlock()
+				continue
 
+			case <-ticker.C:
 				audioMu.Lock()
 				alive := audioCapture.IsAlive(watchdogTimeout)
 				peakRMS := audioCapture.PeakRMS()

@@ -5,11 +5,19 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.42] - 2026-02-18 "Windows Power Events"
+
+### Fixed
+- **Proper sleep/wake detection via Windows power notifications** - Instead of guessing sleep/wake from timer gaps (unreliable for short sleeps), now uses `RegisterPowerSettingNotification` to get actual Windows power events (`PBT_APMRESUMEAUTOMATIC` and display-on). On wake: waits 5s for the audio subsystem to settle, then force-restarts capture with a fresh context. Resets watchdog state so it gets a full 5 restart attempts.
+- **Periodic retry from monitor mode** - Watchdog retries every 5 minutes from monitor mode instead of waiting indefinitely.
+
+---
+
 ## [1.8.41] - 2026-02-18 "Sleep/Wake Recovery"
 
 ### Fixed
-- **Watchdog recovers after sleep/wake** - Previously, if the watchdog entered monitor mode (5 failed restarts) and the machine went to sleep, it would stay in monitor mode forever after wake, never retrying. Now detects sleep/wake via time gap (>30s between ticks) and immediately resets to retry audio capture.
-- **Periodic retry from monitor mode** - Even without sleep/wake, the watchdog now retries every 5 minutes from monitor mode instead of waiting indefinitely for natural recovery.
+- **Watchdog recovers after sleep/wake** - Detects sleep/wake via time gap (>30s between ticks) and resets to retry audio capture.
+- **Periodic retry from monitor mode** - Watchdog retries every 5 minutes from monitor mode instead of waiting indefinitely for natural recovery.
 
 ---
 

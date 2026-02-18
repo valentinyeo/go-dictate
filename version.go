@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.41"
+	Version        = "1.8.42"
 	BuildDate      = "2026-02-18"
-	VersionName    = "Sleep/Wake Recovery"
-	VersionSummary = "Watchdog retries mic after sleep/wake and every 5 min"
+	VersionName    = "Windows Power Events"
+	VersionSummary = "Proper sleep/wake detection via Windows power notifications"
 )
