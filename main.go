@@ -379,6 +379,57 @@ func run() {
 		}
 	}()
 
+	// Poll Windows default capture device every 5s.
+	// When the app is on "System Default" mode (cfg.Audio.DeviceName == ""),
+	// detect when the user changes the Windows default in Sound Settings and
+	// restart capture so the app picks up the new device.
+	go func() {
+		<-trayManager.ReadyCh()
+		var lastDefault string
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if cfg.Audio.DeviceName != "" {
+					lastDefault = "" // reset so we re-detect when switching back to System Default
+					continue
+				}
+
+				currentDefault, err := audio.GetWindowsDefaultCaptureName()
+				if err != nil {
+					continue
+				}
+
+				if lastDefault == "" {
+					lastDefault = currentDefault
+					continue
+				}
+
+				if currentDefault != lastDefault {
+					logger.Info("[MicSync] Windows default changed: %q -> %q, restarting capture", lastDefault, currentDefault)
+					fmt.Printf("[MicSync] Windows default changed to: %s\n", currentDefault)
+					lastDefault = currentDefault
+
+					audioMu.Lock()
+					audioCapture.Stop()
+					time.Sleep(500 * time.Millisecond)
+					newCapture, err := audio.NewCapture(audioChunks, nil)
+					if err != nil {
+						logger.Error("[MicSync] Failed to restart capture: %v", err)
+					} else {
+						audioCapture = newCapture
+						logger.Info("[MicSync] Capture restarted on new default device")
+					}
+					audioMu.Unlock()
+				}
+			}
+		}
+	}()
+
 	// Register hotkeys after tray is created
 	go registerHotkeys()
 

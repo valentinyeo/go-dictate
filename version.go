@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.42"
+	Version        = "1.8.43"
 	BuildDate      = "2026-02-18"
-	VersionName    = "Windows Power Events"
-	VersionSummary = "Proper sleep/wake detection via Windows power notifications"
+	VersionName    = "Mic Sync"
+	VersionSummary = "Sync app mic selection with Windows default input device"
 )
