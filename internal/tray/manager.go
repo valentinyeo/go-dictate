@@ -28,8 +28,9 @@ type Manager struct {
 	settingsItem  *systray.MenuItem
 	logItem       *systray.MenuItem
 	dashboardItem *systray.MenuItem
-	restartItem   *systray.MenuItem
-	exitItem      *systray.MenuItem
+	soundSettingsItem *systray.MenuItem
+	restartItem       *systray.MenuItem
+	exitItem          *systray.MenuItem
 
 	// Feature toggles
 	duckingItem     *systray.MenuItem
@@ -81,11 +82,11 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.8.38")
+	systray.SetTooltip("Dictation App v1.8.39")
 
 	// Create menu items - clicking version opens changelog
-	m.versionItem = systray.AddMenuItem("v1.8.38 - Watchdog Monitor Mode", "Click to view changelog")
-	summaryItem := systray.AddMenuItem("  Stop restarting after 5 failures, monitor for natural mic recovery instead", "")
+	m.versionItem = systray.AddMenuItem("v1.8.39 - Sound Settings Shortcut", "Click to view changelog")
+	summaryItem := systray.AddMenuItem("  Quick access to Windows Sound Settings from tray menu", "")
 	summaryItem.Disable()
 	systray.AddSeparator()
 
@@ -134,6 +135,7 @@ func (m *Manager) onReady() {
 	m.settingsItem = systray.AddMenuItem("Open Config File", "Open configuration file")
 	m.logItem = systray.AddMenuItem("Open Debug Log", "Open debug log file")
 	m.dashboardItem = systray.AddMenuItem("Open Deepgram Dashboard", "Open Deepgram console")
+	m.soundSettingsItem = systray.AddMenuItem("Open Sound Settings", "Open Windows sound input settings")
 	systray.AddSeparator()
 	m.pauseItem = systray.AddMenuItem("⏸ Pause / Resume", "Ctrl+Alt+X: Pause or resume dictation")
 	m.restartItem = systray.AddMenuItem("🔄 Restart", "Restart the application")
@@ -154,6 +156,7 @@ func (m *Manager) onReady() {
 	go m.handleSettingsClick()
 	go m.handleLogClick()
 	go m.handleDashboardClick()
+	go m.handleSoundSettingsClick()
 	go m.handleRestartClick()
 	go m.handleExitClick()
 	go m.handleIconUpdates()
@@ -473,6 +476,24 @@ func openDashboard() error {
 	return cmd.Start()
 }
 
+func (m *Manager) handleSoundSettingsClick() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-m.soundSettingsItem.ClickedCh:
+			cmd := exec.Command("cmd")
+			cmd.SysProcAttr = &syscall.SysProcAttr{
+				HideWindow: true,
+				CmdLine:    `cmd /c start ms-settings:sound`,
+			}
+			if err := cmd.Start(); err != nil {
+				fmt.Printf("[Tray] Failed to open sound settings: %v\n", err)
+			}
+		}
+	}
+}
+
 func (m *Manager) handleRestartClick() {
 	for {
 		select {
@@ -528,7 +549,7 @@ func (m *Manager) handleModeClicks() {
 			}
 			m.configMu.Unlock()
 			logger.Info("[Tray] Switched to Online (Deepgram)")
-			systray.SetTooltip("Dictation App v1.8.38 - Online (Deepgram)")
+			systray.SetTooltip("Dictation App v1.8.39 - Online (Deepgram)")
 			m.notifySettingsChanged()
 
 		case <-m.offlineItem.ClickedCh:
@@ -550,7 +571,7 @@ func (m *Manager) handleModeClicks() {
 				m.config.Save()
 				m.configMu.Unlock()
 				logger.Info("[Tray] Switched to Offline (Vosk) - already ready")
-				systray.SetTooltip("Dictation App v1.8.38 - Offline (Vosk)")
+				systray.SetTooltip("Dictation App v1.8.39 - Offline (Vosk)")
 				m.notifySettingsChanged()
 			} else {
 				logger.Info("[Tray] Starting offline preparation (download DLL + model)...")
@@ -576,7 +597,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 		}); err != nil {
 			logger.Error("[Offline] Failed to download vosk library: %v", err)
 			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.38")
+			systray.SetTooltip("Dictation App v1.8.39")
 			return
 		}
 		logger.Info("[Offline] Vosk library downloaded successfully")
@@ -597,7 +618,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 		}); err != nil {
 			logger.Error("[Offline] Failed to download model %s: %v", modelKey, err)
 			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.38")
+			systray.SetTooltip("Dictation App v1.8.39")
 			return
 		}
 		logger.Info("[Offline] Model %s downloaded successfully", modelKey)
@@ -615,7 +636,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 	m.config.Save()
 	m.configMu.Unlock()
 	logger.Info("[Offline] Offline mode ready!")
-	systray.SetTooltip("Dictation App v1.8.38 - Offline (Vosk)")
+	systray.SetTooltip("Dictation App v1.8.39 - Offline (Vosk)")
 	m.notifySettingsChanged()
 }
 

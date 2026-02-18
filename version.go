@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.38"
+	Version        = "1.8.39"
 	BuildDate      = "2026-02-18"
-	VersionName    = "Watchdog Monitor Mode"
-	VersionSummary = "Stop restarting after 5 failures, monitor for natural mic recovery instead"
+	VersionName    = "Sound Settings Shortcut"
+	VersionSummary = "Quick access to Windows Sound Settings from tray menu"
 )

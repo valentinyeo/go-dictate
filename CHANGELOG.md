@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.39] - 2026-02-18 "Sound Settings Shortcut"
+
+### Added
+- **Open Sound Settings** menu item in tray - opens Windows Sound Settings (`ms-settings:sound`) for quick mic troubleshooting.
+
+---
+
 ## [1.8.38] - 2026-02-18 "Watchdog Monitor Mode"
 
 ### Fixed
