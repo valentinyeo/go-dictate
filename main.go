@@ -604,12 +604,16 @@ func vadAndSTTManager(
 			}
 			meetingActive := audio.IsMeetingActive()
 			recordingActive := audio.IsRecordingActive()
+			mediaPlaying := cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying()
 
-			if meetingActive || recordingActive {
+			if meetingActive || recordingActive || mediaPlaying {
 				if currentState != state.MediaPaused {
 					if recordingActive {
 						logger.Info("[Meeting] Screen recording detected via ticker - auto-pausing")
 						fmt.Println("[Recording] Screen recording active - pausing dictation")
+					} else if mediaPlaying {
+						logger.Info("[Media] Audio playback detected via ticker - auto-pausing")
+						fmt.Println("[Media] Audio playing - pausing dictation")
 					} else {
 						logger.Info("[Meeting] Active call detected via ticker - auto-pausing")
 						fmt.Println("[Meeting] In a call - pausing dictation")
@@ -629,8 +633,8 @@ func vadAndSTTManager(
 					stateManager.Set(state.MediaPaused)
 				}
 			} else if currentState == state.MediaPaused {
-				logger.Info("[Meeting] Call/recording ended via ticker - resuming")
-				fmt.Println("[Meeting] Call/recording ended - resuming dictation")
+				logger.Info("[Media] Media/call/recording ended via ticker - resuming")
+				fmt.Println("[Media] Media/call/recording ended - resuming dictation")
 				stateManager.Set(state.Active)
 			}
 
@@ -641,16 +645,19 @@ func vadAndSTTManager(
 
 			currentState := stateManager.Get()
 
-			// Auto-pause during active meetings or screen recordings
+			// Auto-pause during active meetings, screen recordings, or media playback
 			meetingActive := audio.IsMeetingActive()
 			recordingActive := audio.IsRecordingActive()
-			mediaPlaying := audio.IsMediaPlaying()
+			mediaPlaying := cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying()
 
-			if meetingActive || recordingActive {
+			if meetingActive || recordingActive || mediaPlaying {
 				if currentState == state.Active || currentState == state.AutoPaused {
 					if recordingActive {
 						logger.Info("[Recording] Screen recording detected - auto-pausing")
 						fmt.Println("[Recording] Screen recording active - pausing dictation")
+					} else if mediaPlaying {
+						logger.Info("[Media] Audio playback detected - auto-pausing")
+						fmt.Println("[Media] Audio playing (YouTube, music, etc.) - pausing dictation")
 					} else {
 						logger.Info("[Meeting] Active call detected - auto-pausing")
 						fmt.Println("[Meeting] In a call - pausing dictation")
@@ -661,14 +668,10 @@ func vadAndSTTManager(
 				}
 			} else {
 				if currentState == state.MediaPaused {
-					logger.Info("[Meeting] Call/recording ended - resuming")
-					fmt.Println("[Meeting] Call/recording ended - resuming dictation")
+					logger.Info("[Media] Media/call/recording ended - resuming")
+					fmt.Println("[Media] Media/call/recording ended - resuming dictation")
 					stateManager.Set(state.Active)
 				}
-			}
-
-			if mediaPlaying && currentState == state.Active {
-				// Visual indicator only
 			}
 
 			// Skip VAD during ghost speech cooldown

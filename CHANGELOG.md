@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.45] - 2026-02-18 "Media Auto-Pause"
+
+### Fixed
+- **Auto-pause dictation when any media is playing** - YouTube, Spotify, music, videos, etc. now trigger auto-pause. Previously, the media detection (`IsMediaPlaying`) only set a visual indicator but didn't actually pause dictation, so the app would transcribe audio from speakers. Now media playback is treated the same as meetings/recordings - dictation auto-pauses and resumes when media stops. Controlled by the existing "Auto-pause in Meetings" toggle.
+
+---
+
 ## [1.8.44] - 2026-02-18 "Mic Sync"
 
 ### Added
