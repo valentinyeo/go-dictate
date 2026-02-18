@@ -222,10 +222,13 @@ func run() {
 		const flatLineMax = 4          // 4 * 5s = 20s of flat audio before restart
 		const maxRestartAttempts = 5    // stop restarting after this many failures
 		const monitorOnlyLogInterval = 60 // log every 60 ticks (5 min) while monitoring
+		const monitorRetryInterval = 60   // retry from monitor mode every 60 ticks (5 min)
+		const sleepWakeThreshold = 30 * time.Second // time gap > 30s = sleep/wake
 		flatLineCount := 0
 		restartAttempts := 0
 		monitorOnly := false // true = gave up restarting, just watching RMS
 		monitorTicks := 0
+		lastTickTime := time.Now()
 
 		ticker := time.NewTicker(watchdogInterval)
 		defer ticker.Stop()
@@ -234,6 +237,20 @@ func run() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				now := time.Now()
+				elapsed := now.Sub(lastTickTime)
+				lastTickTime = now
+
+				// Detect sleep/wake: if time jumped by more than 30s,
+				// the machine was asleep. Reset to active mode and retry.
+				if elapsed > sleepWakeThreshold {
+					logger.Info("[Watchdog] Sleep/wake detected (gap: %v) - resetting to retry audio capture", elapsed.Round(time.Second))
+					monitorOnly = false
+					restartAttempts = 0
+					flatLineCount = 0
+					monitorTicks = 0
+				}
+
 				audioMu.Lock()
 				alive := audioCapture.IsAlive(watchdogTimeout)
 				peakRMS := audioCapture.PeakRMS()
@@ -253,11 +270,33 @@ func run() {
 					continue
 				}
 
-				// Monitor-only mode: just log periodically, no restarts
+				// Monitor-only mode: log periodically, retry every 5 min
 				if monitorOnly {
 					monitorTicks++
 					if monitorTicks%monitorOnlyLogInterval == 0 {
 						logger.Debug("[Watchdog] Still flat (RMS %.6f) - monitoring, %d min elapsed", peakRMS, monitorTicks*5/60)
+					}
+					// Periodic retry: exit monitor mode every 5 min to try again
+					if monitorTicks%monitorRetryInterval == 0 {
+						logger.Info("[Watchdog] Periodic retry from monitor mode (%d min elapsed)", monitorTicks*5/60)
+						monitorOnly = false
+						restartAttempts = 0
+						flatLineCount = 0
+						// Force an immediate restart
+						audioCapture.Stop()
+						time.Sleep(500 * time.Millisecond)
+						newCapture, err := audio.NewCapture(audioChunks, selectedDevice)
+						if err != nil {
+							logger.Error("[Watchdog] Periodic retry failed: %v", err)
+							newCapture, err = audio.NewCapture(audioChunks, nil)
+						}
+						if err == nil {
+							audioCapture = newCapture
+							logger.Info("[Watchdog] Audio capture restarted (periodic retry)")
+						} else {
+							// Failed again, go back to monitor mode
+							monitorOnly = true
+						}
 					}
 					audioMu.Unlock()
 					continue
@@ -288,7 +327,7 @@ func run() {
 
 					if restartAttempts > maxRestartAttempts {
 						// Give up restarting - just monitor for natural recovery
-						logger.Info("[Watchdog] %d restart attempts failed - entering monitor mode (will log recovery)", maxRestartAttempts)
+						logger.Info("[Watchdog] %d restart attempts failed - entering monitor mode (will retry in 5 min)", maxRestartAttempts)
 						monitorOnly = true
 						flatLineCount = 0
 						audioMu.Unlock()

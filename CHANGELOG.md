@@ -5,6 +5,14 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.41] - 2026-02-18 "Sleep/Wake Recovery"
+
+### Fixed
+- **Watchdog recovers after sleep/wake** - Previously, if the watchdog entered monitor mode (5 failed restarts) and the machine went to sleep, it would stay in monitor mode forever after wake, never retrying. Now detects sleep/wake via time gap (>30s between ticks) and immediately resets to retry audio capture.
+- **Periodic retry from monitor mode** - Even without sleep/wake, the watchdog now retries every 5 minutes from monitor mode instead of waiting indefinitely for natural recovery.
+
+---
+
 ## [1.8.40] - 2026-02-18 "Independent Meeting Detection"
 
 ### Fixed
