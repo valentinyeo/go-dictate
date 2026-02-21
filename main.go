@@ -645,19 +645,18 @@ func vadAndSTTManager(
 
 			currentState := stateManager.Get()
 
-			// Auto-pause during active meetings, screen recordings, or media playback
+			// Auto-pause during active meetings or screen recordings
+			// Note: media playback detection is handled by the meetingTicker only,
+			// not here on every audio chunk, because IsMediaPlaying() does heavy
+			// COM calls that can hang and block this entire goroutine.
 			meetingActive := audio.IsMeetingActive()
 			recordingActive := audio.IsRecordingActive()
-			mediaPlaying := cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying()
 
-			if meetingActive || recordingActive || mediaPlaying {
+			if meetingActive || recordingActive {
 				if currentState == state.Active || currentState == state.AutoPaused {
 					if recordingActive {
 						logger.Info("[Recording] Screen recording detected - auto-pausing")
 						fmt.Println("[Recording] Screen recording active - pausing dictation")
-					} else if mediaPlaying {
-						logger.Info("[Media] Audio playback detected - auto-pausing")
-						fmt.Println("[Media] Audio playing (YouTube, music, etc.) - pausing dictation")
 					} else {
 						logger.Info("[Meeting] Active call detected - auto-pausing")
 						fmt.Println("[Meeting] In a call - pausing dictation")
@@ -665,12 +664,6 @@ func vadAndSTTManager(
 					stateManager.Set(state.MediaPaused)
 				} else if currentState == state.MediaPaused {
 					continue
-				}
-			} else {
-				if currentState == state.MediaPaused {
-					logger.Info("[Media] Media/call/recording ended - resuming")
-					fmt.Println("[Media] Media/call/recording ended - resuming dictation")
-					stateManager.Set(state.Active)
 				}
 			}
 
@@ -854,7 +847,7 @@ func vadAndSTTManager(
 				vad.Reset()
 				preRoll = preRoll[:0] // Clear pre-roll for next utterance
 
-				if audio.IsMediaPlaying() {
+				if mediaCache := audio.IsMediaPlayingCached(); mediaCache {
 					logger.Info("[VAD] Media still playing - returning to MediaPaused")
 					stateManager.Set(state.MediaPaused)
 				} else {

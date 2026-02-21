@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.46] - 2026-02-21 "Media Check Fix"
+
+### Fixed
+- **Fix app freeze caused by heavy COM calls on every audio chunk** - `IsMediaPlaying()` performs expensive Windows COM session enumeration (CoInitializeEx, device/session enumeration). Previously it was called on every audio chunk (~100x/sec) in addition to the 3s ticker. When a COM call hung, it blocked the entire vadAndSTTManager goroutine, freezing state updates and making the tray unresponsive. Now media detection only runs on the 3s ticker; the audio chunk path uses a lightweight cached value instead.
+
+---
+
 ## [1.8.45] - 2026-02-18 "Media Auto-Pause"
 
 ### Fixed

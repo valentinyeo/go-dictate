@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.45"
-	BuildDate      = "2026-02-18"
-	VersionName    = "Media Auto-Pause"
-	VersionSummary = "Auto-pause dictation when YouTube or any media is playing"
+	Version        = "1.8.46"
+	BuildDate      = "2026-02-21"
+	VersionName    = "Media Check Fix"
+	VersionSummary = "Fix app freeze caused by COM media detection on every audio chunk"
 )

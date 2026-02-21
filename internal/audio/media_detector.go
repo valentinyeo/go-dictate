@@ -56,6 +56,14 @@ const (
 	AudioSessionStateActive = 1 // Active audio session
 )
 
+// IsMediaPlayingCached returns the last cached result without triggering
+// a new COM call. Safe to call from hot paths like audio chunk processing.
+func IsMediaPlayingCached() bool {
+	mediaCache.Lock()
+	defer mediaCache.Unlock()
+	return mediaCache.isPlaying
+}
+
 // IsMediaPlaying detects if any audio is playing through speakers
 // Uses a 3s cache to avoid expensive COM calls on every audio chunk
 func IsMediaPlaying() bool {
