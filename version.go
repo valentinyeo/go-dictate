@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.46"
-	BuildDate      = "2026-02-21"
-	VersionName    = "Media Check Fix"
-	VersionSummary = "Fix app freeze caused by COM media detection on every audio chunk"
+	Version        = "1.8.47"
+	BuildDate      = "2026-02-22"
+	VersionName    = "Pause Stops Audio"
+	VersionSummary = "Stop WASAPI capture when paused so audiodg.exe goes idle"
 )

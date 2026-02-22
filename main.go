@@ -33,6 +33,7 @@ var (
 	settingsChangedCh chan struct{}
 	ctx               context.Context
 	cancel            context.CancelFunc
+	audioPaused       atomic.Bool // true when capture is stopped due to pause
 )
 
 func main() {
@@ -186,6 +187,15 @@ func run() {
 				}
 			}
 
+			// Update selectedDevice so unpause uses the right mic
+			selectedDevice = newDevice
+
+			// If paused, just remember the choice - capture restarts on unpause
+			if audioPaused.Load() {
+				fmt.Printf("[Main] Microphone will switch to %s on resume\n", displayName)
+				continue
+			}
+
 			// Restart audio capture with new device
 			audioMu.Lock()
 			audioCapture.Stop()
@@ -243,6 +253,10 @@ func run() {
 				// Windows power event: system resumed from sleep/hibernate.
 				// Wait a few seconds for audio subsystem to settle, then
 				// force a fresh capture restart.
+				if audioPaused.Load() {
+					logger.Info("[Watchdog] Wake event while paused - skipping restart")
+					continue
+				}
 				logger.Info("[Watchdog] Wake event received - waiting 5s for audio subsystem to settle")
 				time.Sleep(5 * time.Second)
 				logger.Info("[Watchdog] Restarting audio capture after wake")
@@ -266,6 +280,10 @@ func run() {
 				continue
 
 			case <-ticker.C:
+				// Skip watchdog while capture is stopped (paused)
+				if audioPaused.Load() {
+					continue
+				}
 				audioMu.Lock()
 				alive := audioCapture.IsAlive(watchdogTimeout)
 				peakRMS := audioCapture.PeakRMS()
@@ -379,6 +397,48 @@ func run() {
 		}
 	}()
 
+	// Pause/resume audio capture when the app enters/exits Paused state.
+	// Stopping the WASAPI capture device lets audiodg.exe go idle (zero CPU).
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stateManager.Changed():
+				s := stateManager.Get()
+				isPaused := s == state.Paused || s == state.MicConflict
+				wasPaused := audioPaused.Load()
+
+				if isPaused && !wasPaused {
+					// Entering pause - stop capture
+					audioMu.Lock()
+					audioCapture.Stop()
+					audioPaused.Store(true)
+					audioMu.Unlock()
+					logger.Info("[Pause] Audio capture stopped (audiodg.exe can idle)")
+					fmt.Println("[Pause] Audio capture stopped")
+				} else if !isPaused && wasPaused {
+					// Leaving pause - restart capture
+					audioMu.Lock()
+					newCapture, err := audio.NewCapture(audioChunks, selectedDevice)
+					if err != nil {
+						logger.Error("[Pause] Failed to restart capture: %v", err)
+						newCapture, err = audio.NewCapture(audioChunks, nil)
+					}
+					if err == nil {
+						audioCapture = newCapture
+						audioPaused.Store(false)
+						logger.Info("[Pause] Audio capture restarted")
+						fmt.Println("[Pause] Audio capture restarted")
+					} else {
+						logger.Error("[Pause] CRITICAL: Cannot restart audio: %v", err)
+					}
+					audioMu.Unlock()
+				}
+			}
+		}
+	}()
+
 	// Poll Windows default capture device every 5s.
 	// When the app is on "System Default" mode (cfg.Audio.DeviceName == ""),
 	// detect when the user changes the Windows default in Sound Settings and
@@ -394,6 +454,9 @@ func run() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				if audioPaused.Load() {
+					continue // don't poll devices while capture is stopped
+				}
 				if cfg.Audio.DeviceName != "" {
 					lastDefault = "" // reset so we re-detect when switching back to System Default
 					continue

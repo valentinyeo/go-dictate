@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.47] - 2026-02-22 "Pause Stops Audio"
+
+### Fixed
+- **Stop WASAPI capture when paused so audiodg.exe goes idle** - Previously, pausing dictation only stopped processing audio chunks in the VAD manager, but the WASAPI capture device kept running. This forced `audiodg.exe` to continuously process the mic input stream even while paused, causing CPU spikes. Now pausing actually stops the capture device, letting `audiodg.exe` go fully idle. The watchdog, mic sync poller, and wake handler all skip work while paused to avoid interfering. Mic changes while paused are deferred until resume.
+
+---
+
 ## [1.8.46] - 2026-02-21 "Media Check Fix"
 
 ### Fixed
