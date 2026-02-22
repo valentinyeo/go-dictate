@@ -59,21 +59,27 @@ func (s AppState) IsListening() bool {
 }
 
 type Manager struct {
-	mu       sync.RWMutex
-	state    AppState
-	changeCh chan struct{} // signaled on every state change
+	mu          sync.RWMutex
+	state       AppState
+	subscribers []chan struct{}
 }
 
 func NewManager() *Manager {
 	return &Manager{
-		state:    Active,
-		changeCh: make(chan struct{}, 1),
+		state: Active,
 	}
 }
 
-// Changed returns a channel that receives a signal whenever the state changes.
+// Changed returns a NEW channel that receives a signal whenever the state
+// changes. Each caller gets its own independent channel, so multiple
+// goroutines can all observe state changes without stealing signals from
+// each other. Call this once per goroutine and reuse the returned channel.
 func (m *Manager) Changed() <-chan struct{} {
-	return m.changeCh
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	ch := make(chan struct{}, 1)
+	m.subscribers = append(m.subscribers, ch)
+	return ch
 }
 
 func (m *Manager) Get() AppState {
@@ -89,11 +95,7 @@ func (m *Manager) Set(newState AppState) {
 	if m.state != newState {
 		fmt.Printf("[State] %s -> %s\n", m.state, newState)
 		m.state = newState
-		// Non-blocking signal to wake up paused loops
-		select {
-		case m.changeCh <- struct{}{}:
-		default:
-		}
+		m.notifyAll()
 	}
 }
 
@@ -110,10 +112,17 @@ func (m *Manager) TogglePause() AppState {
 
 	fmt.Printf("[State] Toggle: %s -> %s\n", m.state, newState)
 	m.state = newState
-	// Non-blocking signal to wake up paused loops
-	select {
-	case m.changeCh <- struct{}{}:
-	default:
-	}
+	m.notifyAll()
 	return newState
+}
+
+// notifyAll sends a non-blocking signal to every subscriber.
+// Must be called with m.mu held.
+func (m *Manager) notifyAll() {
+	for _, ch := range m.subscribers {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }

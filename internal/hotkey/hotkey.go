@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -14,13 +15,17 @@ const (
 	MOD_CONTROL = 0x0002
 	MOD_SHIFT   = 0x0004
 	WM_HOTKEY   = 0x0312
+	WM_APP      = 0x8000 // custom message to wake up GetMessageW
 )
 
 var (
-	user32               = windows.NewLazySystemDLL("user32.dll")
-	procRegisterHotKey   = user32.NewProc("RegisterHotKey")
-	procUnregisterHotKey = user32.NewProc("UnregisterHotKey")
-	procGetMessage       = user32.NewProc("GetMessageW")
+	user32                  = windows.NewLazySystemDLL("user32.dll")
+	kernel32                = windows.NewLazySystemDLL("kernel32.dll")
+	procRegisterHotKey      = user32.NewProc("RegisterHotKey")
+	procUnregisterHotKey    = user32.NewProc("UnregisterHotKey")
+	procGetMessage          = user32.NewProc("GetMessageW")
+	procPostThreadMessage   = user32.NewProc("PostThreadMessageW")
+	procGetCurrentThreadId  = kernel32.NewProc("GetCurrentThreadId")
 )
 
 type MSG struct {
@@ -46,11 +51,13 @@ type Registration struct {
 // GetMessageW. Zero CPU when idle — the thread sleeps in the kernel
 // until a WM_HOTKEY arrives.
 type Manager struct {
-	mu      sync.Mutex
-	hotkeys map[int]func()
-	nextID  int
-	regCh   chan Registration // send registrations to the message loop thread
-	started bool
+	mu       sync.Mutex
+	hotkeys  map[int]func()
+	nextID   int
+	regCh    chan Registration
+	threadID uint32 // set by message loop goroutine
+	ready    chan struct{}
+	started  bool
 }
 
 func NewManager() *Manager {
@@ -58,6 +65,7 @@ func NewManager() *Manager {
 		hotkeys: make(map[int]func()),
 		nextID:  1,
 		regCh:   make(chan Registration, 8),
+		ready:   make(chan struct{}),
 	}
 }
 
@@ -71,6 +79,7 @@ func (m *Manager) Register(modifiers, vkCode uintptr, description string, callba
 
 	if needStart {
 		go m.messageLoop()
+		<-m.ready // wait for loop thread to be ready
 	}
 
 	reg := Registration{
@@ -82,6 +91,11 @@ func (m *Manager) Register(modifiers, vkCode uintptr, description string, callba
 		Result:      make(chan error, 1),
 	}
 	m.regCh <- reg
+
+	// Wake up GetMessageW so it drains the registration channel
+	tid := atomic.LoadUint32(&m.threadID)
+	procPostThreadMessage.Call(uintptr(tid), WM_APP, 0, 0)
+
 	return <-reg.Result
 }
 
@@ -89,25 +103,16 @@ func (m *Manager) messageLoop() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	fmt.Println("[Hotkey] Message loop started (blocking GetMessageW)")
+	// Store thread ID so Register can post messages to wake us up
+	tid, _, _ := procGetCurrentThreadId.Call()
+	atomic.StoreUint32(&m.threadID, uint32(tid))
+	close(m.ready)
 
-	// Process any pending registrations before entering the blocking loop.
-	// GetMessageW blocks until a message arrives, so we need to register
-	// hotkeys first, otherwise we'd block forever with nothing registered.
-	for {
-		select {
-		case reg := <-m.regCh:
-			m.doRegister(reg)
-		default:
-			goto loop
-		}
-	}
+	fmt.Println("[Hotkey] Message loop started (blocking GetMessageW, zero CPU)")
 
-loop:
 	var msg MSG
 	for {
 		// GetMessageW blocks until a message is available — zero CPU while waiting.
-		// Returns 0 for WM_QUIT, -1 for error.
 		ret, _, _ := procGetMessage.Call(
 			uintptr(unsafe.Pointer(&msg)),
 			0, 0, 0,
@@ -115,6 +120,9 @@ loop:
 		if int32(ret) <= 0 {
 			return // WM_QUIT or error
 		}
+
+		// Drain any pending registrations
+		m.drainRegistrations()
 
 		if msg.Msg == WM_HOTKEY {
 			hotkeyID := int(msg.WParam)
@@ -125,29 +133,25 @@ loop:
 				go cb()
 			}
 		}
-
-		// Also drain any pending registrations (PostThreadMessage wakes GetMessageW)
-		for {
-			select {
-			case reg := <-m.regCh:
-				m.doRegister(reg)
-			default:
-				goto done
-			}
-		}
-	done:
 	}
 }
 
-func (m *Manager) doRegister(reg Registration) {
-	ret, _, err := procRegisterHotKey.Call(0, uintptr(reg.ID), reg.Modifiers, reg.VK)
-	if ret == 0 {
-		reg.Result <- fmt.Errorf("failed to register %s: %v", reg.Description, err)
-		return
+func (m *Manager) drainRegistrations() {
+	for {
+		select {
+		case reg := <-m.regCh:
+			ret, _, err := procRegisterHotKey.Call(0, uintptr(reg.ID), reg.Modifiers, reg.VK)
+			if ret == 0 {
+				reg.Result <- fmt.Errorf("failed to register %s: %v", reg.Description, err)
+				continue
+			}
+			m.mu.Lock()
+			m.hotkeys[reg.ID] = reg.Callback
+			m.mu.Unlock()
+			fmt.Printf("[Hotkey] Registered %s\n", reg.Description)
+			reg.Result <- nil
+		default:
+			return
+		}
 	}
-	m.mu.Lock()
-	m.hotkeys[reg.ID] = reg.Callback
-	m.mu.Unlock()
-	fmt.Printf("[Hotkey] Registered %s\n", reg.Description)
-	reg.Result <- nil
 }

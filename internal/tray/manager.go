@@ -715,6 +715,7 @@ func (m *Manager) handleIconUpdates() {
 	go watchThemeChanges(m.ctx, themeChanged)
 
 	var lastState state.AppState = state.Active
+	stateChangeCh := m.stateManager.Changed()
 
 	for {
 		select {
@@ -722,7 +723,7 @@ func (m *Manager) handleIconUpdates() {
 			return
 		case <-themeChanged:
 			m.updateIcon(m.stateManager.Get())
-		case <-m.stateManager.Changed():
+		case <-stateChangeCh:
 			currentState := m.stateManager.Get()
 			if currentState != lastState {
 				m.updateIcon(currentState)

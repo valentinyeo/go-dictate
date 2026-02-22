@@ -396,11 +396,12 @@ func run() {
 	// Pause/resume audio capture when the app enters/exits Paused state.
 	// Stopping the WASAPI capture device lets audiodg.exe go idle (zero CPU).
 	go func() {
+		pauseChangeCh := stateManager.Changed()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-stateManager.Changed():
+			case <-pauseChangeCh:
 				s := stateManager.Get()
 				isPaused := s == state.Paused || s == state.MicConflict
 				wasPaused := audioPaused.Load()
@@ -594,6 +595,8 @@ func vadAndSTTManager(
 	meetingTicker := time.NewTicker(1 * time.Second)
 	defer meetingTicker.Stop()
 
+	vadChangeCh := stateManager.Changed()
+
 	for {
 		// When paused, disable ALL processing (zero CPU)
 		var activeAudioRx <-chan []int16
@@ -610,7 +613,7 @@ func vadAndSTTManager(
 			}
 			return
 
-		case <-stateManager.Changed():
+		case <-vadChangeCh:
 			continue
 
 		case <-settingsChangedCh:
