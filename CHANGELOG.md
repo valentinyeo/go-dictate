@@ -5,6 +5,14 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.50] - 2026-02-22 "Smart Media Detection"
+
+### Fixed
+- **Muted videos no longer trigger media auto-pause** - Previously, `IsMediaPlaying()` checked whether an audio session was in "Active" state, but a muted video in Chrome still has an active audio session. Now uses `IAudioMeterInformation::GetPeakValue` to check if audio is actually flowing — muted or paused videos read as zero and are ignored.
+- **Ducking and media auto-pause no longer conflict** - When audio ducking is enabled, media auto-pause is skipped. The user's intent with ducking is "lower the media volume and keep dictating", not "pause dictation entirely." Meetings and recordings still auto-pause regardless of ducking setting.
+
+---
+
 ## [1.8.49] - 2026-02-22 "Efficiency Mode"
 
 ### Added

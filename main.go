@@ -677,7 +677,9 @@ func vadAndSTTManager(
 			currentState := stateManager.Get()
 			meetingActive := audio.IsMeetingActive()
 			recordingActive := audio.IsRecordingActive()
-			mediaPlaying := cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying()
+			// Only auto-pause on media if ducking is off. When ducking is enabled,
+			// the user wants to keep dictating with lowered media volume.
+			mediaPlaying := cfg.Audio.AutoPauseOnMedia && !cfg.Audio.DuckEnabled && audio.IsMediaPlaying()
 
 			if meetingActive || recordingActive || mediaPlaying {
 				if currentState != state.MediaPaused {

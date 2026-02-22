@@ -172,6 +172,14 @@ func checkMediaPlayback() bool {
 	// Get our own process ID to exclude it
 	ourPID := getCurrentProcessID()
 
+	// IAudioMeterInformation IID: {C02216F6-8C67-4B5B-9D00-D008E73E0064}
+	IID_IAudioMeterInformation := syscall.GUID{
+		Data1: 0xC02216F6,
+		Data2: 0x8C67,
+		Data3: 0x4B5B,
+		Data4: [8]byte{0x9D, 0x00, 0xD0, 0x08, 0xE7, 0x3E, 0x00, 0x64},
+	}
+
 	// Check each session
 	for i := int32(0); i < sessionCount; i++ {
 		var session uintptr
@@ -187,12 +195,12 @@ func checkMediaPlayback() bool {
 		}
 
 		// Get session state
-		var state int32
+		var sessionState int32
 		syscall.Syscall(
 			getVTable(session, 3), // GetState
 			2,
 			session,
-			uintptr(unsafe.Pointer(&state)),
+			uintptr(unsafe.Pointer(&sessionState)),
 			0,
 		)
 
@@ -206,12 +214,38 @@ func checkMediaPlayback() bool {
 			0,
 		)
 
-		syscall.Syscall(getVTable(session, 2), 1, session, 0, 0) // Release
-
 		// Check if session is active and not our own process
-		if state == AudioSessionStateActive && processID != ourPID {
-			return true // Found active audio from another process
+		if sessionState == AudioSessionStateActive && processID != ourPID {
+			// Query IAudioMeterInformation to check if audio is actually flowing.
+			// A muted video has an active session but zero peak level.
+			var meter uintptr
+			ret, _, _ = syscall.Syscall6(
+				getVTable(session, 0), // QueryInterface
+				3,
+				session,
+				uintptr(unsafe.Pointer(&IID_IAudioMeterInformation)),
+				uintptr(unsafe.Pointer(&meter)),
+				0, 0, 0,
+			)
+			if ret == 0 && meter != 0 {
+				var peakValue float32
+				syscall.Syscall(
+					getVTable(meter, 3), // GetPeakValue
+					2,
+					meter,
+					uintptr(unsafe.Pointer(&peakValue)),
+					0,
+				)
+				syscall.Syscall(getVTable(meter, 2), 1, meter, 0, 0) // Release meter
+
+				if peakValue > 0.0001 { // Audible threshold
+					syscall.Syscall(getVTable(session, 2), 1, session, 0, 0) // Release session
+					return true // Found actually-audible audio from another process
+				}
+			}
 		}
+
+		syscall.Syscall(getVTable(session, 2), 1, session, 0, 0) // Release session
 	}
 
 	return false

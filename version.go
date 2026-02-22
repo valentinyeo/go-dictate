@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.49"
+	Version        = "1.8.50"
 	BuildDate      = "2026-02-22"
-	VersionName    = "Efficiency Mode"
-	VersionSummary = "Enable Windows EcoQoS: lower priority, power throttling, green leaf"
+	VersionName    = "Smart Media Detection"
+	VersionSummary = "Only detect audible media (not muted), duck instead of pause when ducking on"
 )
