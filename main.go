@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -11,12 +10,10 @@ import (
 	"time"
 	"unsafe"
 
-	"golang.design/x/hotkey"
-	"golang.design/x/hotkey/mainthread"
-
 	"github.com/valen/go-dictate/internal/audio"
 	"github.com/valen/go-dictate/internal/config"
 	"github.com/valen/go-dictate/internal/deepgram"
+	hk "github.com/valen/go-dictate/internal/hotkey"
 	"github.com/valen/go-dictate/internal/keyboard"
 	"github.com/valen/go-dictate/internal/logger"
 	"github.com/valen/go-dictate/internal/stt"
@@ -37,8 +34,7 @@ var (
 )
 
 func main() {
-	// Run on main thread for hotkey support
-	mainthread.Init(run)
+	run()
 }
 
 // enforceSingleInstance uses a Windows named mutex to ensure only one instance runs.
@@ -508,57 +504,36 @@ func registerHotkeys() {
 	// Give tray time to initialize
 	time.Sleep(500 * time.Millisecond)
 
-	logger.Info("[Hotkey] Registering Ctrl+Alt+X for pause/resume...")
+	hkMgr := hk.NewManager()
 
 	// Pause/Resume: Ctrl+Alt+X
-	hkPause := hotkey.New([]hotkey.Modifier{hotkey.ModCtrl, hotkey.ModAlt}, hotkey.KeyX)
-	if err := hkPause.Register(); err != nil {
+	if err := hkMgr.Register(hk.MOD_CONTROL|hk.MOD_ALT, 0x58, "Ctrl+Alt+X (Pause/Resume)", func() {
+		logger.Info("[Hotkey] *** CTRL+ALT+X PRESSED *** Toggling pause...")
+		newState := stateManager.TogglePause()
+		logger.Info("[Hotkey] Pause toggled to: %s", newState)
+	}); err != nil {
 		logger.Error("[Hotkey] FAILED to register Ctrl+Alt+X: %v", err)
-		log.Printf("[Hotkey] FAILED to register Ctrl+Alt+X: %v", err)
-	} else {
-		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+X")
-		log.Println("[Hotkey] Successfully registered Ctrl+Alt+X")
-		go func() {
-			for range hkPause.Keydown() {
-				logger.Info("[Hotkey] *** CTRL+ALT+X PRESSED *** Toggling pause...")
-				log.Println("[Hotkey] Ctrl+Alt+X pressed!")
-				newState := stateManager.TogglePause()
-				logger.Info("[Hotkey] Pause toggled to: %s", newState)
-				log.Printf("[Hotkey] Toggled to: %s\n", newState)
-			}
-		}()
 	}
 
 	// Language toggle: Ctrl+Alt+L
-	hkLanguage := hotkey.New([]hotkey.Modifier{hotkey.ModCtrl, hotkey.ModAlt}, hotkey.KeyL)
-	if err := hkLanguage.Register(); err != nil {
+	if err := hkMgr.Register(hk.MOD_CONTROL|hk.MOD_ALT, 0x4C, "Ctrl+Alt+L (Language Toggle)", func() {
+		logger.Info("[Hotkey] Ctrl+Alt+L pressed - toggling language")
+		if cfg.Deepgram.Language == "en" {
+			cfg.Deepgram.Language = "de"
+		} else {
+			cfg.Deepgram.Language = "en"
+		}
+		if err := cfg.Save(); err != nil {
+			logger.Error("Failed to save language change: %v", err)
+		}
+		logger.Info("Language switched to: %s", cfg.Deepgram.Language)
+		select {
+		case settingsChangedCh <- struct{}{}:
+		default:
+		}
+	}); err != nil {
 		logger.Error("[Hotkey] Failed to register Ctrl+Alt+L: %v", err)
-		log.Printf("[Hotkey] Failed to register Ctrl+Alt+L: %v", err)
-	} else {
-		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+L")
-		log.Println("[Hotkey] Successfully registered Ctrl+Alt+L")
-		go func() {
-			for range hkLanguage.Keydown() {
-				logger.Info("[Hotkey] Ctrl+Alt+L pressed - toggling language")
-				// Toggle language
-				if cfg.Deepgram.Language == "en" {
-					cfg.Deepgram.Language = "de"
-				} else {
-					cfg.Deepgram.Language = "en"
-				}
-				if err := cfg.Save(); err != nil {
-					logger.Error("Failed to save language change: %v", err)
-				}
-				logger.Info("Language switched to: %s", cfg.Deepgram.Language)
-				select {
-				case settingsChangedCh <- struct{}{}:
-				default:
-				}
-			}
-		}()
 	}
-
-	// Removed Ctrl+Alt+Q - user prefers to use tray Exit button
 }
 
 func vadAndSTTManager(
@@ -620,10 +595,12 @@ func vadAndSTTManager(
 	defer meetingTicker.Stop()
 
 	for {
-		// When paused, disable audio processing entirely (zero CPU)
+		// When paused, disable ALL processing (zero CPU)
 		var activeAudioRx <-chan []int16
+		var activeMeetingTick <-chan time.Time
 		if s := stateManager.Get(); s != state.Paused && s != state.MicConflict {
 			activeAudioRx = audioRx
+			activeMeetingTick = meetingTicker.C
 		}
 
 		select {
@@ -657,14 +634,10 @@ func vadAndSTTManager(
 			vad.Reset()
 			stateManager.Set(state.AutoPaused)
 
-		case <-meetingTicker.C:
+		case <-activeMeetingTick:
 			// Independent meeting/recording check - fires even when mic is dead
-			// or audio channel is nil (paused). This ensures Zoom/Teams calls
-			// are detected regardless of audio capture state.
+			// or audio channel is nil. Disabled entirely when paused (channel is nil).
 			currentState := stateManager.Get()
-			if currentState == state.Paused {
-				continue // respect manual pause
-			}
 			meetingActive := audio.IsMeetingActive()
 			recordingActive := audio.IsRecordingActive()
 			mediaPlaying := cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying()

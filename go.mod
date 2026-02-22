@@ -7,7 +7,7 @@ require (
 	github.com/getlantern/systray v1.2.2
 	github.com/gorilla/websocket v1.5.1
 	github.com/pelletier/go-toml/v2 v2.1.1
-	golang.design/x/hotkey v0.4.1
+	golang.org/x/image v0.35.0
 	golang.org/x/sys v0.15.0
 )
 
@@ -20,7 +20,5 @@ require (
 	github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f // indirect
 	github.com/go-stack/stack v1.8.0 // indirect
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
-	golang.design/x/mainthread v0.3.0 // indirect
-	golang.org/x/image v0.35.0 // indirect
 	golang.org/x/net v0.17.0 // indirect
 )

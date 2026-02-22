@@ -5,6 +5,14 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.48] - 2026-02-22 "Zero CPU Pause"
+
+### Fixed
+- **Truly zero CPU when paused** - Three sources of CPU usage while paused have been eliminated:
+  1. **WASAPI capture stopped** - Audio capture device is fully released when paused, letting `audiodg.exe` go idle. Watchdog, mic sync, and wake handler all skip work while paused.
+  2. **Meeting/media ticker disabled** - The 1-second meeting/recording detection ticker is nil'd when paused (same pattern as audio channel), so no COM calls or process enumeration runs.
+  3. **Hotkey polling replaced with blocking GetMessageW** - Replaced `golang.design/x/hotkey` library (which polled PeekMessage at 10ms per hotkey = 200 polls/sec for 2 hotkeys) with internal hotkey manager using blocking `GetMessageW`. The hotkey thread now sleeps in the kernel until a hotkey is actually pressed — zero CPU at all times.
+
 ## [1.8.47] - 2026-02-22 "Pause Stops Audio"
 
 ### Fixed

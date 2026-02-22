@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.47"
+	Version        = "1.8.48"
 	BuildDate      = "2026-02-22"
-	VersionName    = "Pause Stops Audio"
-	VersionSummary = "Stop WASAPI capture when paused so audiodg.exe goes idle"
+	VersionName    = "Zero CPU Pause"
+	VersionSummary = "Truly zero CPU when paused: stop capture, disable tickers, blocking hotkeys"
 )
