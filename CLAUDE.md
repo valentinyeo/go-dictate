@@ -30,7 +30,7 @@ There are no tests in this project. `-H windowsgui` hides the console window; om
 
 ## Version Tracking Workflow
 
-Current version: **1.8.26 "Crash Logging"**
+Current version: **1.8.48 "Zero CPU Pause"**
 
 1. Update `version.go` (Version, BuildDate, VersionName, VersionSummary)
 2. Update `CHANGELOG.md` with new version header and changes
@@ -68,7 +68,7 @@ main thread (systray.Run - blocks)
   +-- Text Bridge goroutine (STT -> keyboard, tracks last-text time for ghost detection)
   +-- Audio Watchdog (5s check, 10s timeout -> restart capture)
   +-- Keyboard Simulator <- transcriptText chan string (buf:10)
-  +-- Hotkey listeners (Ctrl+Alt+X pause, Ctrl+Alt+L language)
+  +-- Hotkey listener (internal/hotkey, blocking GetMessageW, single thread)
   +-- Tray menu handlers (settings, mic switch, feature toggles, STT mode)
 ```
 
@@ -78,6 +78,7 @@ main thread (systray.Run - blocks)
 - **internal/stt/**: `Engine` interface - abstraction for speech-to-text backends
 - **internal/deepgram/**: WebSocket streaming client with send/receive goroutines, JSON response types. Implements `stt.Engine`.
 - **internal/vosk/**: Offline speech-to-text via Vosk. DLL loaded at runtime via syscall (no CGO). Model download manager with progress reporting. Implements `stt.Engine`.
+- **internal/hotkey/**: Global hotkey registration using blocking `GetMessageW` (zero CPU when idle). Single OS-thread-locked goroutine handles all hotkeys. Replaced `golang.design/x/hotkey` which polled PeekMessage at 10ms per hotkey.
 - **internal/keyboard/**: Windows SendInput Unicode character injection
 - **internal/state/**: Thread-safe state machine (Active/Paused/AutoPaused/MediaPaused/Speaking/MicConflict) with change notification channel
 - **internal/tray/**: System tray UI, menu items, feature toggles, mic selector, STT mode toggle, autostart registry
@@ -113,7 +114,17 @@ Ghost speech: if Speaking for 15s with no text from STT, force-close connection 
 
 ### Connection Lifecycle
 
-STT connections open only when speech starts and close after silence. This minimizes Deepgram API cost (nova-3 at $0.36/hr). The `vadAndSTTManager` goroutine owns the connection lifecycle. When paused, the audio channel is set to nil in the select to achieve zero CPU usage.
+STT connections open only when speech starts and close after silence. This minimizes Deepgram API cost (nova-3 at $0.36/hr). The `vadAndSTTManager` goroutine owns the connection lifecycle.
+
+### Pause Behavior (Zero CPU)
+
+When paused (manual or MicConflict), the app achieves truly zero CPU:
+1. **WASAPI capture stopped** - `audioCapture.Stop()` releases the device, `audiodg.exe` goes idle. Controlled by `audioPaused` atomic flag.
+2. **VAD select channels nil'd** - Both `activeAudioRx` and `activeMeetingTick` are set to nil, so the select blocks only on `ctx.Done()`, `stateManager.Changed()`, and `settingsChangedCh`.
+3. **Watchdog/mic-sync skip** - Check `audioPaused.Load()` and `continue` immediately.
+4. **Hotkeys use blocking GetMessageW** - Thread sleeps in kernel, zero polling.
+
+On unpause, capture is restarted with the current `selectedDevice`. Mic changes while paused update `selectedDevice` but defer the actual restart.
 
 A `textBridge` channel sits between the STT engine and keyboard simulator. The bridge goroutine tracks the last-text timestamp for ghost speech detection. NEVER close `textBridge` directly (causes "send on closed channel" panics) - instead set it to nil and let the bridge goroutine exit via its context.
 
