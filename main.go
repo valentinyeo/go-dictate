@@ -55,6 +55,37 @@ func enforceSingleInstance() (uintptr, error) {
 	return handle, nil
 }
 
+// enableEfficiencyMode opts this process into Windows EcoQoS (Efficiency Mode).
+// Lowers priority and enables power throttling — less CPU/power when idle,
+// still responsive when speech arrives. Windows 11 shows the green leaf icon.
+func enableEfficiencyMode() {
+	kernel32 := syscall.NewLazyDLL("kernel32.dll")
+
+	// Set below-normal priority
+	setClass := kernel32.NewProc("SetPriorityClass")
+	getCurrentProcess := kernel32.NewProc("GetCurrentProcess")
+	h, _, _ := getCurrentProcess.Call()
+	const BELOW_NORMAL_PRIORITY_CLASS = 0x00004000
+	setClass.Call(h, BELOW_NORMAL_PRIORITY_CLASS)
+
+	// Enable EcoQoS power throttling (Windows 11+)
+	setInfo := kernel32.NewProc("SetProcessInformation")
+	type PROCESS_POWER_THROTTLING_STATE struct {
+		Version    uint32
+		ControlMask uint32
+		StateMask  uint32
+	}
+	const ProcessPowerThrottling = 4
+	const PROCESS_POWER_THROTTLING_EXECUTION_SPEED = 0x1
+	state := PROCESS_POWER_THROTTLING_STATE{
+		Version:    1,
+		ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+		StateMask:  PROCESS_POWER_THROTTLING_EXECUTION_SPEED,
+	}
+	setInfo.Call(h, ProcessPowerThrottling, uintptr(unsafe.Pointer(&state)), unsafe.Sizeof(state))
+	fmt.Println("[Main] Efficiency Mode enabled (EcoQoS)")
+}
+
 func run() {
 	// Enforce single instance
 	mutexHandle, singleErr := enforceSingleInstance()
@@ -63,6 +94,9 @@ func run() {
 		os.Exit(0)
 	}
 	defer syscall.CloseHandle(syscall.Handle(mutexHandle))
+
+	// Enable Windows Efficiency Mode before anything else
+	enableEfficiencyMode()
 
 	fmt.Printf("=== Dictation App v%s (%s) ===\n", Version, VersionName)
 

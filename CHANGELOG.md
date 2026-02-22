@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.49] - 2026-02-22 "Efficiency Mode"
+
+### Added
+- **Windows Efficiency Mode (EcoQoS)** - The app now opts into Windows 11 Efficiency Mode at startup. Sets below-normal priority and enables power throttling. Windows shows the green leaf icon in Task Manager. The app uses less power when idle and yields CPU to foreground apps, while still being responsive enough for real-time dictation.
+
+---
+
 ## [1.8.48] - 2026-02-22 "Zero CPU Pause"
 
 ### Fixed
