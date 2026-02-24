@@ -125,11 +125,12 @@ waitLoop:
 	go func() {
 		select {
 		case <-ctx.Done():
+			closeDone() // signal send goroutine to stop before touching conn
 			wsMu.Lock()
 			conn.WriteMessage(websocket.CloseMessage,
 				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			conn.Close() // must be inside lock to prevent race with send goroutine
 			wsMu.Unlock()
-			conn.Close()
 		case <-done:
 		}
 	}()

@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.50"
-	BuildDate      = "2026-02-22"
-	VersionName    = "Smart Media Detection"
-	VersionSummary = "Only detect audible media (not muted), duck instead of pause when ducking on"
+	Version        = "1.8.51"
+	BuildDate      = "2026-02-24"
+	VersionName    = "WebSocket Race Fix"
+	VersionSummary = "Fix concurrent websocket write panic in Deepgram client"
 )

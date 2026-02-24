@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.51] - 2026-02-24 "WebSocket Race Fix"
+
+### Fixed
+- **Fix concurrent websocket write panic in Deepgram client** - The close goroutine called `conn.Close()` outside the write mutex, racing with the send goroutine's `WriteMessage`. Now `conn.Close()` is held inside `wsMu.Lock()` and the `done` channel is closed first to signal the send goroutine to stop.
+
+---
+
 ## [1.8.50] - 2026-02-22 "Smart Media Detection"
 
 ### Fixed
