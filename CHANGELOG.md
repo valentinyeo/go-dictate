@@ -5,6 +5,15 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.52] - 2026-02-24 "Audio Recovery"
+
+### Added
+- **Auto-restart Windows Audio service** - When the watchdog exhausts all 5 restart attempts (mic stuck producing zeros, common with Intel SST after Zoom/Teams calls), it now automatically restarts the Windows Audio service (Audiosrv) via elevated PowerShell. This is the nuclear option that reliably fixes the stuck driver state.
+- **"Reset Audio" tray menu item** - Manual option to restart the Windows Audio service and relaunch the app. Shows UAC prompt.
+- **Quick restart (Stop/Start)** - First 2 watchdog attempts now use a lightweight device Stop+Start instead of full teardown+rebuild, preserving driver state.
+
+---
+
 ## [1.8.51] - 2026-02-24 "WebSocket Race Fix"
 
 ### Fixed

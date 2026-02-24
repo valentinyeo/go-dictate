@@ -171,6 +171,23 @@ func (c *Capture) PeakRMS() float64 {
 	return math.Float64frombits(bits)
 }
 
+// QuickRestart does a lightweight Stop+Start on the device without tearing
+// down the malgo context. This preserves driver state and is faster than a
+// full Stop+NewCapture cycle. Returns an error if the device can't restart.
+func (c *Capture) QuickRestart() error {
+	if c.device == nil {
+		return fmt.Errorf("no device")
+	}
+	c.device.Stop()
+	time.Sleep(200 * time.Millisecond)
+	if err := c.device.Start(); err != nil {
+		return fmt.Errorf("device start failed: %w", err)
+	}
+	c.lastCallbackNano.Store(time.Now().UnixNano())
+	c.peakRMS.Store(0)
+	return nil
+}
+
 func (c *Capture) Stop() {
 	if c.device != nil {
 		c.device.Uninit()
