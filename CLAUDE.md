@@ -30,7 +30,7 @@ There are no tests in this project. `-H windowsgui` hides the console window; om
 
 ## Version Tracking Workflow
 
-Current version: **1.8.48 "Zero CPU Pause"**
+Current version: **1.8.54 "Aggressive Ducking"**
 
 1. Update `version.go` (Version, BuildDate, VersionName, VersionSummary)
 2. Update `CHANGELOG.md` with new version header and changes
@@ -164,7 +164,7 @@ Enforced via Windows named mutex (`Global\GoDictateAppMutex`). Second instances 
 api_key, language (en/de), model (nova-3), punctuate, filler_words, keywords
 
 [audio]
-silence_threshold_ms (3000), duck_volume (0.2), duck_enabled, auto_pause_on_media, device_name
+silence_threshold_ms (3000), duck_volume (0.05), duck_enabled, auto_pause_on_media, device_name
 
 [vad]
 energy_threshold (0.02)
