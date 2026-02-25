@@ -53,7 +53,7 @@ func Default() Config {
 		},
 		Audio: AudioConfig{
 			SilenceThresholdMs: 3000,
-			DuckVolume:         0.2,
+			DuckVolume:         0.05,
 			DuckEnabled:        false,
 			AutoPauseOnMedia:   true,
 		},

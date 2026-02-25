@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.54] - 2026-02-25 "Aggressive Ducking"
+
+### Changed
+- **Duck per-app volume to 5%** (was 20%) - Previous duck level was imperceptible when app volume was already low (e.g. Edge at 21% ducked to 20%). Now ducks to 5% which is clearly audible.
+
+---
+
 ## [1.8.53] - 2026-02-25 "Ducking Fix"
 
 ### Fixed

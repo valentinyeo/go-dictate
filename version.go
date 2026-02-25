@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.53"
+	Version        = "1.8.54"
 	BuildDate      = "2026-02-25"
-	VersionName    = "Ducking Fix"
-	VersionSummary = "Fix audio ducking - COM float args passed by pointer instead of by value"
+	VersionName    = "Aggressive Ducking"
+	VersionSummary = "Duck per-app volume to 5% (was 20%) so ducking is actually audible"
 )
