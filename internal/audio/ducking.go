@@ -2,6 +2,7 @@ package audio
 
 import (
 	"fmt"
+	"math"
 	"runtime"
 	"sync"
 	"syscall"
@@ -107,7 +108,7 @@ func (d *AudioDucker) Duck() error {
 		getVTable(volume, 7), // SetMasterVolumeLevelScalar
 		3,
 		volume,
-		uintptr(unsafe.Pointer(&targetVolume)),
+		uintptr(math.Float32bits(targetVolume)),
 		0, // Event context (null)
 	)
 	logger.Info("[AudioDucker] SetMasterVolumeLevelScalar returned HRESULT: 0x%X", ret)
@@ -203,7 +204,7 @@ func (d *AudioDucker) Restore() error {
 		getVTable(volume, 7), // SetMasterVolumeLevelScalar
 		3,
 		volume,
-		uintptr(unsafe.Pointer(&d.originalVolume)),
+		uintptr(math.Float32bits(d.originalVolume)),
 		0, // Event context (null)
 	)
 

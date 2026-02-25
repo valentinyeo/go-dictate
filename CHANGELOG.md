@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.53] - 2026-02-25 "Ducking Fix"
+
+### Fixed
+- **Fix audio ducking not working** - Both `AppVolumeDucker` (per-app) and `AudioDucker` (system master) were passing float arguments to COM `SetMasterVolume`/`SetMasterVolumeLevelScalar` via `unsafe.Pointer` (passing the address). COM expects float by value in XMM registers. Fixed by using `math.Float32bits()` to pass the float's bit pattern directly, which Go's `asmstdcall` correctly loads into XMM registers.
+
+---
+
 ## [1.8.52] - 2026-02-24 "Audio Recovery"
 
 ### Added

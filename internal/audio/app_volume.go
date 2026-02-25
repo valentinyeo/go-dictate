@@ -2,6 +2,7 @@ package audio
 
 import (
 	"fmt"
+	"math"
 	"runtime"
 	"strings"
 	"sync"
@@ -216,13 +217,14 @@ func (d *AppVolumeDucker) Duck() error {
 		// Store original volume
 		d.originalVolumes[processID] = currentVolume
 
-		// Set ducked volume
+		// Set ducked volume - pass float bits directly so Go's asmstdcall
+		// loads them into the XMM register (COM expects float by value, not pointer)
 		targetVolume := d.duckVolume
 		ret, _, _ = syscall.Syscall(
 			getVTable(simpleVolume, 3), // SetMasterVolume
 			3,
 			simpleVolume,
-			uintptr(unsafe.Pointer(&targetVolume)),
+			uintptr(math.Float32bits(targetVolume)),
 			0,
 		)
 
@@ -414,12 +416,12 @@ func (d *AppVolumeDucker) Restore() error {
 			0,
 		)
 
-		// Restore original volume
+		// Restore original volume - pass float bits directly (COM expects float by value)
 		ret, _, _ = syscall.Syscall(
 			getVTable(simpleVolume, 3), // SetMasterVolume
 			3,
 			simpleVolume,
-			uintptr(unsafe.Pointer(&originalVolume)),
+			uintptr(math.Float32bits(originalVolume)),
 			0,
 		)
 
