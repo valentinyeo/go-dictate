@@ -101,6 +101,11 @@ func LoadOrCreate() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// Migrate: if keyterms is empty, copy keywords over (Nova-3 uses keyterms)
+	if len(cfg.Deepgram.Keyterms) == 0 && len(cfg.Deepgram.Keywords) > 0 {
+		cfg.Deepgram.Keyterms = cfg.Deepgram.Keywords
+	}
+
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
