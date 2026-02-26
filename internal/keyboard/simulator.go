@@ -47,6 +47,13 @@ func NewSimulator() *Simulator {
 	}
 }
 
+// ResetContext clears the lastChar state so the next utterance
+// does not get a period prepended. Call when silence is detected
+// (STT session ends) so each speech session starts fresh.
+func (s *Simulator) ResetContext() {
+	s.lastChar = 0
+}
+
 func (s *Simulator) Run(ctx context.Context, textRx <-chan string) {
 	for {
 		select {

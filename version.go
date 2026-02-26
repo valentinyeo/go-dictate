@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.58"
+	Version        = "1.8.59"
 	BuildDate      = "2026-02-26"
-	VersionName    = "Keyterm Boost"
-	VersionSummary = "Add personal keyterms (Valentin Yeo, Hypertask, Inne)"
+	VersionName    = "Clean Starts"
+	VersionSummary = "Fix stray period at start of new speech sessions"
 )

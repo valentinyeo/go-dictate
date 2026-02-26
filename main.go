@@ -182,7 +182,7 @@ func run() {
 
 	// Start VAD processor and STT engine manager (settingsChangedCh wired after tray creation)
 	settingsChangedCh = make(chan struct{}, 1)
-	go vadAndSTTManager(ctx, audioChunks, transcriptText, stateManager, cfg, settingsChangedCh)
+	go vadAndSTTManager(ctx, audioChunks, transcriptText, stateManager, cfg, settingsChangedCh, sim)
 
 	// Create and run system tray
 	fmt.Println("[Main] Creating system tray...")
@@ -621,6 +621,7 @@ func vadAndSTTManager(
 	stateManager *state.Manager,
 	cfg *config.Config,
 	settingsChangedCh <-chan struct{},
+	sim *keyboard.Simulator,
 ) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -964,6 +965,7 @@ func vadAndSTTManager(
 				textBridge = nil // don't close - bridge goroutine exits via sttCtx
 
 				vad.Reset()
+				sim.ResetContext() // Clear lastChar so next session doesn't prepend a period
 				preRoll = preRoll[:0] // Clear pre-roll for next utterance
 
 				if mediaCache := audio.IsMediaPlayingCached(); mediaCache {

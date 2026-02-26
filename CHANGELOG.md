@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.59] - 2026-02-26 "Clean Starts"
+
+### Fixed
+- **Fix stray period at start of new speech sessions** - The auto-period insertion (v1.8.55) would prepend `. ` to the first utterance of a new speech session if the previous session's last utterance lacked trailing punctuation. Now resets context on silence detection so each speech session starts clean.
+
+---
+
 ## [1.8.58] - 2026-02-26 "Keyterm Boost"
 
 ### Added
