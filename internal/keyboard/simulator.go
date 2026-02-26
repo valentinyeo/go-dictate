@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+	"unicode"
+	"unicode/utf8"
 	"unsafe"
 
 	"github.com/valen/go-dictate/internal/logger"
@@ -68,7 +70,12 @@ func (s *Simulator) typeText(text string) {
 	// (i.e., this isn't the very first text being typed)
 	textToType := text
 	if s.lastChar != 0 {
-		textToType = " " + text
+		firstRune, _ := utf8.DecodeRuneInString(text)
+		if needsPeriod(s.lastChar, firstRune) {
+			textToType = ". " + text
+		} else {
+			textToType = " " + text
+		}
 	}
 
 	logger.Typed(textToType)
@@ -79,6 +86,16 @@ func (s *Simulator) typeText(text string) {
 		s.lastChar = ch
 		time.Sleep(2 * time.Millisecond)
 	}
+}
+
+// needsPeriod returns true if a period should be inserted between two utterances.
+// Detects when the previous utterance ended without sentence-ending punctuation
+// and the new utterance starts with an uppercase letter (indicating a new sentence).
+func needsPeriod(lastChar, firstChar rune) bool {
+	if lastChar == '.' || lastChar == '!' || lastChar == '?' || lastChar == ':' || lastChar == ';' {
+		return false
+	}
+	return unicode.IsUpper(firstChar)
 }
 
 func (s *Simulator) sendUnicodeChar(ch rune) {
