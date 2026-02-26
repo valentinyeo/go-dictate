@@ -846,6 +846,7 @@ func vadAndSTTManager(
 						cfg.Deepgram.Punctuate,
 						cfg.Deepgram.FillerWords,
 						cfg.Deepgram.Keywords,
+						cfg.Deepgram.Keyterms,
 					)
 				}
 

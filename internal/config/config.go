@@ -22,6 +22,7 @@ type DeepgramConfig struct {
 	Punctuate    bool     `toml:"punctuate"`
 	FillerWords  bool     `toml:"filler_words"`
 	Keywords     []string `toml:"keywords"`
+	Keyterms     []string `toml:"keyterms"`
 }
 
 type AudioConfig struct {
@@ -50,6 +51,7 @@ func Default() Config {
 			Punctuate:   true,
 			FillerWords: true,
 			Keywords:    []string{},
+			Keyterms:    []string{"Claude Code", "exe", "GitHub", "Deepgram", "Vosk"},
 		},
 		Audio: AudioConfig{
 			SilenceThresholdMs: 3000,
@@ -129,7 +131,8 @@ func (c *Config) Save() error {
 # language: en (English), de (German) - toggle with Ctrl+Alt+Shift+L
 # punctuate: Enable automatic punctuation and capitalization (true/false)
 # filler_words: Remove "um", "uh", "like", etc. (true/false)
-# keywords: List of words to boost recognition (e.g., ["GitHub", "API", "SQL"])
+# keywords: List of words to boost recognition (e.g., ["GitHub", "API", "SQL"]) - Nova-2 only
+# keyterms: List of words/phrases for Nova-3 keyterm prompting (e.g., ["Claude Code", "exe"])
 
 # Audio settings
 # silence_threshold_ms: Auto-pause after this many milliseconds of silence

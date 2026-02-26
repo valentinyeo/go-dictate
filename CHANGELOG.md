@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.57] - 2026-02-26 "Keyterm Boost"
+
+### Added
+- **Deepgram keyterm prompting for Nova-3** - Custom vocabulary terms are now sent as `keyterm` parameters to boost recognition accuracy up to 90%. Default terms include "Claude Code", "exe", "GitHub", "Deepgram", and "Vosk". Add your own in config.toml under `[deepgram] keyterms`.
+
+---
+
 ## [1.8.56] - 2026-02-26 "Meeting Override"
 
 ### Fixed

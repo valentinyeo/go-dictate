@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -21,9 +22,10 @@ type Client struct {
 	punctuate   bool
 	fillerWords bool
 	keywords    []string
+	keyterms    []string
 }
 
-func NewClient(apiKey, language, model string, punctuate, fillerWords bool, keywords []string) *Client {
+func NewClient(apiKey, language, model string, punctuate, fillerWords bool, keywords, keyterms []string) *Client {
 	return &Client{
 		apiKey:      apiKey,
 		language:    language,
@@ -31,31 +33,34 @@ func NewClient(apiKey, language, model string, punctuate, fillerWords bool, keyw
 		punctuate:   punctuate,
 		fillerWords: fillerWords,
 		keywords:    keywords,
+		keyterms:    keyterms,
 	}
 }
 
 func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, textTx chan<- string) error {
 	// Build URL with optional punctuation and dictation parameters
-	url := fmt.Sprintf(
+	wsURL := fmt.Sprintf(
 		"wss://api.deepgram.com/v1/listen?model=%s&encoding=linear16&sample_rate=16000&channels=1&language=%s",
 		c.model, c.language,
 	)
 
 	if c.punctuate {
-		url += "&smart_format=true&paragraphs=true"
+		wsURL += "&smart_format=true&paragraphs=true"
 	}
 
 	if c.fillerWords {
-		url += "&filler_words=true"
+		wsURL += "&filler_words=true"
 	}
 
-	// Note: keywords parameter not supported by Nova-3 streaming API
-	// Kept in config for future use when Deepgram adds support
+	// Nova-3 keyterm prompting (replaces keywords for Nova-3)
+	for _, term := range c.keyterms {
+		wsURL += "&keyterm=" + url.QueryEscape(term)
+	}
 
 	headers := http.Header{}
 	headers.Set("Authorization", fmt.Sprintf("Token %s", c.apiKey))
 
-	logger.Info("[Deepgram] Connecting to %s", url)
+	logger.Info("[Deepgram] Connecting to %s", wsURL)
 
 	// Dial in background so we can buffer audio while connecting
 	type dialResult struct {
@@ -70,7 +75,7 @@ func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 				Timeout: 10 * time.Second,
 			}).DialContext,
 		}
-		conn, _, err := dialer.Dial(url, headers)
+		conn, _, err := dialer.Dial(wsURL, headers)
 		dialCh <- dialResult{conn, err}
 	}()
 
