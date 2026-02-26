@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.56] - 2026-02-26 "Meeting Override"
+
+### Fixed
+- **Auto-pause toggle now controls meeting/recording detection** - Previously, unchecking "Auto-pause in Meetings" only disabled media audio detection but meetings and screen recordings still forced a pause. Now the toggle controls all three: meetings, recordings, and media playback.
+
+---
+
 ## [1.8.55] - 2026-02-26 "Auto Period"
 
 ### Added

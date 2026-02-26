@@ -718,8 +718,8 @@ func vadAndSTTManager(
 			// Independent meeting/recording check - fires even when mic is dead
 			// or audio channel is nil. Disabled entirely when paused (channel is nil).
 			currentState := stateManager.Get()
-			meetingActive := audio.IsMeetingActive()
-			recordingActive := audio.IsRecordingActive()
+			meetingActive := cfg.Audio.AutoPauseOnMedia && audio.IsMeetingActive()
+			recordingActive := cfg.Audio.AutoPauseOnMedia && audio.IsRecordingActive()
 			// Only auto-pause on media if ducking is off. When ducking is enabled,
 			// the user wants to keep dictating with lowered media volume.
 			mediaPlaying := cfg.Audio.AutoPauseOnMedia && !cfg.Audio.DuckEnabled && audio.IsMediaPlaying()
@@ -767,8 +767,8 @@ func vadAndSTTManager(
 			// Note: media playback detection is handled by the meetingTicker only,
 			// not here on every audio chunk, because IsMediaPlaying() does heavy
 			// COM calls that can hang and block this entire goroutine.
-			meetingActive := audio.IsMeetingActive()
-			recordingActive := audio.IsRecordingActive()
+			meetingActive := cfg.Audio.AutoPauseOnMedia && audio.IsMeetingActive()
+			recordingActive := cfg.Audio.AutoPauseOnMedia && audio.IsRecordingActive()
 
 			if meetingActive || recordingActive {
 				if currentState == state.Active || currentState == state.AutoPaused {
