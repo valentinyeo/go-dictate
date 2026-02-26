@@ -99,7 +99,7 @@ func (s *Simulator) typeText(text string) {
 // Detects when the previous utterance ended without sentence-ending punctuation
 // and the new utterance starts with an uppercase letter (indicating a new sentence).
 func needsPeriod(lastChar, firstChar rune) bool {
-	if lastChar == '.' || lastChar == '!' || lastChar == '?' || lastChar == ':' || lastChar == ';' {
+	if lastChar == '.' || lastChar == '!' || lastChar == '?' || lastChar == ':' || lastChar == ';' || lastChar == ',' {
 		return false
 	}
 	return unicode.IsUpper(firstChar)

@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.60] - 2026-02-26 "Comma Aware"
+
+### Fixed
+- **Don't insert period after commas** - When Deepgram splits an utterance at a comma (e.g., `"Valentin Yeo,"` then `"I work for..."`), the auto-period feature would produce `"Yeo,. I work"`. Now treats commas as continuation punctuation.
+
+---
+
 ## [1.8.59] - 2026-02-26 "Clean Starts"
 
 ### Fixed
