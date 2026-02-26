@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.57"
+	Version        = "1.8.58"
 	BuildDate      = "2026-02-26"
 	VersionName    = "Keyterm Boost"
-	VersionSummary = "Deepgram keyterm prompting for custom vocabulary (Claude Code, exe, etc.)"
+	VersionSummary = "Add personal keyterms (Valentin Yeo, Hypertask, Inne)"
 )

@@ -51,7 +51,7 @@ func Default() Config {
 			Punctuate:   true,
 			FillerWords: true,
 			Keywords:    []string{},
-			Keyterms:    []string{"Claude Code", "exe", "GitHub", "Deepgram", "Vosk"},
+			Keyterms:    []string{"Claude Code", "exe", "GitHub", "Deepgram", "Vosk", "Valentin Yeo", "Hypertask", "Inne"},
 		},
 		Audio: AudioConfig{
 			SilenceThresholdMs: 3000,

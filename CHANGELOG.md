@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.58] - 2026-02-26 "Keyterm Boost"
+
+### Added
+- **Personal keyterms** - Added "Valentin Yeo", "Hypertask", and "Inne" to default keyterms for better recognition of names and business terms.
+
+---
+
 ## [1.8.57] - 2026-02-26 "Keyterm Boost"
 
 ### Added
