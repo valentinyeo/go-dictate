@@ -30,7 +30,7 @@ There are no tests in this project. `-H windowsgui` hides the console window; om
 
 ## Version Tracking Workflow
 
-Current version: **1.8.54 "Aggressive Ducking"**
+Current version: **1.8.60 "Comma Aware"**
 
 1. Update `version.go` (Version, BuildDate, VersionName, VersionSummary)
 2. Update `CHANGELOG.md` with new version header and changes
