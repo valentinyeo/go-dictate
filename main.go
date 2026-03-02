@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -392,22 +391,7 @@ func run() {
 					restartAttempts++
 
 					if restartAttempts > maxRestartAttempts {
-						// Nuclear option: restart Windows Audio service (requires UAC)
-						logger.Info("[Watchdog] %d restart attempts failed - restarting Windows Audio service", maxRestartAttempts)
-						audioMu.Unlock()
-						restartWindowsAudioService()
-						time.Sleep(3 * time.Second)
-						audioMu.Lock()
-						audioCapture.Stop()
-						newCapture, err := audio.NewCapture(audioChunks, selectedDevice)
-						if err != nil {
-							newCapture, err = audio.NewCapture(audioChunks, nil)
-						}
-						if err == nil {
-							audioCapture = newCapture
-							logger.Info("[Watchdog] Audio capture restarted after service reset")
-						}
-						// Enter monitor mode to see if it worked
+						logger.Info("[Watchdog] %d restart attempts failed - entering monitor mode (will retry in 1 min)", maxRestartAttempts)
 						monitorOnly = true
 						flatLineCount = 0
 						audioMu.Unlock()
@@ -610,20 +594,6 @@ func registerHotkeys() {
 	}
 }
 
-// restartWindowsAudioService restarts the Windows Audio service via an
-// elevated PowerShell process. This resets WASAPI state when the audio
-// driver gets stuck (e.g., Intel SST power management). The UAC prompt
-// is suppressed by using a scheduled task trick: create, run, delete.
-func restartWindowsAudioService() {
-	logger.Info("[Watchdog] Attempting Windows Audio service restart")
-	cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command",
-		`Start-Process powershell -Verb RunAs -WindowStyle Hidden -ArgumentList '-Command','Restart-Service -Name Audiosrv -Force'`)
-	if err := cmd.Run(); err != nil {
-		logger.Error("[Watchdog] Failed to restart audio service: %v", err)
-	} else {
-		logger.Info("[Watchdog] Windows Audio service restart initiated")
-	}
-}
 
 func vadAndSTTManager(
 	ctx context.Context,

@@ -5,6 +5,14 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.62] - 2026-03-02 "No More Nukes"
+
+### Removed
+- **Removed Windows Audio service restart ("nuclear option")** - The audio watchdog would restart the entire Windows Audio service (`Audiosrv`) after 5 failed mic recovery attempts. This spawned elevated PowerShell processes that flashed shell windows on screen and disrupted all system audio. The watchdog now simply enters monitor mode and retries periodically — the mic usually recovers on its own.
+- **Tray "Reset Audio" no longer touches Windows Audio service** - Now just restarts the app to get a fresh audio capture, without system-wide audio disruption.
+
+---
+
 ## [1.8.61] - 2026-03-02 "Wake Resilient"
 
 ### Fixed
