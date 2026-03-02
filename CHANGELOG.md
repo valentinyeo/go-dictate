@@ -5,6 +5,14 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.61] - 2026-03-02 "Wake Resilient"
+
+### Fixed
+- **Watchdog recovers mic after sleep/wake while paused** - When a wake event occurred while the app was paused, the audio device would be dead on unpause. The watchdog burned through all 5 restart attempts on stale hardware, then gave up. Now defers the wake restart to unpause time (with 5s settle delay) so the mic re-initializes properly.
+- **Faster monitor mode retries** - Reduced watchdog monitor-mode retry interval from 5 minutes to 1 minute, so the mic recovers faster if the initial restart attempts fail.
+
+---
+
 ## [1.8.60] - 2026-02-26 "Comma Aware"
 
 ### Fixed

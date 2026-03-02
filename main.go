@@ -32,6 +32,7 @@ var (
 	ctx               context.Context
 	cancel            context.CancelFunc
 	audioPaused       atomic.Bool // true when capture is stopped due to pause
+	missedWake        atomic.Bool // true when wake happened while paused
 )
 
 func main() {
@@ -267,7 +268,7 @@ func run() {
 		const flatLineMax = 4          // 4 * 5s = 20s of flat audio before restart
 		const maxRestartAttempts = 5    // stop restarting after this many failures
 		const monitorOnlyLogInterval = 60 // log every 60 ticks (5 min) while monitoring
-		const monitorRetryInterval = 60   // retry from monitor mode every 60 ticks (5 min)
+		const monitorRetryInterval = 12   // retry from monitor mode every 12 ticks (1 min)
 		flatLineCount := 0
 		restartAttempts := 0
 		monitorOnly := false // true = gave up restarting, just watching RMS
@@ -285,7 +286,8 @@ func run() {
 				// Wait a few seconds for audio subsystem to settle, then
 				// force a fresh capture restart.
 				if audioPaused.Load() {
-					logger.Info("[Watchdog] Wake event while paused - skipping restart")
+					logger.Info("[Watchdog] Wake event while paused - flagging for unpause restart")
+					missedWake.Store(true)
 					continue
 				}
 				logger.Info("[Watchdog] Wake event received - waiting 5s for audio subsystem to settle")
@@ -478,6 +480,11 @@ func run() {
 					fmt.Println("[Pause] Audio capture stopped")
 				} else if !isPaused && wasPaused {
 					// Leaving pause - restart capture
+					wakeDeferred := missedWake.Swap(false)
+					if wakeDeferred {
+						logger.Info("[Pause] Wake event was deferred - waiting 5s for audio subsystem to settle")
+						time.Sleep(5 * time.Second)
+					}
 					audioMu.Lock()
 					newCapture, err := audio.NewCapture(audioChunks, selectedDevice)
 					if err != nil {
@@ -487,7 +494,11 @@ func run() {
 					if err == nil {
 						audioCapture = newCapture
 						audioPaused.Store(false)
-						logger.Info("[Pause] Audio capture restarted")
+						if wakeDeferred {
+							logger.Info("[Pause] Audio capture restarted (post-wake)")
+						} else {
+							logger.Info("[Pause] Audio capture restarted")
+						}
 						fmt.Println("[Pause] Audio capture restarted")
 					} else {
 						logger.Error("[Pause] CRITICAL: Cannot restart audio: %v", err)
