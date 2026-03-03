@@ -60,8 +60,8 @@ func IsMeetingActive() bool {
 func checkMicPrivacyRegistry() bool {
 	const basePath = `Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone`
 
-	// Get our own exe name to exclude it
-	ourExeName := strings.ToLower("go-dictate.exe")
+	// Exclude any go-dictate variant (go-dictate.exe, go-dictate-debug.exe, etc.)
+	const ourExePrefix = "go-dictate"
 
 	// Check both NonPackaged apps (e.g. Chrome, Firefox) and Packaged apps
 	// (e.g. new Teams "MSTeams_8wekyb3d8bbwe"). Packaged app keys are direct
@@ -105,9 +105,9 @@ func checkMicPrivacyRegistry() bool {
 
 			// Active if start > 0 and stop == 0 (still using mic)
 			if stop == 0 || (errStop != nil && start > 0) {
-				// Check it's not our own exe
+				// Check it's not our own exe (any go-dictate variant)
 				nameLower := strings.ToLower(subKeyName)
-				if strings.Contains(nameLower, ourExeName) {
+				if strings.Contains(nameLower, ourExePrefix) {
 					continue
 				}
 
