@@ -5,10 +5,11 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.8.63] - 2026-03-03 "Self Aware"
+## [1.8.64] - 2026-03-03 "Self Aware"
 
 ### Fixed
-- **Meeting detector no longer detects itself** - The registry-based mic usage check hardcoded `go-dictate.exe` as the self-exclusion name. Any variant (e.g. debug builds) or stale registry entries from force-killed instances would trigger false "meeting detected" auto-pause. Now excludes any exe matching the `go-dictate` prefix.
+- **Meeting detector no longer detects itself** - The registry-based mic usage check hardcoded `go-dictate.exe` as the self-exclusion name. Any variant (e.g. debug builds) or stale registry entries from force-killed instances would trigger false "meeting detected" auto-pause. Now uses a prefix-based exclusion.
+- **Exclude Beeper from meeting detection** - Beeper (messaging app) holds mic access open at all times, causing permanent false "meeting detected" auto-pause. Added an exclusion list for apps known to keep mic registered without active calls.
 
 ---
 
