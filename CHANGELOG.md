@@ -5,6 +5,14 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.65] - 2026-03-05 "ARM Ready"
+
+### Added
+- **Native ARM64 build** - App now builds natively for Windows ARM64, eliminating x64 emulation overhead.
+- **Architecture-aware Vosk DLL download** - Uses `runtime.GOARCH` to select the correct Vosk library. Since Vosk has no ARM64 Windows DLL, offline mode gracefully reports unavailability on ARM64 instead of downloading an incompatible x64 binary.
+
+---
+
 ## [1.8.64] - 2026-03-03 "Self Aware"
 
 ### Fixed

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -56,7 +57,15 @@ var Models = map[string]ModelInfo{
 	},
 }
 
-const voskDLLURL = "https://github.com/alphacep/vosk-api/releases/download/v0.3.45/vosk-win64-0.3.45.zip"
+// voskDLLURL returns the download URL for the Vosk library matching the current architecture.
+// Returns empty string if no compatible binary is available (e.g. ARM64).
+func voskDLLURL() string {
+	if runtime.GOARCH == "amd64" {
+		return "https://github.com/alphacep/vosk-api/releases/download/v0.3.45/vosk-win64-0.3.45.zip"
+	}
+	// No ARM64 Windows build available from Vosk
+	return ""
+}
 
 // GetModelsDir returns the path to the models directory.
 func GetModelsDir() (string, error) {
@@ -140,6 +149,11 @@ func EnsureVoskLibrary(progressFn func(downloaded, total int64)) error {
 		return nil
 	}
 
+	dllURL := voskDLLURL()
+	if dllURL == "" {
+		return fmt.Errorf("offline mode is not available on %s — no Vosk library for this architecture", runtime.GOARCH)
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get exe path: %w", err)
@@ -153,7 +167,7 @@ func EnsureVoskLibrary(progressFn func(downloaded, total int64)) error {
 	tmpPath := tmpFile.Name()
 	defer os.Remove(tmpPath)
 
-	if err := downloadFile(voskDLLURL, tmpFile, progressFn); err != nil {
+	if err := downloadFile(dllURL, tmpFile, progressFn); err != nil {
 		tmpFile.Close()
 		return err
 	}
