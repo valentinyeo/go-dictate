@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.66] - 2026-03-06 "Mic Hotkey"
+
+### Added
+- **Ctrl+Alt+M cycles through microphones** - Press the hotkey to switch to the next microphone in the list (wraps around to System Default). Shows a Windows balloon notification with the new mic name for visual confirmation.
+
+---
+
 ## [1.8.65] - 2026-03-05 "ARM Ready"
 
 ### Added

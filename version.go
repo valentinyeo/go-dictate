@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.65"
-	BuildDate      = "2026-03-05"
-	VersionName    = "ARM Ready"
-	VersionSummary = "Native ARM64 build, arch-aware Vosk DLL download"
+	Version        = "1.8.66"
+	BuildDate      = "2026-03-06"
+	VersionName    = "Mic Hotkey"
+	VersionSummary = "Ctrl+Alt+M cycles microphone with balloon notification"
 )

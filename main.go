@@ -16,6 +16,7 @@ import (
 	hk "github.com/valen/go-dictate/internal/hotkey"
 	"github.com/valen/go-dictate/internal/keyboard"
 	"github.com/valen/go-dictate/internal/logger"
+	"github.com/valen/go-dictate/internal/notify"
 	"github.com/valen/go-dictate/internal/stt"
 	"github.com/valen/go-dictate/internal/state"
 	"github.com/valen/go-dictate/internal/tray"
@@ -32,6 +33,7 @@ var (
 	cancel            context.CancelFunc
 	audioPaused       atomic.Bool // true when capture is stopped due to pause
 	missedWake        atomic.Bool // true when wake happened while paused
+	trayMgr           *tray.Manager
 )
 
 func main() {
@@ -186,11 +188,11 @@ func run() {
 
 	// Create and run system tray
 	fmt.Println("[Main] Creating system tray...")
-	trayManager := tray.NewManager(stateManager, cfg, micNames, cfg.Audio.DeviceName)
+	trayMgr = tray.NewManager(stateManager, cfg, micNames, cfg.Audio.DeviceName)
 
 	// Forward settings changes from tray to VAD manager
 	go func() {
-		for range trayManager.SettingsChangedCh {
+		for range trayMgr.SettingsChangedCh {
 			select {
 			case settingsChangedCh <- struct{}{}:
 			default:
@@ -200,7 +202,7 @@ func run() {
 
 	// Handle microphone changes from tray menu
 	go func() {
-		for deviceName := range trayManager.MicChangedCh {
+		for deviceName := range trayMgr.MicChangedCh {
 			displayName := deviceName
 			if displayName == "" {
 				displayName = "System Default"
@@ -498,7 +500,7 @@ func run() {
 	// detect when the user changes the Windows default in Sound Settings and
 	// restart capture so the app picks up the new device.
 	go func() {
-		<-trayManager.ReadyCh()
+		<-trayMgr.ReadyCh()
 		var lastDefault string
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
@@ -553,9 +555,10 @@ func run() {
 	fmt.Printf("[Main] Dictation app v%s ready!\n", Version)
 	fmt.Println("[Main] - Ctrl+Alt+X: Pause/Resume")
 	fmt.Println("[Main] - Ctrl+Alt+L: Toggle language (EN ↔ DE)")
+	fmt.Println("[Main] - Ctrl+Alt+M: Cycle microphone")
 
 	// Run tray (blocks until exit)
-	trayManager.Run()
+	trayMgr.Run()
 }
 
 func registerHotkeys() {
@@ -565,15 +568,19 @@ func registerHotkeys() {
 	hkMgr := hk.NewManager()
 
 	// Pause/Resume: Ctrl+Alt+X
+	logger.Info("[Hotkey] Registering Ctrl+Alt+X for pause/resume...")
 	if err := hkMgr.Register(hk.MOD_CONTROL|hk.MOD_ALT, 0x58, "Ctrl+Alt+X (Pause/Resume)", func() {
 		logger.Info("[Hotkey] *** CTRL+ALT+X PRESSED *** Toggling pause...")
 		newState := stateManager.TogglePause()
 		logger.Info("[Hotkey] Pause toggled to: %s", newState)
 	}); err != nil {
-		logger.Error("[Hotkey] FAILED to register Ctrl+Alt+X: %v", err)
+		logger.Error("[Hotkey] FAILED to register Ctrl+Alt+X: %v - another app may have claimed this hotkey", err)
+	} else {
+		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+X")
 	}
 
 	// Language toggle: Ctrl+Alt+L
+	logger.Info("[Hotkey] Registering Ctrl+Alt+L for language toggle...")
 	if err := hkMgr.Register(hk.MOD_CONTROL|hk.MOD_ALT, 0x4C, "Ctrl+Alt+L (Language Toggle)", func() {
 		logger.Info("[Hotkey] Ctrl+Alt+L pressed - toggling language")
 		if cfg.Deepgram.Language == "en" {
@@ -590,7 +597,22 @@ func registerHotkeys() {
 		default:
 		}
 	}); err != nil {
-		logger.Error("[Hotkey] Failed to register Ctrl+Alt+L: %v", err)
+		logger.Error("[Hotkey] FAILED to register Ctrl+Alt+L: %v - another app may have claimed this hotkey", err)
+	} else {
+		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+L")
+	}
+
+	// Microphone cycle: Ctrl+Alt+M
+	logger.Info("[Hotkey] Registering Ctrl+Alt+M for mic cycle...")
+	if err := hkMgr.Register(hk.MOD_CONTROL|hk.MOD_ALT, 0x4D, "Ctrl+Alt+M (Cycle Mic)", func() {
+		logger.Info("[Hotkey] Ctrl+Alt+M pressed - cycling microphone")
+		micName := trayMgr.CycleMic()
+		logger.Info("[Hotkey] Microphone switched to: %s", micName)
+		notify.ShowBalloon("Microphone Switched", micName, 3*time.Second)
+	}); err != nil {
+		logger.Error("[Hotkey] FAILED to register Ctrl+Alt+M: %v - another app may have claimed this hotkey", err)
+	} else {
+		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+M")
 	}
 }
 
