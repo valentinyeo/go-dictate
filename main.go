@@ -889,6 +889,7 @@ func vadAndSTTManager(
 							cfg.Deepgram.FillerWords,
 							cfg.Deepgram.Keywords,
 							cfg.Deepgram.Keyterms,
+						cfg.Audio.ZeroLatency,
 						)
 					}
 

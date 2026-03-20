@@ -8,8 +8,10 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 	"github.com/valen/go-dictate/internal/logger"
@@ -23,9 +25,10 @@ type Client struct {
 	fillerWords bool
 	keywords    []string
 	keyterms    []string
+	useInterim  bool // Ultra Fast mode: emit interim results for instant feedback
 }
 
-func NewClient(apiKey, language, model string, punctuate, fillerWords bool, keywords, keyterms []string) *Client {
+func NewClient(apiKey, language, model string, punctuate, fillerWords bool, keywords, keyterms []string, useInterim bool) *Client {
 	return &Client{
 		apiKey:      apiKey,
 		language:    language,
@@ -34,6 +37,7 @@ func NewClient(apiKey, language, model string, punctuate, fillerWords bool, keyw
 		fillerWords: fillerWords,
 		keywords:    keywords,
 		keyterms:    keyterms,
+		useInterim:  useInterim,
 	}
 }
 
@@ -46,6 +50,11 @@ func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 
 	if c.punctuate {
 		wsURL += "&smart_format=true&paragraphs=true"
+	}
+
+	if c.useInterim {
+		// Ultra Fast mode: stream interim results + fast endpointing
+		wsURL += "&interim_results=true&endpointing=200"
 	}
 
 	if c.fillerWords {
@@ -185,6 +194,8 @@ waitLoop:
 	}()
 
 	// Receive transcripts (blocking)
+	var lastInterimText string // tracks last interim for diff-based typing
+
 	for {
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
@@ -206,25 +217,84 @@ waitLoop:
 				continue
 			}
 
-			// Log raw response for debugging
-			logger.Debug("Raw response - is_final: %v, text: '%s'", response.IsFinal,
-				func() string {
-					if len(response.Channel.Alternatives) > 0 {
-						return response.Channel.Alternatives[0].Transcript
-					}
-					return ""
-				}())
+			transcript := ""
+			if len(response.Channel.Alternatives) > 0 {
+				transcript = response.Channel.Alternatives[0].Transcript
+			}
 
-			if text := response.GetText(); text != nil {
-				logger.Transcript(*text)
-				fmt.Printf("[Deepgram] Transcript: %s\n", *text)
-				select {
-				case textTx <- *text:
-				case <-ctx.Done():
-					closeDone()
-					return nil
+			// Log raw response for debugging
+			logger.Debug("Raw response - is_final: %v, text: '%s'", response.IsFinal, transcript)
+
+			if c.useInterim {
+				// Ultra Fast mode: emit interim results progressively
+				if response.IsFinal {
+					// Don't overwrite interim text with final — interim is already
+					// typed and good enough. Retyping causes visible gibberish.
+					if lastInterimText == "" && transcript != "" {
+						// No interims were sent for this utterance, emit final directly
+						logger.Transcript(transcript)
+						fmt.Printf("[Deepgram] Final (no prior interim): %s\n", transcript)
+						select {
+						case textTx <- transcript:
+						case <-ctx.Done():
+							closeDone()
+							return nil
+						}
+					} else {
+						logger.Debug("[Deepgram] Final skipped (interim already typed): '%s'", transcript)
+					}
+					lastInterimText = ""
+				} else if transcript != "" {
+					// Interim result
+					var toSend string
+					if lastInterimText == "" {
+						// First interim of utterance - send normally (simulator adds space)
+						toSend = transcript
+					} else {
+						// Continuation - send as raw diff with \x01 prefix
+						toSend = "\x01" + interimDiff(lastInterimText, transcript)
+					}
+					lastInterimText = transcript
+
+					if toSend != "" && toSend != "\x01" {
+						logger.Debug("[Deepgram] Interim: '%s' (diff: %d chars)", transcript, utf8.RuneCountInString(toSend))
+						fmt.Printf("[Deepgram] Interim: %s\n", transcript)
+						select {
+						case textTx <- toSend:
+						case <-ctx.Done():
+							closeDone()
+							return nil
+						}
+					}
+				}
+			} else {
+				// Normal mode: only emit final results
+				if text := response.GetText(); text != nil {
+					logger.Transcript(*text)
+					fmt.Printf("[Deepgram] Transcript: %s\n", *text)
+					select {
+					case textTx <- *text:
+					case <-ctx.Done():
+						closeDone()
+						return nil
+					}
 				}
 			}
 		}
 	}
+}
+
+// interimDiff computes the minimal edit to transform previously typed text into new text.
+// Returns just the suffix if new text extends old (common case), or backspaces + new text
+// if a correction is needed.
+func interimDiff(old, new string) string {
+	if old == "" {
+		return new
+	}
+	// Common case: progressive append (e.g., "hello" → "hello world")
+	if strings.HasPrefix(new, old) {
+		return new[len(old):]
+	}
+	// Correction: backspace old text, type new
+	return strings.Repeat("\b", utf8.RuneCountInString(old)) + new
 }

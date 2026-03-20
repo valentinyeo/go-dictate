@@ -5,12 +5,15 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.8.67] - 2026-03-20 "Ultra Fast"
+## [1.8.68] - 2026-03-20 "Ultra Fast"
 
 ### Added
-- **Ultra Fast Mode** - New tray menu toggle that enables zero-latency dictation. When enabled:
-  - **Persistent Deepgram connection** - WebSocket stays open between utterances using KeepAlive messages, eliminating ~200-400ms connection handshake on every speech start.
-  - **700ms silence threshold** - Reduced from 3000ms default for snappy single-word commands. Connection reuse means the next utterance starts transcribing instantly.
+- **Ultra Fast Mode** - New tray menu toggle (`Ultra Fast Mode` checkbox) for zero-latency dictation. When enabled:
+  - **Interim results** - Text appears word-by-word as Deepgram hears it, instead of waiting for full sentence processing. Progressive typing with intelligent backspace corrections when Deepgram revises earlier words.
+  - **No smart_format** - Skips punctuation/capitalization processing for faster raw output.
+  - **Fast endpointing (200ms)** - Deepgram finalizes utterances after just 200ms of silence.
+  - **Persistent Deepgram connection** - WebSocket stays open between utterances via KeepAlive, eliminating ~200-400ms connection handshake.
+  - **700ms silence threshold** - Reduced from 3000ms default for snappy single-word commands.
   - No additional Deepgram cost — KeepAlive messages carry no audio and aren't billed.
 - Ideal for command-line use where short, fast dictation commands are needed.
 

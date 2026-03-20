@@ -73,10 +73,20 @@ func (s *Simulator) typeText(text string) {
 		return
 	}
 
+	// Raw mode: \x01 prefix means skip auto-spacing (used by interim result diffs)
+	raw := false
+	if text[0] == '\x01' {
+		raw = true
+		text = text[1:]
+		if text == "" {
+			return
+		}
+	}
+
 	// Add space before text if we've already typed something
 	// (i.e., this isn't the very first text being typed)
 	textToType := text
-	if s.lastChar != 0 {
+	if !raw && s.lastChar != 0 {
 		firstRune, _ := utf8.DecodeRuneInString(text)
 		if needsPeriod(s.lastChar, firstRune) {
 			textToType = ". " + text
@@ -89,8 +99,13 @@ func (s *Simulator) typeText(text string) {
 
 	// Type the text and track the last character
 	for _, ch := range textToType {
-		s.sendUnicodeChar(ch)
-		s.lastChar = ch
+		if ch == '\b' {
+			s.sendBackspace()
+			// Don't update lastChar for backspace
+		} else {
+			s.sendUnicodeChar(ch)
+			s.lastChar = ch
+		}
 		time.Sleep(2 * time.Millisecond)
 	}
 }
@@ -103,6 +118,36 @@ func needsPeriod(lastChar, firstChar rune) bool {
 		return false
 	}
 	return unicode.IsUpper(firstChar)
+}
+
+const vkBack = 0x08 // VK_BACK virtual key code
+
+func (s *Simulator) sendBackspace() {
+	inputs := [2]input{
+		{
+			inputType: inputKeyboard,
+			ki: keyboardInput{
+				wVk: vkBack,
+			},
+		},
+		{
+			inputType: inputKeyboard,
+			ki: keyboardInput{
+				wVk:     vkBack,
+				dwFlags: keyeventfKeyUp,
+			},
+		},
+	}
+
+	ret, _, err := sendInputProc.Call(
+		uintptr(2),
+		uintptr(unsafe.Pointer(&inputs[0])),
+		uintptr(unsafe.Sizeof(inputs[0])),
+	)
+
+	if ret == 0 {
+		fmt.Printf("[Keyboard] SendInput (backspace) failed: %v\n", err)
+	}
 }
 
 func (s *Simulator) sendUnicodeChar(ch rune) {
