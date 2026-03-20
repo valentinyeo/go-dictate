@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
 	"github.com/valen/go-dictate/internal/logger"
@@ -226,45 +225,66 @@ waitLoop:
 			logger.Debug("Raw response - is_final: %v, text: '%s'", response.IsFinal, transcript)
 
 			if c.useInterim {
-				// Ultra Fast mode: emit interim results progressively
+				// Ultra Fast mode: append-only interim results (never backspace).
+				// Corrections are silently ignored to prevent gibberish.
 				if response.IsFinal {
-					// Don't overwrite interim text with final — interim is already
-					// typed and good enough. Retyping causes visible gibberish.
-					if lastInterimText == "" && transcript != "" {
-						// No interims were sent for this utterance, emit final directly
+					if lastInterimText != "" {
+						// Interims were already typed. Check if final adds a suffix
+						// (e.g., trailing period from smart_format).
+						if strings.HasPrefix(transcript, lastInterimText) {
+							suffix := transcript[len(lastInterimText):]
+							if suffix != "" {
+								logger.Debug("[Deepgram] Final appends punctuation: '%s'", suffix)
+								select {
+								case textTx <- "\x01" + suffix:
+								case <-ctx.Done():
+									closeDone()
+									return nil
+								}
+							}
+						}
+					} else if transcript != "" {
+						// No interims came through, emit final directly
 						logger.Transcript(transcript)
-						fmt.Printf("[Deepgram] Final (no prior interim): %s\n", transcript)
+						fmt.Printf("[Deepgram] Final (no interim): %s\n", transcript)
 						select {
 						case textTx <- transcript:
 						case <-ctx.Done():
 							closeDone()
 							return nil
 						}
-					} else {
-						logger.Debug("[Deepgram] Final skipped (interim already typed): '%s'", transcript)
 					}
 					lastInterimText = ""
 				} else if transcript != "" {
-					// Interim result
-					var toSend string
+					// Interim result — append only, never replace
 					if lastInterimText == "" {
-						// First interim of utterance - send normally (simulator adds space)
-						toSend = transcript
-					} else {
-						// Continuation - send as raw diff with \x01 prefix
-						toSend = "\x01" + interimDiff(lastInterimText, transcript)
-					}
-					lastInterimText = transcript
-
-					if toSend != "" && toSend != "\x01" {
-						logger.Debug("[Deepgram] Interim: '%s' (diff: %d chars)", transcript, utf8.RuneCountInString(toSend))
+						// First interim of utterance — send normally (simulator adds space)
+						logger.Debug("[Deepgram] Interim (first): '%s'", transcript)
 						fmt.Printf("[Deepgram] Interim: %s\n", transcript)
+						lastInterimText = transcript
 						select {
-						case textTx <- toSend:
+						case textTx <- transcript:
 						case <-ctx.Done():
 							closeDone()
 							return nil
 						}
+					} else if strings.HasPrefix(transcript, lastInterimText) {
+						// Progressive append — type only the new suffix
+						suffix := transcript[len(lastInterimText):]
+						if suffix != "" {
+							logger.Debug("[Deepgram] Interim (append): '%s'", suffix)
+							fmt.Printf("[Deepgram] Interim: %s\n", transcript)
+							select {
+							case textTx <- "\x01" + suffix:
+							case <-ctx.Done():
+								closeDone()
+								return nil
+							}
+						}
+						lastInterimText = transcript
+					} else {
+						// Correction — ignore, keep what's already on screen
+						logger.Debug("[Deepgram] Interim correction ignored: '%s' (keeping: '%s')", transcript, lastInterimText)
 					}
 				}
 			} else {
@@ -284,17 +304,3 @@ waitLoop:
 	}
 }
 
-// interimDiff computes the minimal edit to transform previously typed text into new text.
-// Returns just the suffix if new text extends old (common case), or backspaces + new text
-// if a correction is needed.
-func interimDiff(old, new string) string {
-	if old == "" {
-		return new
-	}
-	// Common case: progressive append (e.g., "hello" → "hello world")
-	if strings.HasPrefix(new, old) {
-		return new[len(old):]
-	}
-	// Correction: backspace old text, type new
-	return strings.Repeat("\b", utf8.RuneCountInString(old)) + new
-}
