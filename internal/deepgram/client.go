@@ -140,8 +140,12 @@ waitLoop:
 		}
 	}()
 
-	// Goroutine to send audio
+	// Goroutine to send audio (with KeepAlive for persistent connections)
 	go func() {
+		keepAliveTicker := time.NewTicker(8 * time.Second)
+		defer keepAliveTicker.Stop()
+		lastAudioSend := time.Now()
+
 		for {
 			select {
 			case <-done:
@@ -162,6 +166,19 @@ waitLoop:
 				if err != nil {
 					logger.Debug("[Deepgram] Send error: %v", err)
 					return
+				}
+				lastAudioSend = time.Now()
+
+			case <-keepAliveTicker.C:
+				if time.Since(lastAudioSend) >= 5*time.Second {
+					wsMu.Lock()
+					err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"KeepAlive"}`))
+					wsMu.Unlock()
+					if err != nil {
+						logger.Debug("[Deepgram] KeepAlive send error: %v", err)
+						return
+					}
+					logger.Debug("[Deepgram] Sent KeepAlive")
 				}
 			}
 		}

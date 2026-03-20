@@ -31,6 +31,7 @@ type AudioConfig struct {
 	DuckEnabled        bool    `toml:"duck_enabled"`
 	AutoPauseOnMedia   bool    `toml:"auto_pause_on_media"`
 	DeviceName         string  `toml:"device_name"`
+	ZeroLatency        bool    `toml:"zero_latency"`
 }
 
 type VADConfig struct {
@@ -144,6 +145,7 @@ func (c *Config) Save() error {
 # duck_volume: Volume level (0.0-1.0) for other apps during dictation
 # duck_enabled: Enable/disable audio ducking (true/false)
 # device_name: Microphone to use (empty = system default, or exact device name)
+# zero_latency: Ultra-fast mode - keeps Deepgram connection open, 700ms silence threshold
 
 # VAD settings
 # energy_threshold: RMS threshold for speech detection (0.0-1.0)

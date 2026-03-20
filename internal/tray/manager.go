@@ -35,10 +35,11 @@ type Manager struct {
 	exitItem          *systray.MenuItem
 
 	// Feature toggles
-	duckingItem     *systray.MenuItem
-	autoPauseItem   *systray.MenuItem
-	punctuateItem   *systray.MenuItem
-	fillerWordsItem *systray.MenuItem
+	duckingItem      *systray.MenuItem
+	autoPauseItem    *systray.MenuItem
+	punctuateItem    *systray.MenuItem
+	fillerWordsItem  *systray.MenuItem
+	zeroLatencyItem  *systray.MenuItem
 
 	// STT mode selection
 	onlineItem  *systray.MenuItem
@@ -87,11 +88,11 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.8.66")
+	systray.SetTooltip("Dictation App v1.8.67")
 
 	// Create menu items - clicking version opens changelog
-	m.versionItem = systray.AddMenuItem("v1.8.66 - Mic Hotkey", "Click to view changelog")
-	summaryItem := systray.AddMenuItem("  Ctrl+Alt+M cycles microphone with balloon notification", "")
+	m.versionItem = systray.AddMenuItem("v1.8.67 - Ultra Fast", "Click to view changelog")
+	summaryItem := systray.AddMenuItem("  Zero-latency mode with persistent Deepgram connection", "")
 	summaryItem.Disable()
 	systray.AddSeparator()
 
@@ -130,6 +131,7 @@ func (m *Manager) onReady() {
 
 	// Feature toggles
 	m.configMu.RLock()
+	m.zeroLatencyItem = systray.AddMenuItemCheckbox("Ultra Fast Mode", "Persistent connection + 700ms silence (zero-latency)", m.config.Audio.ZeroLatency)
 	m.duckingItem = systray.AddMenuItemCheckbox("Audio Ducking", "Lower other apps' volume while speaking", m.config.Audio.DuckEnabled)
 	m.autoPauseItem = systray.AddMenuItemCheckbox("Auto-pause in Meetings", "Pause dictation during calls", m.config.Audio.AutoPauseOnMedia)
 	m.punctuateItem = systray.AddMenuItemCheckbox("Punctuation", "Auto punctuation and capitalization", m.config.Deepgram.Punctuate)
@@ -440,6 +442,21 @@ func (m *Manager) handleFeatureToggles() {
 		select {
 		case <-m.ctx.Done():
 			return
+		case <-m.zeroLatencyItem.ClickedCh:
+			m.configMu.Lock()
+			m.config.Audio.ZeroLatency = !m.config.Audio.ZeroLatency
+			if m.config.Audio.ZeroLatency {
+				m.zeroLatencyItem.Check()
+			} else {
+				m.zeroLatencyItem.Uncheck()
+			}
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save config: %v\n", err)
+			}
+			fmt.Printf("[Tray] Ultra Fast mode: %v\n", m.config.Audio.ZeroLatency)
+			m.configMu.Unlock()
+			m.notifySettingsChanged()
+
 		case <-m.duckingItem.ClickedCh:
 			m.configMu.Lock()
 			m.config.Audio.DuckEnabled = !m.config.Audio.DuckEnabled
@@ -653,7 +670,7 @@ func (m *Manager) handleModeClicks() {
 			}
 			m.configMu.Unlock()
 			logger.Info("[Tray] Switched to Online (Deepgram)")
-			systray.SetTooltip("Dictation App v1.8.66 - Online (Deepgram)")
+			systray.SetTooltip("Dictation App v1.8.67 - Online (Deepgram)")
 			m.notifySettingsChanged()
 
 		case <-m.offlineItem.ClickedCh:
@@ -675,7 +692,7 @@ func (m *Manager) handleModeClicks() {
 				m.config.Save()
 				m.configMu.Unlock()
 				logger.Info("[Tray] Switched to Offline (Vosk) - already ready")
-				systray.SetTooltip("Dictation App v1.8.66 - Offline (Vosk)")
+				systray.SetTooltip("Dictation App v1.8.67 - Offline (Vosk)")
 				m.notifySettingsChanged()
 			} else {
 				logger.Info("[Tray] Starting offline preparation (download DLL + model)...")
@@ -701,7 +718,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 		}); err != nil {
 			logger.Error("[Offline] Failed to download vosk library: %v", err)
 			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.66")
+			systray.SetTooltip("Dictation App v1.8.67")
 			return
 		}
 		logger.Info("[Offline] Vosk library downloaded successfully")
@@ -722,7 +739,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 		}); err != nil {
 			logger.Error("[Offline] Failed to download model %s: %v", modelKey, err)
 			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.66")
+			systray.SetTooltip("Dictation App v1.8.67")
 			return
 		}
 		logger.Info("[Offline] Model %s downloaded successfully", modelKey)
@@ -740,7 +757,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 	m.config.Save()
 	m.configMu.Unlock()
 	logger.Info("[Offline] Offline mode ready!")
-	systray.SetTooltip("Dictation App v1.8.66 - Offline (Vosk)")
+	systray.SetTooltip("Dictation App v1.8.67 - Offline (Vosk)")
 	m.notifySettingsChanged()
 }
 

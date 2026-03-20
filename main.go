@@ -633,7 +633,13 @@ func vadAndSTTManager(
 		}
 	}()
 
-	vad := audio.NewVAD(cfg.VAD.EnergyThreshold, cfg.Audio.SilenceThresholdMs)
+	// Zero-latency mode: use shorter silence threshold for snappy commands
+	silenceMs := cfg.Audio.SilenceThresholdMs
+	if cfg.Audio.ZeroLatency {
+		silenceMs = 700
+		logger.Info("[VAD] Zero-latency mode: silence threshold overridden to 700ms")
+	}
+	vad := audio.NewVAD(cfg.VAD.EnergyThreshold, silenceMs)
 
 	// Pre-roll ring buffer: keeps last ~500ms of audio so first words aren't lost.
 	// VAD needs audio to detect speech - by the time it fires SpeechStarted,
@@ -659,7 +665,8 @@ func vadAndSTTManager(
 	var sttCtx context.Context
 	var sttCancel context.CancelFunc
 	var sttAudioTx chan []int16
-	var textBridge chan string // intermediary channel to track text timing
+	var sttDoneCh chan struct{} // closed when STT goroutine exits (connection dead)
+	var textBridge chan string  // intermediary channel to track text timing
 	var voskEngine *vosk.Engine
 
 	defer func() {
@@ -709,13 +716,20 @@ func vadAndSTTManager(
 				close(sttAudioTx)
 				sttAudioTx = nil
 			}
+			sttDoneCh = nil
 			textBridge = nil // don't close - bridge goroutine exits via sttCtx
 			// Clear vosk engine so it reloads with new language/model
 			if voskEngine != nil {
 				voskEngine.Close()
 				voskEngine = nil
 			}
-			vad.Reset()
+			// Recreate VAD with potentially changed silence threshold
+			silenceMs = cfg.Audio.SilenceThresholdMs
+			if cfg.Audio.ZeroLatency {
+				silenceMs = 700
+				logger.Info("[VAD] Zero-latency mode: silence threshold 700ms")
+			}
+			vad = audio.NewVAD(cfg.VAD.EnergyThreshold, silenceMs)
 			stateManager.Set(state.AutoPaused)
 
 		case <-activeMeetingTick:
@@ -749,6 +763,7 @@ func vadAndSTTManager(
 						close(sttAudioTx)
 						sttAudioTx = nil
 					}
+					sttDoneCh = nil
 					textBridge = nil
 					vad.Reset()
 					preRoll = preRoll[:0]
@@ -820,79 +835,105 @@ func vadAndSTTManager(
 				// Reset ghost speech timer
 				lastTextNano.Store(time.Now().UnixNano())
 
-				// Choose STT engine
-				var engine stt.Engine
-				if cfg.Offline.Enabled {
-					if voskEngine == nil {
-						modelKey := vosk.ModelKeyForLanguage(cfg.Deepgram.Language, cfg.Offline.ModelSize == "large")
-						if vosk.IsAvailable() && vosk.IsModelDownloaded(modelKey) {
-							modelPath, _ := vosk.GetModelPath(modelKey)
-							var err error
-							voskEngine, err = vosk.NewEngine(modelPath)
-							if err != nil {
-								logger.Error("[Vosk] Failed to load: %v", err)
-								fmt.Printf("[Vosk] Error: %v, falling back to Deepgram\n", err)
+				// In zero-latency mode, try to reuse the existing persistent connection
+				reuseConnection := false
+				if cfg.Audio.ZeroLatency && sttAudioTx != nil && sttDoneCh != nil {
+					select {
+					case <-sttDoneCh:
+						// Connection died, need a fresh one
+						logger.Info("[VAD] Persistent connection dead, reconnecting")
+						sttAudioTx = nil
+						sttDoneCh = nil
+						textBridge = nil
+						if sttCancel != nil {
+							sttCancel()
+							sttCancel = nil
+						}
+					default:
+						// Connection still alive, reuse it
+						reuseConnection = true
+						logger.Info("[VAD] Reusing persistent Deepgram connection (zero-latency)")
+						fmt.Println("[VAD] Reusing persistent connection")
+					}
+				}
+
+				if !reuseConnection {
+					// Choose STT engine
+					var engine stt.Engine
+					if cfg.Offline.Enabled {
+						if voskEngine == nil {
+							modelKey := vosk.ModelKeyForLanguage(cfg.Deepgram.Language, cfg.Offline.ModelSize == "large")
+							if vosk.IsAvailable() && vosk.IsModelDownloaded(modelKey) {
+								modelPath, _ := vosk.GetModelPath(modelKey)
+								var err error
+								voskEngine, err = vosk.NewEngine(modelPath)
+								if err != nil {
+									logger.Error("[Vosk] Failed to load: %v", err)
+									fmt.Printf("[Vosk] Error: %v, falling back to Deepgram\n", err)
+								}
+							} else {
+								logger.Info("[Vosk] Model not ready, falling back to Deepgram")
+								fmt.Println("[Vosk] Model not ready, using Deepgram")
 							}
-						} else {
-							logger.Info("[Vosk] Model not ready, falling back to Deepgram")
-							fmt.Println("[Vosk] Model not ready, using Deepgram")
+						}
+						if voskEngine != nil {
+							engine = voskEngine
 						}
 					}
-					if voskEngine != nil {
-						engine = voskEngine
+					if engine == nil {
+						engine = deepgram.NewClient(
+							cfg.Deepgram.APIKey,
+							cfg.Deepgram.Language,
+							cfg.Deepgram.Model,
+							cfg.Deepgram.Punctuate,
+							cfg.Deepgram.FillerWords,
+							cfg.Deepgram.Keywords,
+							cfg.Deepgram.Keyterms,
+						)
 					}
-				}
-				if engine == nil {
-					engine = deepgram.NewClient(
-						cfg.Deepgram.APIKey,
-						cfg.Deepgram.Language,
-						cfg.Deepgram.Model,
-						cfg.Deepgram.Punctuate,
-						cfg.Deepgram.FillerWords,
-						cfg.Deepgram.Keywords,
-						cfg.Deepgram.Keyterms,
-					)
-				}
 
-				sttAudioTx = make(chan []int16, 100)
-				sttCtx, sttCancel = context.WithCancel(ctx)
+					sttAudioTx = make(chan []int16, 100)
+					sttCtx, sttCancel = context.WithCancel(ctx)
+					sttDoneCh = make(chan struct{})
 
-				// Text bridge: forwards text to keyboard simulator while tracking
-				// the last time real text was received (for ghost speech detection).
-				// Uses sttCtx so it exits when the STT session ends. We never close
-				// textBridge directly to avoid "send on closed channel" panics -
-				// the channel is GC'd when both writer and reader goroutines exit.
-				textBridge = make(chan string, 10)
-				go func(bridge <-chan string, bridgeCtx context.Context) {
-					for {
-						select {
-						case text, ok := <-bridge:
-							if !ok {
-								return
-							}
-							lastTextNano.Store(time.Now().UnixNano())
+					// Text bridge: forwards text to keyboard simulator while tracking
+					// the last time real text was received (for ghost speech detection).
+					// Uses sttCtx so it exits when the STT session ends. We never close
+					// textBridge directly to avoid "send on closed channel" panics -
+					// the channel is GC'd when both writer and reader goroutines exit.
+					textBridge = make(chan string, 10)
+					go func(bridge <-chan string, bridgeCtx context.Context) {
+						for {
 							select {
-							case textTx <- text:
+							case text, ok := <-bridge:
+								if !ok {
+									return
+								}
+								lastTextNano.Store(time.Now().UnixNano())
+								select {
+								case textTx <- text:
+								case <-bridgeCtx.Done():
+									return
+								}
 							case <-bridgeCtx.Done():
 								return
 							}
-						case <-bridgeCtx.Done():
-							return
 						}
-					}
-				}(textBridge, sttCtx)
+					}(textBridge, sttCtx)
 
-				go func(e stt.Engine, eCtx context.Context, eAudioRx <-chan []int16, eTx chan<- string) {
-					defer func() {
-						if r := recover(); r != nil {
-							logger.Error("[STT] PANIC recovered: %v", r)
-							fmt.Printf("[STT] PANIC recovered: %v\n", r)
+					go func(e stt.Engine, eCtx context.Context, eAudioRx <-chan []int16, eTx chan<- string, doneCh chan struct{}) {
+						defer close(doneCh)
+						defer func() {
+							if r := recover(); r != nil {
+								logger.Error("[STT] PANIC recovered: %v", r)
+								fmt.Printf("[STT] PANIC recovered: %v\n", r)
+							}
+						}()
+						if err := e.StartStreaming(eCtx, eAudioRx, eTx); err != nil {
+							fmt.Printf("[STT] Error: %v\n", err)
 						}
-					}()
-					if err := e.StartStreaming(eCtx, eAudioRx, eTx); err != nil {
-						fmt.Printf("[STT] Error: %v\n", err)
-					}
-				}(engine, sttCtx, sttAudioTx, textBridge)
+					}(engine, sttCtx, sttAudioTx, textBridge, sttDoneCh)
+				}
 
 				// Flush pre-roll buffer (captures audio BEFORE VAD fired)
 				if len(preRoll) > 0 {
@@ -932,6 +973,7 @@ func vadAndSTTManager(
 						}
 						close(sttAudioTx)
 						sttAudioTx = nil
+						sttDoneCh = nil
 						textBridge = nil // don't close - bridge goroutine exits via sttCtx
 						vad.Reset()
 						preRoll = preRoll[:0]
@@ -946,7 +988,6 @@ func vadAndSTTManager(
 				}
 
 			case audio.SilenceDetected:
-				logger.Info("[VAD] Silence detected - closing STT connection")
 				fmt.Println("[VAD] Silence detected")
 
 				// Restore Chrome/Edge volume
@@ -956,16 +997,25 @@ func vadAndSTTManager(
 					}
 				}
 
-				// Close STT connection
-				if sttCancel != nil {
-					sttCancel()
-					sttCancel = nil
+				if cfg.Audio.ZeroLatency && !cfg.Offline.Enabled {
+					// Zero-latency mode: keep connection alive with KeepAlive,
+					// don't close sttCtx or sttAudioTx. Deepgram client auto-sends
+					// KeepAlive when no audio flows for 5+ seconds.
+					logger.Info("[VAD] Silence detected - keeping persistent connection (zero-latency)")
+				} else {
+					// Normal mode: close STT connection
+					logger.Info("[VAD] Silence detected - closing STT connection")
+					if sttCancel != nil {
+						sttCancel()
+						sttCancel = nil
+					}
+					if sttAudioTx != nil {
+						close(sttAudioTx)
+						sttAudioTx = nil
+					}
+					sttDoneCh = nil
+					textBridge = nil // don't close - bridge goroutine exits via sttCtx
 				}
-				if sttAudioTx != nil {
-					close(sttAudioTx)
-					sttAudioTx = nil
-				}
-				textBridge = nil // don't close - bridge goroutine exits via sttCtx
 
 				vad.Reset()
 				sim.ResetContext() // Clear lastChar so next session doesn't prepend a period
