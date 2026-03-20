@@ -30,7 +30,7 @@ There are no tests in this project. `-H windowsgui` hides the console window; om
 
 ## Version Tracking Workflow
 
-Current version: **1.8.60 "Comma Aware"**
+Current version: **1.8.73 "Ultra Fast"**
 
 1. Update `version.go` (Version, BuildDate, VersionName, VersionSummary)
 2. Update `CHANGELOG.md` with new version header and changes
@@ -76,7 +76,7 @@ main thread (systray.Run - blocks)
 
 - **internal/audio/**: WASAPI capture (`malgo`) with watchdog heartbeat, VAD (RMS energy), media detection (IAudioSessionManager2 COM), meeting detection, recording detection (process/window enumeration), volume ducking (IAudioEndpointVolume, ISimpleAudioVolume)
 - **internal/stt/**: `Engine` interface - abstraction for speech-to-text backends
-- **internal/deepgram/**: WebSocket streaming client with send/receive goroutines, JSON response types. Implements `stt.Engine`.
+- **internal/deepgram/**: WebSocket streaming client with send/receive goroutines, JSON response types, KeepAlive auto-send, interim result diffing. `NewClient` takes `useInterim bool` as last arg. Implements `stt.Engine`.
 - **internal/vosk/**: Offline speech-to-text via Vosk. DLL loaded at runtime via syscall (no CGO). Model download manager with progress reporting. Implements `stt.Engine`.
 - **internal/hotkey/**: Global hotkey registration using blocking `GetMessageW` (zero CPU when idle). Single OS-thread-locked goroutine handles all hotkeys. Replaced `golang.design/x/hotkey` which polled PeekMessage at 10ms per hotkey.
 - **internal/keyboard/**: Windows SendInput Unicode character injection
@@ -114,7 +114,7 @@ Ghost speech: if Speaking for 15s with no text from STT, force-close connection 
 
 ### Connection Lifecycle
 
-STT connections open only when speech starts and close after silence. This minimizes Deepgram API cost (nova-3 at $0.36/hr). The `vadAndSTTManager` goroutine owns the connection lifecycle.
+STT connections open only when speech starts and close after silence (normal mode). In Ultra Fast mode, connections persist via KeepAlive between utterances — `sttDoneCh` tracks connection liveness. Deepgram API cost: nova-3 at $0.36/hr (KeepAlive is free). The `vadAndSTTManager` goroutine owns the connection lifecycle.
 
 ### Pause Behavior (Zero CPU)
 
@@ -153,6 +153,25 @@ Auto-pauses dictation during screen recording. Uses Windows Toolhelp32 process s
 
 `logger.RedirectStderr()` redirects Windows stderr to `%APPDATA%\dictation\crash.log` via `SetStdHandle`. Since `-H windowsgui` has no console, panics would otherwise vanish silently.
 
+### Ultra Fast Mode (Zero Latency)
+
+Toggle via tray menu checkbox or Ctrl+Alt+U hotkey. Online (Deepgram) only.
+- **Persistent connection**: WebSocket stays open between utterances via `{"type":"KeepAlive"}` JSON messages (free, no audio billed). `sttDoneCh` channel detects dead connections for reconnection.
+- **Interim results**: `interim_results=true&endpointing=200` added to Deepgram URL. Text streams word-by-word.
+- **700ms silence threshold** (vs 3000ms default) for snappy single-word commands.
+- **Append-only diffing** in `client.go`: tracks `dgText` (Deepgram's version) and `typedBy` (bytes on screen) separately. NEVER backspace — corrections silently update `dgText` and emit new words beyond `typedBy` at word boundaries. Backspace approach was tried and causes visible gibberish.
+- **Keyboard raw mode**: `\x01` prefix on text skips auto-spacing in simulator. Used for interim suffixes.
+- Config: `[audio] zero_latency = true/false`
+
+### Global Hotkeys
+
+| Shortcut | Action |
+|----------|--------|
+| Ctrl+Alt+X | Pause/Resume dictation |
+| Ctrl+Alt+L | Toggle language (EN ↔ DE) |
+| Ctrl+Alt+M | Cycle microphone |
+| Ctrl+Alt+U | Toggle Ultra Fast mode |
+
 ### Single Instance
 
 Enforced via Windows named mutex (`Global\GoDictateAppMutex`). Second instances exit immediately. Restart uses `cmd.exe` with ping delay to release the mutex before the new instance starts.
@@ -164,7 +183,7 @@ Enforced via Windows named mutex (`Global\GoDictateAppMutex`). Second instances 
 api_key, language (en/de), model (nova-3), punctuate, filler_words, keywords
 
 [audio]
-silence_threshold_ms (3000), duck_volume (0.05), duck_enabled, auto_pause_on_media, device_name
+silence_threshold_ms (3000), duck_volume (0.05), duck_enabled, auto_pause_on_media, device_name, zero_latency (false)
 
 [vad]
 energy_threshold (0.02)
