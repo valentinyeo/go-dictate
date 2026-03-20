@@ -193,7 +193,15 @@ waitLoop:
 	}()
 
 	// Receive transcripts (blocking)
-	var lastInterimText string // tracks last interim for diff-based typing
+	//
+	// Ultra Fast interim tracking uses two variables:
+	//   dgText  = Deepgram's latest interim (may include corrections we can't type)
+	//   typedBy = byte offset into dgText up to which we've actually typed on screen
+	//
+	// When Deepgram corrects an earlier word, dgText updates but typedBy stays.
+	// Subsequent appends to dgText that extend beyond typedBy get typed normally.
+	var dgText string // Deepgram's latest interim text
+	var typedBy int   // bytes of dgText we've typed on screen
 
 	for {
 		messageType, message, err := conn.ReadMessage()
@@ -226,15 +234,27 @@ waitLoop:
 
 			if c.useInterim {
 				// Ultra Fast mode: append-only interim results (never backspace).
-				// Corrections are silently ignored to prevent gibberish.
 				if response.IsFinal {
-					if lastInterimText != "" {
-						// Interims were already typed. Check if final adds a suffix
-						// (e.g., trailing period from smart_format).
-						if strings.HasPrefix(transcript, lastInterimText) {
-							suffix := transcript[len(lastInterimText):]
-							if suffix != "" {
-								logger.Debug("[Deepgram] Final appends punctuation: '%s'", suffix)
+					if dgText != "" {
+						// Interims were typed. Check if final has new content
+						// beyond what we've typed (e.g., trailing punctuation or
+						// words that came after a correction).
+						if len(transcript) > typedBy {
+							// Find next word boundary after typedBy to avoid
+							// emitting partial word fragments from corrections
+							emitFrom := typedBy
+							if emitFrom > 0 && emitFrom < len(transcript) && transcript[emitFrom] != ' ' && transcript[emitFrom] != '.' && transcript[emitFrom] != ',' {
+								// Mid-word — skip to next space
+								idx := strings.IndexByte(transcript[emitFrom:], ' ')
+								if idx >= 0 {
+									emitFrom += idx
+								} else {
+									emitFrom = len(transcript) // no space found, skip
+								}
+							}
+							if emitFrom < len(transcript) {
+								suffix := transcript[emitFrom:]
+								logger.Debug("[Deepgram] Final appends: '%s'", suffix)
 								select {
 								case textTx <- "\x01" + suffix:
 								case <-ctx.Done():
@@ -254,23 +274,25 @@ waitLoop:
 							return nil
 						}
 					}
-					lastInterimText = ""
+					dgText = ""
+					typedBy = 0
 				} else if transcript != "" {
 					// Interim result — append only, never replace
-					if lastInterimText == "" {
+					if dgText == "" {
 						// First interim of utterance — send normally (simulator adds space)
 						logger.Debug("[Deepgram] Interim (first): '%s'", transcript)
 						fmt.Printf("[Deepgram] Interim: %s\n", transcript)
-						lastInterimText = transcript
+						dgText = transcript
+						typedBy = len(transcript)
 						select {
 						case textTx <- transcript:
 						case <-ctx.Done():
 							closeDone()
 							return nil
 						}
-					} else if strings.HasPrefix(transcript, lastInterimText) {
+					} else if strings.HasPrefix(transcript, dgText) {
 						// Progressive append — type only the new suffix
-						suffix := transcript[len(lastInterimText):]
+						suffix := transcript[len(dgText):]
 						if suffix != "" {
 							logger.Debug("[Deepgram] Interim (append): '%s'", suffix)
 							fmt.Printf("[Deepgram] Interim: %s\n", transcript)
@@ -280,11 +302,38 @@ waitLoop:
 								closeDone()
 								return nil
 							}
+							typedBy = len(transcript)
 						}
-						lastInterimText = transcript
+						dgText = transcript
 					} else {
-						// Correction — ignore, keep what's already on screen
-						logger.Debug("[Deepgram] Interim correction ignored: '%s' (keeping: '%s')", transcript, lastInterimText)
+						// Correction — track Deepgram's version so future appends work.
+						// Try to emit new words beyond what we've already typed.
+						logger.Debug("[Deepgram] Interim correction: '%s' (typed %d bytes)", transcript, typedBy)
+						if len(transcript) > typedBy {
+							// Find next word boundary to avoid partial fragments
+							emitFrom := typedBy
+							if emitFrom > 0 && emitFrom < len(transcript) && transcript[emitFrom] != ' ' && transcript[emitFrom] != '.' && transcript[emitFrom] != ',' {
+								idx := strings.IndexByte(transcript[emitFrom:], ' ')
+								if idx >= 0 {
+									emitFrom += idx
+								} else {
+									emitFrom = len(transcript)
+								}
+							}
+							if emitFrom < len(transcript) {
+								suffix := transcript[emitFrom:]
+								logger.Debug("[Deepgram] Interim correction emits tail: '%s'", suffix)
+								fmt.Printf("[Deepgram] Interim: %s\n", transcript)
+								select {
+								case textTx <- "\x01" + suffix:
+								case <-ctx.Done():
+									closeDone()
+									return nil
+								}
+								typedBy = len(transcript)
+							}
+						}
+						dgText = transcript
 					}
 				}
 			} else {
