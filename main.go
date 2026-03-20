@@ -556,6 +556,7 @@ func run() {
 	fmt.Println("[Main] - Ctrl+Alt+X: Pause/Resume")
 	fmt.Println("[Main] - Ctrl+Alt+L: Toggle language (EN ↔ DE)")
 	fmt.Println("[Main] - Ctrl+Alt+M: Cycle microphone")
+	fmt.Println("[Main] - Ctrl+Alt+U: Toggle Ultra Fast mode")
 
 	// Run tray (blocks until exit)
 	trayMgr.Run()
@@ -613,6 +614,23 @@ func registerHotkeys() {
 		logger.Error("[Hotkey] FAILED to register Ctrl+Alt+M: %v - another app may have claimed this hotkey", err)
 	} else {
 		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+M")
+	}
+
+	// Ultra Fast toggle: Ctrl+Alt+U
+	logger.Info("[Hotkey] Registering Ctrl+Alt+U for Ultra Fast toggle...")
+	if err := hkMgr.Register(hk.MOD_CONTROL|hk.MOD_ALT, 0x55, "Ctrl+Alt+U (Ultra Fast)", func() {
+		logger.Info("[Hotkey] Ctrl+Alt+U pressed - toggling Ultra Fast mode")
+		enabled := trayMgr.ToggleZeroLatency()
+		label := "OFF"
+		if enabled {
+			label = "ON"
+		}
+		logger.Info("[Hotkey] Ultra Fast mode: %s", label)
+		notify.ShowBalloon("Ultra Fast Mode", label, 3*time.Second)
+	}); err != nil {
+		logger.Error("[Hotkey] FAILED to register Ctrl+Alt+U: %v - another app may have claimed this hotkey", err)
+	} else {
+		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+U")
 	}
 }
 

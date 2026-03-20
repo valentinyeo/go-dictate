@@ -88,10 +88,10 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.8.71")
+	systray.SetTooltip("Dictation App v1.8.72")
 
 	// Create menu items - clicking version opens changelog
-	m.versionItem = systray.AddMenuItem("v1.8.71 - Ultra Fast", "Click to view changelog")
+	m.versionItem = systray.AddMenuItem("v1.8.72 - Ultra Fast", "Click to view changelog")
 	summaryItem := systray.AddMenuItem("  Zero-latency: persistent connection + interim results", "")
 	summaryItem.Disable()
 	systray.AddSeparator()
@@ -282,6 +282,28 @@ func (m *Manager) CycleMic() string {
 	m.micParent.SetTitle("Microphone: " + displayName)
 	fmt.Printf("[Tray] Microphone cycled to: %s\n", displayName)
 	return displayName
+}
+
+// ToggleZeroLatency flips Ultra Fast mode and returns the new state.
+// Safe to call from any goroutine (e.g. a hotkey callback).
+func (m *Manager) ToggleZeroLatency() bool {
+	<-m.readyCh
+
+	m.configMu.Lock()
+	m.config.Audio.ZeroLatency = !m.config.Audio.ZeroLatency
+	enabled := m.config.Audio.ZeroLatency
+	if enabled {
+		m.zeroLatencyItem.Check()
+	} else {
+		m.zeroLatencyItem.Uncheck()
+	}
+	if err := m.config.Save(); err != nil {
+		fmt.Printf("[Tray] Failed to save config: %v\n", err)
+	}
+	m.configMu.Unlock()
+
+	m.notifySettingsChanged()
+	return enabled
 }
 
 func (m *Manager) handleMicClicks() {
@@ -670,7 +692,7 @@ func (m *Manager) handleModeClicks() {
 			}
 			m.configMu.Unlock()
 			logger.Info("[Tray] Switched to Online (Deepgram)")
-			systray.SetTooltip("Dictation App v1.8.71 - Online (Deepgram)")
+			systray.SetTooltip("Dictation App v1.8.72 - Online (Deepgram)")
 			m.notifySettingsChanged()
 
 		case <-m.offlineItem.ClickedCh:
@@ -692,7 +714,7 @@ func (m *Manager) handleModeClicks() {
 				m.config.Save()
 				m.configMu.Unlock()
 				logger.Info("[Tray] Switched to Offline (Vosk) - already ready")
-				systray.SetTooltip("Dictation App v1.8.71 - Offline (Vosk)")
+				systray.SetTooltip("Dictation App v1.8.72 - Offline (Vosk)")
 				m.notifySettingsChanged()
 			} else {
 				logger.Info("[Tray] Starting offline preparation (download DLL + model)...")
@@ -718,7 +740,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 		}); err != nil {
 			logger.Error("[Offline] Failed to download vosk library: %v", err)
 			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.71")
+			systray.SetTooltip("Dictation App v1.8.72")
 			return
 		}
 		logger.Info("[Offline] Vosk library downloaded successfully")
@@ -739,7 +761,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 		}); err != nil {
 			logger.Error("[Offline] Failed to download model %s: %v", modelKey, err)
 			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.71")
+			systray.SetTooltip("Dictation App v1.8.72")
 			return
 		}
 		logger.Info("[Offline] Model %s downloaded successfully", modelKey)
@@ -757,7 +779,7 @@ func (m *Manager) prepareOffline(modelKey string) {
 	m.config.Save()
 	m.configMu.Unlock()
 	logger.Info("[Offline] Offline mode ready!")
-	systray.SetTooltip("Dictation App v1.8.71 - Offline (Vosk)")
+	systray.SetTooltip("Dictation App v1.8.72 - Offline (Vosk)")
 	m.notifySettingsChanged()
 }
 
