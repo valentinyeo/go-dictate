@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.77] - 2026-03-21
+
+### Fixed
+- **Dropped spaces in Ultra Fast mode** — Switched keyboard simulator from per-character SendInput calls (with 2ms sleeps) to a single atomic batch SendInput call per text chunk. Windows guarantees no input can interleave within a batch, eliminating dropped keystrokes.
+
+---
+
 ## [1.8.68] - 2026-03-20 "Ultra Fast"
 
 ### Added

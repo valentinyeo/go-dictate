@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.76"
-	BuildDate      = "2026-03-20"
+	Version        = "1.8.77"
+	BuildDate      = "2026-03-21"
 	VersionName    = "Ultra Fast"
-	VersionSummary = "Zero-latency: persistent connection + interim results"
+	VersionSummary = "Atomic SendInput batching — no more dropped spaces"
 )

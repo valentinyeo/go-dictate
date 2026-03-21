@@ -3,7 +3,6 @@ package keyboard
 import (
 	"context"
 	"fmt"
-	"time"
 	"unicode"
 	"unicode/utf8"
 	"unsafe"
@@ -97,16 +96,35 @@ func (s *Simulator) typeText(text string) {
 
 	logger.Typed(textToType)
 
-	// Type the text and track the last character
-	for _, ch := range textToType {
+	// Build a single batch of all key events and send atomically via SendInput.
+	// This prevents the target application from dropping keystrokes (especially
+	// spaces) that occurred when characters were sent individually with sleeps.
+	runes := []rune(textToType)
+	inputs := make([]input, 0, len(runes)*2)
+	for _, ch := range runes {
 		if ch == '\b' {
-			s.sendBackspace()
-			// Don't update lastChar for backspace
+			inputs = append(inputs,
+				input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkBack}},
+				input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkBack, dwFlags: keyeventfKeyUp}},
+			)
 		} else {
-			s.sendUnicodeChar(ch)
+			inputs = append(inputs,
+				input{inputType: inputKeyboard, ki: keyboardInput{wScan: uint16(ch), dwFlags: keyeventfUnicode}},
+				input{inputType: inputKeyboard, ki: keyboardInput{wScan: uint16(ch), dwFlags: keyeventfUnicode | keyeventfKeyUp}},
+			)
 			s.lastChar = ch
 		}
-		time.Sleep(2 * time.Millisecond)
+	}
+
+	if len(inputs) > 0 {
+		ret, _, err := sendInputProc.Call(
+			uintptr(len(inputs)),
+			uintptr(unsafe.Pointer(&inputs[0])),
+			uintptr(unsafe.Sizeof(inputs[0])),
+		)
+		if ret == 0 {
+			fmt.Printf("[Keyboard] SendInput batch (%d events) failed: %v\n", len(inputs), err)
+		}
 	}
 }
 
@@ -121,64 +139,3 @@ func needsPeriod(lastChar, firstChar rune) bool {
 }
 
 const vkBack = 0x08 // VK_BACK virtual key code
-
-func (s *Simulator) sendBackspace() {
-	inputs := [2]input{
-		{
-			inputType: inputKeyboard,
-			ki: keyboardInput{
-				wVk: vkBack,
-			},
-		},
-		{
-			inputType: inputKeyboard,
-			ki: keyboardInput{
-				wVk:     vkBack,
-				dwFlags: keyeventfKeyUp,
-			},
-		},
-	}
-
-	ret, _, err := sendInputProc.Call(
-		uintptr(2),
-		uintptr(unsafe.Pointer(&inputs[0])),
-		uintptr(unsafe.Sizeof(inputs[0])),
-	)
-
-	if ret == 0 {
-		fmt.Printf("[Keyboard] SendInput (backspace) failed: %v\n", err)
-	}
-}
-
-func (s *Simulator) sendUnicodeChar(ch rune) {
-	// Send both key-down and key-up in a single atomic SendInput call.
-	// Without the key-up event, consecutive identical characters (e.g. "rr", "ll")
-	// get coalesced by the target application because it never sees a release
-	// between the two presses.
-	inputs := [2]input{
-		{
-			inputType: inputKeyboard,
-			ki: keyboardInput{
-				wScan:   uint16(ch),
-				dwFlags: keyeventfUnicode,
-			},
-		},
-		{
-			inputType: inputKeyboard,
-			ki: keyboardInput{
-				wScan:   uint16(ch),
-				dwFlags: keyeventfUnicode | keyeventfKeyUp,
-			},
-		},
-	}
-
-	ret, _, err := sendInputProc.Call(
-		uintptr(2),
-		uintptr(unsafe.Pointer(&inputs[0])),
-		uintptr(unsafe.Sizeof(inputs[0])),
-	)
-
-	if ret == 0 {
-		fmt.Printf("[Keyboard] SendInput failed: %v\n", err)
-	}
-}
