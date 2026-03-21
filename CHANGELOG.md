@@ -5,6 +5,12 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.78] - 2026-03-21
+
+### Fixed
+- **Stale text replay across windows** — In Ultra Fast mode, stale Deepgram finals from a previous utterance were being typed into the new active window. Now discards finals that arrive after state reset until a fresh interim confirms new speech.
+- **Leading dot on window switch** — Keyboard context (`lastChar`) was never reset in Ultra Fast mode, causing `. ` to be prepended when dictating in a new context. Now resets after 3+ seconds of silence.
+
 ## [1.8.77] - 2026-03-21
 
 ### Fixed

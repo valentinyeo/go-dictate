@@ -664,6 +664,7 @@ func vadAndSTTManager(
 	// the beginning of the utterance has already passed. Pre-roll captures it.
 	const preRollSize = 25 // ~500ms at ~20ms/chunk
 	preRoll := make([][]int16, 0, preRollSize)
+	var silenceStartTime time.Time // when VAD last detected silence (for delayed context reset)
 
 	// Per-app volume ducking for Chrome/Edge
 	logger.Info("[AppVolumeDucker] Initializing with duck volume: %.0f%%", cfg.Audio.DuckVolume*100)
@@ -842,6 +843,14 @@ func vadAndSTTManager(
 			case audio.SpeechStarted:
 				logger.Info("[VAD] Speech started")
 				fmt.Println("[VAD] Speech started")
+
+				// In Ultra Fast mode, reset keyboard context if silence was long enough
+				// that we've likely switched contexts (>3s). Short gaps (<3s) keep context
+				// so late Deepgram results still get proper spacing.
+				if cfg.Audio.ZeroLatency && !silenceStartTime.IsZero() && time.Since(silenceStartTime) > 3*time.Second {
+					sim.ResetContext()
+					logger.Debug("[VAD] Reset keyboard context after %.1fs silence", time.Since(silenceStartTime).Seconds())
+				}
 
 				// Duck Chrome/Edge volume
 				if !meetingActive && cfg.Audio.DuckEnabled {
@@ -1022,8 +1031,8 @@ func vadAndSTTManager(
 					// Zero-latency mode: keep connection alive, let Deepgram's
 					// endpointing handle finalization naturally. Don't send Finalize
 					// as it cuts off words prematurely (e.g., "outstanding" → "out").
-					// dgText/typedBy are reset on SpeechStarted to prevent stale leaks.
 					logger.Info("[VAD] Silence detected - keeping persistent connection (zero-latency)")
+					silenceStartTime = time.Now()
 				} else {
 					// Normal mode: close STT connection
 					logger.Info("[VAD] Silence detected - closing STT connection")

@@ -207,6 +207,7 @@ waitLoop:
 	var dgText string    // Deepgram's latest interim text
 	var typedBy int      // bytes of dgText we've typed on screen
 	var lastResultTime time.Time // when we last received a non-empty result
+	awaitInterim := false // after a final resets state, ignore further finals until an interim arrives
 
 	for {
 		messageType, message, err := conn.ReadMessage()
@@ -240,6 +241,15 @@ waitLoop:
 			if c.useInterim {
 				// Ultra Fast mode: append-only interim results (never backspace).
 				if response.IsFinal {
+					if awaitInterim && dgText == "" {
+						// Stale final from a previous utterance — discard.
+						// After state reset, we wait for a fresh interim before
+						// accepting finals (prevents replaying old text).
+						if transcript != "" {
+							logger.Debug("[Deepgram] Discarding stale final: '%s'", transcript)
+						}
+						continue
+					}
 					if dgText != "" {
 						// Interims were typed. Check if final has new content
 						// beyond what we've typed (e.g., trailing punctuation or
@@ -281,6 +291,7 @@ waitLoop:
 					}
 					dgText = ""
 					typedBy = 0
+					awaitInterim = true
 				} else if transcript != "" {
 					// Interim result — append only, never replace.
 					// If >2s since last result, reset state to prevent stale
@@ -291,6 +302,7 @@ waitLoop:
 						typedBy = 0
 					}
 					lastResultTime = time.Now()
+					awaitInterim = false // fresh interim arrived, accept finals again
 
 					if dgText == "" {
 						// First interim of utterance — send normally (simulator adds space)
