@@ -163,6 +163,10 @@ waitLoop:
 					return
 				}
 
+				if len(audioChunk) == 0 {
+					continue // skip empty chunks
+				}
+
 				bytes := make([]byte, len(audioChunk)*2)
 				for i, sample := range audioChunk {
 					binary.LittleEndian.PutUint16(bytes[i*2:], uint16(sample))
@@ -200,8 +204,9 @@ waitLoop:
 	//
 	// When Deepgram corrects an earlier word, dgText updates but typedBy stays.
 	// Subsequent appends to dgText that extend beyond typedBy get typed normally.
-	var dgText string // Deepgram's latest interim text
-	var typedBy int   // bytes of dgText we've typed on screen
+	var dgText string    // Deepgram's latest interim text
+	var typedBy int      // bytes of dgText we've typed on screen
+	var lastResultTime time.Time // when we last received a non-empty result
 
 	for {
 		messageType, message, err := conn.ReadMessage()
@@ -277,7 +282,16 @@ waitLoop:
 					dgText = ""
 					typedBy = 0
 				} else if transcript != "" {
-					// Interim result — append only, never replace
+					// Interim result — append only, never replace.
+					// If >2s since last result, reset state to prevent stale
+					// text from a previous utterance leaking into a new one.
+					if dgText != "" && !lastResultTime.IsZero() && time.Since(lastResultTime) > 2*time.Second {
+						logger.Debug("[Deepgram] Stale interim state reset (%.1fs gap)", time.Since(lastResultTime).Seconds())
+						dgText = ""
+						typedBy = 0
+					}
+					lastResultTime = time.Now()
+
 					if dgText == "" {
 						// First interim of utterance — send normally (simulator adds space)
 						logger.Debug("[Deepgram] Interim (first): '%s'", transcript)

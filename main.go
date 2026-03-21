@@ -720,6 +720,8 @@ func vadAndSTTManager(
 			return
 
 		case <-vadChangeCh:
+			// Clear stale pre-roll on any state change (e.g., unpause after hours)
+			preRoll = preRoll[:0]
 			continue
 
 		case <-settingsChangedCh:
@@ -1017,9 +1019,10 @@ func vadAndSTTManager(
 				}
 
 				if cfg.Audio.ZeroLatency && !cfg.Offline.Enabled {
-					// Zero-latency mode: keep connection alive with KeepAlive,
-					// don't close sttCtx or sttAudioTx. Deepgram client auto-sends
-					// KeepAlive when no audio flows for 5+ seconds.
+					// Zero-latency mode: keep connection alive, let Deepgram's
+					// endpointing handle finalization naturally. Don't send Finalize
+					// as it cuts off words prematurely (e.g., "outstanding" → "out").
+					// dgText/typedBy are reset on SpeechStarted to prevent stale leaks.
 					logger.Info("[VAD] Silence detected - keeping persistent connection (zero-latency)")
 				} else {
 					// Normal mode: close STT connection
@@ -1037,7 +1040,12 @@ func vadAndSTTManager(
 				}
 
 				vad.Reset()
-				sim.ResetContext() // Clear lastChar so next session doesn't prepend a period
+				if !(cfg.Audio.ZeroLatency && !cfg.Offline.Enabled) {
+					// Normal mode: reset keyboard context so next session starts fresh.
+					// In Ultra Fast mode, Deepgram sends late results after VAD silence
+					// that still need proper spacing — don't reset lastChar.
+					sim.ResetContext()
+				}
 				preRoll = preRoll[:0] // Clear pre-roll for next utterance
 
 				if mediaCache := audio.IsMediaPlayingCached(); mediaCache {
