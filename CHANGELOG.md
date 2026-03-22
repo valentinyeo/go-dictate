@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.79] - 2026-03-22
+
+### Fixed
+- **Merged-text re-emission during long utterances** — The 2s stale interim reset was too aggressive. During normal speech with brief pauses, Deepgram re-processes the audio buffer and sends back a merged version (no spaces) of already-typed text. The reset cleared tracking, causing the entire merged string to be re-typed. Increased to 10s — Deepgram's `endpointing=200` sends finals within ~200ms, so the timer is just a safety net.
+
+---
+
 ## [1.8.78] - 2026-03-21
 
 ### Fixed

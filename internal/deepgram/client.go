@@ -294,9 +294,12 @@ waitLoop:
 					awaitInterim = true
 				} else if transcript != "" {
 					// Interim result — append only, never replace.
-					// If >2s since last result, reset state to prevent stale
+					// If >10s since last result, reset state to prevent stale
 					// text from a previous utterance leaking into a new one.
-					if dgText != "" && !lastResultTime.IsZero() && time.Since(lastResultTime) > 2*time.Second {
+					// Must be long enough to survive Deepgram re-processing
+					// pauses during long utterances (2s was too aggressive —
+					// caused merged-text re-emission on normal speech gaps).
+					if dgText != "" && !lastResultTime.IsZero() && time.Since(lastResultTime) > 10*time.Second {
 						logger.Debug("[Deepgram] Stale interim state reset (%.1fs gap)", time.Since(lastResultTime).Seconds())
 						dgText = ""
 						typedBy = 0
