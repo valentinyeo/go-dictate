@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.80] - 2026-03-23
+
+### Fixed
+- **Watchdog switching to wrong mic** — When Intel SST mic's hardware noise cancellation produced very low inter-speech RMS (~0.001), the watchdog falsely detected a "dead mic" and fell back to the system default device, which was a phantom device producing zero audio. The app would stop hearing speech until the 1-minute periodic retry switched back. Fix: never fall back to system default when user explicitly selected a device, and lowered the flat-audio RMS threshold from 0.005 to 0.0005 (with 30s tolerance instead of 20s).
+
+---
+
 ## [1.8.79] - 2026-03-22
 
 ### Fixed

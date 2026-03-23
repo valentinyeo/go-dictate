@@ -265,8 +265,8 @@ func run() {
 	go func() {
 		const watchdogInterval = 5 * time.Second
 		const watchdogTimeout = 10 * time.Second
-		const flatLineRMSThreshold = 0.005
-		const flatLineMax = 4          // 4 * 5s = 20s of flat audio before restart
+		const flatLineRMSThreshold = 0.0005 // lowered from 0.005: Intel SST mics with HW noise cancellation read ~0.001 during silence
+		const flatLineMax = 6               // 6 * 5s = 30s of flat audio before restart (was 4/20s)
 		const maxRestartAttempts = 5    // stop restarting after this many failures
 		const monitorOnlyLogInterval = 60 // log every 60 ticks (5 min) while monitoring
 		const monitorRetryInterval = 12   // retry from monitor mode every 12 ticks (1 min)
@@ -418,9 +418,9 @@ func run() {
 					audioCapture.Stop()
 					time.Sleep(500 * time.Millisecond)
 
-					// After 3 failures, try system default mic
+					// After 3 failures, try system default mic (only if user didn't explicitly select a device)
 					useDevice := selectedDevice
-					if restartAttempts >= 3 && selectedDevice != nil {
+					if restartAttempts >= 3 && selectedDevice != nil && cfg.Audio.DeviceName == "" {
 						logger.Info("[Watchdog] Trying system default mic")
 						useDevice = nil
 					}
