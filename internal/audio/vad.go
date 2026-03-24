@@ -2,6 +2,7 @@ package audio
 
 import (
 	"math"
+	"sync/atomic"
 	"time"
 )
 
@@ -34,6 +35,7 @@ type VoiceActivityDetector struct {
 	silenceThreshold  time.Duration
 	lastSpeechTime    *time.Time
 	isSpeaking        bool
+	lastRMS           atomic.Uint64 // last computed RMS (float64 bits) for diagnostics
 }
 
 func NewVAD(energyThreshold float32, silenceThresholdMs uint64) *VoiceActivityDetector {
@@ -88,7 +90,13 @@ func (v *VoiceActivityDetector) detectSpeech(audioChunk []int16) bool {
 	}
 
 	rms := math.Sqrt(sumSquares / float64(len(audioChunk)))
+	v.lastRMS.Store(math.Float64bits(rms))
 	return float32(rms) > v.energyThreshold
+}
+
+// LastRMS returns the RMS energy of the most recently processed chunk.
+func (v *VoiceActivityDetector) LastRMS() float64 {
+	return math.Float64frombits(v.lastRMS.Load())
 }
 
 func (v *VoiceActivityDetector) Reset() {

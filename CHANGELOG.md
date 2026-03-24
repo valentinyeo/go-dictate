@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.81] - 2026-03-24
+
+### Fixed
+- **VAD cutting off mid-sentence on low-gain mics** — The Lark M2 wireless mic's speech RMS (0.02-0.03) was barely above the energy threshold (0.02). Natural inter-syllable dips (0.006-0.016) fell below the threshold, causing the VAD to detect "silence" every 1-2 seconds mid-sentence. Deepgram would finalize prematurely, fragmenting words. Lowered default energy threshold from 0.02 to 0.005 — comfortably above actual silence (0.002) while keeping all mid-word dips as "speech." Added RMS diagnostic logging to SpeechStarted/SilenceDetected events.
+
+---
+
 ## [1.8.80] - 2026-03-23
 
 ### Fixed

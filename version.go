@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.80"
-	BuildDate      = "2026-03-23"
+	Version        = "1.8.81"
+	BuildDate      = "2026-03-24"
 	VersionName    = "Ultra Fast"
-	VersionSummary = "Fix watchdog switching to wrong mic on Intel SST"
+	VersionSummary = "Fix VAD cutting off mid-sentence on low-gain mics (Lark M2)"
 )

@@ -841,7 +841,7 @@ func vadAndSTTManager(
 
 			switch vadEvent {
 			case audio.SpeechStarted:
-				logger.Info("[VAD] Speech started")
+				logger.Info("[VAD] Speech started (RMS %.4f, threshold %.4f)", vad.LastRMS(), cfg.VAD.EnergyThreshold)
 				fmt.Println("[VAD] Speech started")
 
 				// In Ultra Fast mode, reset keyboard context if silence was long enough
@@ -1031,7 +1031,7 @@ func vadAndSTTManager(
 					// Zero-latency mode: keep connection alive, let Deepgram's
 					// endpointing handle finalization naturally. Don't send Finalize
 					// as it cuts off words prematurely (e.g., "outstanding" → "out").
-					logger.Info("[VAD] Silence detected - keeping persistent connection (zero-latency)")
+					logger.Info("[VAD] Silence detected (RMS %.4f) - keeping persistent connection (zero-latency)", vad.LastRMS())
 					silenceStartTime = time.Now()
 				} else {
 					// Normal mode: close STT connection
