@@ -795,23 +795,11 @@ func vadAndSTTManager(
 					textBridge = nil
 					vad.Reset()
 					preRoll = preRoll[:0]
-					// Proactively duck media volume so mic doesn't pick up bleed-through
-					if cfg.Audio.DuckEnabled {
-						if err := ducker.Duck(); err != nil {
-							logger.Error("[AppVolumeDucker] Failed to duck on media pause: %v", err)
-						}
-					}
 					stateManager.Set(state.MediaPaused)
 				}
 			} else if currentState == state.MediaPaused {
 				logger.Info("[Media] Media/call/recording ended via ticker - resuming")
 				fmt.Println("[Media] Media/call/recording ended - resuming dictation")
-				// Restore ducked volume now that media has ended
-				if cfg.Audio.DuckEnabled {
-					if err := ducker.Restore(); err != nil {
-						logger.Error("[AppVolumeDucker] Failed to restore on media resume: %v", err)
-					}
-				}
 				stateManager.Set(state.Active)
 			}
 
@@ -864,11 +852,6 @@ func vadAndSTTManager(
 					textBridge = nil
 					vad.Reset()
 					preRoll = preRoll[:0]
-					if cfg.Audio.DuckEnabled {
-						if err := ducker.Duck(); err != nil {
-							logger.Error("[AppVolumeDucker] Failed to duck: %v", err)
-						}
-					}
 					stateManager.Set(state.MediaPaused)
 				}
 				if len(preRoll) >= preRollSize {
@@ -899,6 +882,18 @@ func vadAndSTTManager(
 				logger.Info("[VAD] Speech started (RMS %.4f, threshold %.4f)", vad.LastRMS(), cfg.VAD.EnergyThreshold)
 				fmt.Println("[VAD] Speech started")
 
+				// Synchronous media check: if another app is playing audio,
+				// this "speech" is actually YouTube/media bleeding into the mic.
+				// Go straight to MediaPaused — don't duck, don't open STT.
+				if cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying() {
+					logger.Info("[Media] Audio playback detected at SpeechStarted - skipping to MediaPaused")
+					fmt.Println("[Media] Media playing - suppressing (not real speech)")
+					vad.Reset()
+					preRoll = preRoll[:0]
+					stateManager.Set(state.MediaPaused)
+					continue
+				}
+
 				// In Ultra Fast mode, reset keyboard context if silence was long enough
 				// that we've likely switched contexts (>3s). Short gaps (<3s) keep context
 				// so late Deepgram results still get proper spacing.
@@ -907,9 +902,8 @@ func vadAndSTTManager(
 					logger.Debug("[VAD] Reset keyboard context after %.1fs silence", time.Since(silenceStartTime).Seconds())
 				}
 
-				// Duck Chrome/Edge volume — but not if media is playing (the ticker
-				// will handle auto-pausing; ducking here would just get stuck at 5%)
-				if !meetingActive && cfg.Audio.DuckEnabled && !audio.IsMediaPlayingCached() {
+				// Duck Chrome/Edge volume during real speech
+				if !meetingActive && cfg.Audio.DuckEnabled {
 					if err := ducker.Duck(); err != nil {
 						logger.Error("[AppVolumeDucker] Failed to duck: %v", err)
 					}

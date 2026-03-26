@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.86] - 2026-03-26
+
+### Fixed
+- **YouTube media suppression completely reworked** — Previous cache-based approach was fundamentally broken: 3s stale cache meant YouTube audio always triggered VAD before detection caught up, causing green flash + volume ducked to 5%. New approach: `SpeechStarted` now does a **synchronous** `IsMediaPlaying()` check (not cached) — if media is playing, skips straight to `MediaPaused` without ever ducking volume or opening STT. Ducking is completely removed from MediaPaused enter/leave — no reason to lower volume when dictation is paused.
+
+---
+
 ## [1.8.85] - 2026-03-26
 
 ### Fixed
