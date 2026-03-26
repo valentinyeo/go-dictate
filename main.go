@@ -759,9 +759,7 @@ func vadAndSTTManager(
 			currentState := stateManager.Get()
 			meetingActive := cfg.Audio.AutoPauseOnMedia && audio.IsMeetingActive()
 			recordingActive := cfg.Audio.AutoPauseOnMedia && audio.IsRecordingActive()
-			// Only auto-pause on media if ducking is off. When ducking is enabled,
-			// the user wants to keep dictating with lowered media volume.
-			mediaPlaying := cfg.Audio.AutoPauseOnMedia && !cfg.Audio.DuckEnabled && audio.IsMediaPlaying()
+			mediaPlaying := cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying()
 
 			if meetingActive || recordingActive || mediaPlaying {
 				if currentState != state.MediaPaused {
@@ -788,11 +786,23 @@ func vadAndSTTManager(
 					textBridge = nil
 					vad.Reset()
 					preRoll = preRoll[:0]
+					// Proactively duck media volume so mic doesn't pick up bleed-through
+					if cfg.Audio.DuckEnabled {
+						if err := ducker.Duck(); err != nil {
+							logger.Error("[AppVolumeDucker] Failed to duck on media pause: %v", err)
+						}
+					}
 					stateManager.Set(state.MediaPaused)
 				}
 			} else if currentState == state.MediaPaused {
 				logger.Info("[Media] Media/call/recording ended via ticker - resuming")
 				fmt.Println("[Media] Media/call/recording ended - resuming dictation")
+				// Restore ducked volume now that media has ended
+				if cfg.Audio.DuckEnabled {
+					if err := ducker.Restore(); err != nil {
+						logger.Error("[AppVolumeDucker] Failed to restore on media resume: %v", err)
+					}
+				}
 				stateManager.Set(state.Active)
 			}
 
@@ -992,7 +1002,7 @@ func vadAndSTTManager(
 						logger.Info("[VAD] Ghost speech detected - no text for %v, closing STT (cooldown %v)", noTextTimeout, ghostCooldown)
 						fmt.Println("[VAD] Ghost speech detected - background noise, cooling down 30s")
 
-						if cfg.Audio.DuckEnabled {
+						if cfg.Audio.DuckEnabled && !audio.IsMediaPlayingCached() {
 							if err := ducker.Restore(); err != nil {
 								logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
 							}
@@ -1020,8 +1030,10 @@ func vadAndSTTManager(
 			case audio.SilenceDetected:
 				fmt.Println("[VAD] Silence detected")
 
-				// Restore Chrome/Edge volume
-				if cfg.Audio.DuckEnabled {
+				// Restore Chrome/Edge volume — but NOT if media is still playing,
+				// otherwise we get a duck/unduck feedback loop where YouTube audio
+				// triggers VAD, we duck, silence follows, we unduck, repeat.
+				if cfg.Audio.DuckEnabled && !audio.IsMediaPlayingCached() {
 					if err := ducker.Restore(); err != nil {
 						logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
 					}
