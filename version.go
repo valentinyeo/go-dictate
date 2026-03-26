@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.81"
-	BuildDate      = "2026-03-24"
+	Version        = "1.8.82"
+	BuildDate      = "2026-03-26"
 	VersionName    = "Ultra Fast"
-	VersionSummary = "Fix VAD cutting off mid-sentence on low-gain mics (Lark M2)"
+	VersionSummary = "Fix stuck meeting mode (Windows Settings app false positive)"
 )

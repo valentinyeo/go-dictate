@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.82] - 2026-03-26
+
+### Fixed
+- **Stuck in meeting mode (false positive)** — The Windows Settings app (`windows.immersivecontrolpanel`) registers mic access when you open Sound settings and never clears it (LastUsedTimeStop stays 0). The meeting detector saw this as an active call, permanently pausing dictation. Added it to the excluded apps list along with Windows Sound Recorder.
+
+---
+
 ## [1.8.81] - 2026-03-24
 
 ### Fixed

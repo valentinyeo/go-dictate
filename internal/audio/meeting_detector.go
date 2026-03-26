@@ -63,8 +63,10 @@ func checkMicPrivacyRegistry() bool {
 	// Exclude our own exe and apps known to hold mic access without active calls.
 	// These apps register mic permission at launch and never release it.
 	excludedApps := []string{
-		"go-dictate", // ourselves (any variant)
-		"beeper",     // messaging app keeps mic open
+		"go-dictate",              // ourselves (any variant)
+		"beeper",                  // messaging app keeps mic open
+		"immersivecontrolpanel",   // Windows Settings app (opens mic for Sound settings)
+		"windowssoundrecorder",    // Windows Sound Recorder (packaged app)
 	}
 
 	// Check both NonPackaged apps (e.g. Chrome, Firefox) and Packaged apps
