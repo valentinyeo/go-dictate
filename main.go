@@ -759,9 +759,11 @@ func vadAndSTTManager(
 			currentState := stateManager.Get()
 			meetingActive := cfg.Audio.AutoPauseOnMedia && audio.IsMeetingActive()
 			recordingActive := cfg.Audio.AutoPauseOnMedia && audio.IsRecordingActive()
-			// Only auto-pause on media if ducking is off. When ducking is enabled,
-			// the user wants to keep dictating with lowered media volume.
-			mediaPlaying := cfg.Audio.AutoPauseOnMedia && !cfg.Audio.DuckEnabled && audio.IsMediaPlaying()
+			// Always check media to keep the cache fresh (used by VAD pre-filter).
+			// But only auto-pause when ducking is off — with ducking, user wants
+			// to keep dictating over media.
+			mediaDetected := cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying()
+			mediaPlaying := mediaDetected && !cfg.Audio.DuckEnabled
 
 			if meetingActive || recordingActive || mediaPlaying {
 				if currentState != state.MediaPaused {
@@ -848,27 +850,35 @@ func vadAndSTTManager(
 				continue
 			}
 
+			// Pre-VAD media filter: when media is playing (cached, updated by ticker),
+			// compute RMS and skip low-energy chunks before they reach the VAD.
+			// This prevents YouTube bleed (RMS 0.005-0.023) from triggering false
+			// SpeechStarted events. Real speech (0.03+) still passes through.
+			// Replaces the old 0.02 VAD threshold that v1.8.81 lowered to 0.005.
+			if cfg.Audio.DuckEnabled && audio.IsMediaPlayingCached() {
+				rms := audio.ComputeRMS(audioChunk)
+				if rms < 0.025 {
+					// Still feed to VAD so SilenceDetected can fire if we were speaking
+					if vad.IsSpeaking() {
+						vad.Process(audioChunk)
+					} else {
+						if len(preRoll) >= preRollSize {
+							copy(preRoll, preRoll[1:])
+							preRoll[len(preRoll)-1] = audioChunk
+						} else {
+							preRoll = append(preRoll, audioChunk)
+						}
+					}
+					continue
+				}
+			}
+
 			vadEvent := vad.Process(audioChunk)
 
 			switch vadEvent {
 			case audio.SpeechStarted:
 				logger.Info("[VAD] Speech started (RMS %.4f, threshold %.4f)", vad.LastRMS(), cfg.VAD.EnergyThreshold)
 				fmt.Println("[VAD] Speech started")
-
-				// When media is playing and ducking is enabled, filter out YouTube
-				// audio bleed-through using a higher RMS threshold. v1.8.81 lowered
-				// the VAD threshold from 0.02 to 0.005 for the Lark M2, but that let
-				// YouTube bleed (RMS 0.006-0.015) trigger the VAD. Real speech into
-				// the mic is 0.02+ RMS. Use 3x normal threshold as media filter.
-				if cfg.Audio.DuckEnabled && audio.IsMediaPlaying() {
-					mediaThreshold := float64(cfg.VAD.EnergyThreshold) * 5
-					if vad.LastRMS() < mediaThreshold {
-						logger.Debug("[Media] Audio bleed suppressed (RMS %.4f < media threshold %.4f)", vad.LastRMS(), mediaThreshold)
-						vad.Reset()
-						continue
-					}
-					logger.Info("[Media] Real speech over media (RMS %.4f >= %.4f) - ducking", vad.LastRMS(), mediaThreshold)
-				}
 
 				// In Ultra Fast mode, reset keyboard context if silence was long enough
 				// that we've likely switched contexts (>3s). Short gaps (<3s) keep context

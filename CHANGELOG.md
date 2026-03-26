@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.89] - 2026-03-27
+
+### Fixed
+- **Pre-VAD media filter** — Previous approach filtered at SpeechStarted, but that fired 10x/second (each doing expensive COM calls) and YouTube peaks still leaked through. New approach: filter BEFORE the VAD sees the audio. When the ticker detects media playing (cache always fresh now), chunks with RMS < 0.025 are skipped entirely — no SpeechStarted, no ducking, no flicker. Real speech (0.03+ RMS) passes through normally. Zero CPU cost (cached bool + simple RMS math).
+
+---
+
 ## [1.8.88] - 2026-03-26
 
 ### Fixed

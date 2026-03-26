@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.88"
-	BuildDate      = "2026-03-26"
+	Version        = "1.8.89"
+	BuildDate      = "2026-03-27"
 	VersionName    = "Ultra Fast"
-	VersionSummary = "Fix media RMS filter: synchronous detection + 5x threshold (0.025)"
+	VersionSummary = "Pre-VAD media filter: skip low-RMS chunks when laptop plays audio"
 )

@@ -99,7 +99,25 @@ func (v *VoiceActivityDetector) LastRMS() float64 {
 	return math.Float64frombits(v.lastRMS.Load())
 }
 
+// IsSpeaking returns whether the VAD is currently in speaking state.
+func (v *VoiceActivityDetector) IsSpeaking() bool {
+	return v.isSpeaking
+}
+
 func (v *VoiceActivityDetector) Reset() {
 	v.isSpeaking = false
 	v.lastSpeechTime = nil
+}
+
+// ComputeRMS computes the RMS energy of an audio chunk (exported for pre-VAD filtering).
+func ComputeRMS(audioChunk []int16) float64 {
+	if len(audioChunk) == 0 {
+		return 0
+	}
+	var sumSquares float64
+	for _, sample := range audioChunk {
+		normalized := float64(sample) / float64(math.MaxInt16)
+		sumSquares += normalized * normalized
+	}
+	return math.Sqrt(sumSquares / float64(len(audioChunk)))
 }
