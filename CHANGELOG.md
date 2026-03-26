@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.85] - 2026-03-26
+
+### Fixed
+- **YouTube green flash + stuck 5% volume** — The 1-second ticker was too slow: YouTube audio triggered VAD → SpeechStarted → ducked Edge to 5% → green icon, THEN the ticker caught up and set MediaPaused → amber. But the duck was already done and volume stuck. Fixed by checking `IsMediaPlayingCached()` on the audio chunk path (every 20ms) BEFORE VAD processing, so media is caught instantly. Also blocks ducking in SpeechStarted when media is cached as playing.
+
+---
+
 ## [1.8.84] - 2026-03-26
 
 ### Fixed

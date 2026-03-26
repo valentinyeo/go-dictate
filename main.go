@@ -844,8 +844,33 @@ func vadAndSTTManager(
 				}
 			}
 
-			// Skip VAD when in MediaPaused — don't let YouTube audio trigger SpeechStarted
-			if currentState == state.MediaPaused {
+			// Skip VAD when media is playing — don't let YouTube audio trigger
+			// SpeechStarted (which would duck volume and flicker green).
+			// Check both state AND cached media detection to catch the window
+			// before the 1s ticker has set MediaPaused.
+			if currentState == state.MediaPaused || (cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlayingCached()) {
+				if currentState != state.MediaPaused && audio.IsMediaPlayingCached() {
+					// Ticker hasn't caught up yet — force MediaPaused now
+					logger.Info("[Media] Audio playback detected on audio path - forcing MediaPaused")
+					if sttCancel != nil {
+						sttCancel()
+						sttCancel = nil
+					}
+					if sttAudioTx != nil {
+						close(sttAudioTx)
+						sttAudioTx = nil
+					}
+					sttDoneCh = nil
+					textBridge = nil
+					vad.Reset()
+					preRoll = preRoll[:0]
+					if cfg.Audio.DuckEnabled {
+						if err := ducker.Duck(); err != nil {
+							logger.Error("[AppVolumeDucker] Failed to duck: %v", err)
+						}
+					}
+					stateManager.Set(state.MediaPaused)
+				}
 				if len(preRoll) >= preRollSize {
 					copy(preRoll, preRoll[1:])
 					preRoll[len(preRoll)-1] = audioChunk
@@ -882,8 +907,9 @@ func vadAndSTTManager(
 					logger.Debug("[VAD] Reset keyboard context after %.1fs silence", time.Since(silenceStartTime).Seconds())
 				}
 
-				// Duck Chrome/Edge volume
-				if !meetingActive && cfg.Audio.DuckEnabled {
+				// Duck Chrome/Edge volume — but not if media is playing (the ticker
+				// will handle auto-pausing; ducking here would just get stuck at 5%)
+				if !meetingActive && cfg.Audio.DuckEnabled && !audio.IsMediaPlayingCached() {
 					if err := ducker.Duck(); err != nil {
 						logger.Error("[AppVolumeDucker] Failed to duck: %v", err)
 					}
