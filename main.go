@@ -759,16 +759,9 @@ func vadAndSTTManager(
 			currentState := stateManager.Get()
 			meetingActive := cfg.Audio.AutoPauseOnMedia && audio.IsMeetingActive()
 			recordingActive := cfg.Audio.AutoPauseOnMedia && audio.IsRecordingActive()
-			// When ducking is enabled, use session-state-only check because
-			// ducking reduces volume so much that the peak meter reads near-zero.
-			var mediaPlaying bool
-			if cfg.Audio.AutoPauseOnMedia {
-				if cfg.Audio.DuckEnabled {
-					mediaPlaying = audio.IsAudioSessionActive()
-				} else {
-					mediaPlaying = audio.IsMediaPlaying()
-				}
-			}
+			// Only auto-pause on media if ducking is off. When ducking is enabled,
+			// the user wants to keep dictating with lowered media volume.
+			mediaPlaying := cfg.Audio.AutoPauseOnMedia && !cfg.Audio.DuckEnabled && audio.IsMediaPlaying()
 
 			if meetingActive || recordingActive || mediaPlaying {
 				if currentState != state.MediaPaused {
@@ -832,28 +825,8 @@ func vadAndSTTManager(
 				}
 			}
 
-			// Skip VAD when media is playing — don't let YouTube audio trigger
-			// SpeechStarted (which would duck volume and flicker green).
-			// Check both state AND cached media detection to catch the window
-			// before the 1s ticker has set MediaPaused.
-			if currentState == state.MediaPaused || (cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlayingCached()) {
-				if currentState != state.MediaPaused && audio.IsMediaPlayingCached() {
-					// Ticker hasn't caught up yet — force MediaPaused now
-					logger.Info("[Media] Audio playback detected on audio path - forcing MediaPaused")
-					if sttCancel != nil {
-						sttCancel()
-						sttCancel = nil
-					}
-					if sttAudioTx != nil {
-						close(sttAudioTx)
-						sttAudioTx = nil
-					}
-					sttDoneCh = nil
-					textBridge = nil
-					vad.Reset()
-					preRoll = preRoll[:0]
-					stateManager.Set(state.MediaPaused)
-				}
+			// Skip VAD when in MediaPaused (meeting/recording/media without ducking)
+			if currentState == state.MediaPaused {
 				if len(preRoll) >= preRollSize {
 					copy(preRoll, preRoll[1:])
 					preRoll[len(preRoll)-1] = audioChunk
@@ -882,16 +855,19 @@ func vadAndSTTManager(
 				logger.Info("[VAD] Speech started (RMS %.4f, threshold %.4f)", vad.LastRMS(), cfg.VAD.EnergyThreshold)
 				fmt.Println("[VAD] Speech started")
 
-				// Synchronous media check: if another app is playing audio,
-				// this "speech" is actually YouTube/media bleeding into the mic.
-				// Go straight to MediaPaused — don't duck, don't open STT.
-				if cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying() {
-					logger.Info("[Media] Audio playback detected at SpeechStarted - skipping to MediaPaused")
-					fmt.Println("[Media] Media playing - suppressing (not real speech)")
-					vad.Reset()
-					preRoll = preRoll[:0]
-					stateManager.Set(state.MediaPaused)
-					continue
+				// When media is playing and ducking is enabled, filter out YouTube
+				// audio bleed-through using a higher RMS threshold. v1.8.81 lowered
+				// the VAD threshold from 0.02 to 0.005 for the Lark M2, but that let
+				// YouTube bleed (RMS 0.006-0.015) trigger the VAD. Real speech into
+				// the mic is 0.02+ RMS. Use 3x normal threshold as media filter.
+				if cfg.Audio.DuckEnabled && audio.IsMediaPlayingCached() {
+					mediaThreshold := float64(cfg.VAD.EnergyThreshold) * 3
+					if vad.LastRMS() < mediaThreshold {
+						logger.Debug("[Media] Audio bleed suppressed (RMS %.4f < media threshold %.4f)", vad.LastRMS(), mediaThreshold)
+						vad.Reset()
+						continue
+					}
+					logger.Info("[Media] Real speech over media (RMS %.4f >= %.4f) - ducking", vad.LastRMS(), mediaThreshold)
 				}
 
 				// In Ultra Fast mode, reset keyboard context if silence was long enough
@@ -1042,7 +1018,7 @@ func vadAndSTTManager(
 						logger.Info("[VAD] Ghost speech detected - no text for %v, closing STT (cooldown %v)", noTextTimeout, ghostCooldown)
 						fmt.Println("[VAD] Ghost speech detected - background noise, cooling down 30s")
 
-						if cfg.Audio.DuckEnabled && !audio.IsMediaPlayingCached() {
+						if cfg.Audio.DuckEnabled {
 							if err := ducker.Restore(); err != nil {
 								logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
 							}
@@ -1070,10 +1046,8 @@ func vadAndSTTManager(
 			case audio.SilenceDetected:
 				fmt.Println("[VAD] Silence detected")
 
-				// Restore Chrome/Edge volume — but NOT if media is still playing,
-				// otherwise we get a duck/unduck feedback loop where YouTube audio
-				// triggers VAD, we duck, silence follows, we unduck, repeat.
-				if cfg.Audio.DuckEnabled && !audio.IsMediaPlayingCached() {
+				// Restore Chrome/Edge volume
+				if cfg.Audio.DuckEnabled {
 					if err := ducker.Restore(); err != nil {
 						logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
 					}

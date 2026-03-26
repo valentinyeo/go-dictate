@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.86"
+	Version        = "1.8.87"
 	BuildDate      = "2026-03-26"
 	VersionName    = "Ultra Fast"
-	VersionSummary = "Synchronous media check at SpeechStarted, no ducking during MediaPaused"
+	VersionSummary = "Fix YouTube bleed: RMS filter for media, restore original ducking behavior"
 )

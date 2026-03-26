@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.87] - 2026-03-26
+
+### Fixed
+- **YouTube bleed-through from v1.8.81 threshold change** — v1.8.81 lowered the VAD energy threshold from 0.02 to 0.005 for the Lark M2, which inadvertently let YouTube audio bleed (RMS 0.006-0.015) trigger the VAD. This caused rapid green/white flicker and stuck ducked volumes. Fix: when media is playing and ducking is enabled, apply a 3x energy threshold filter at SpeechStarted — YouTube bleed (low RMS) is silently suppressed, real speech (high RMS 0.02+) ducks and transcribes normally. Restored the original ducking behavior: app stays white, user can dictate over videos.
+
+---
+
 ## [1.8.86] - 2026-03-26
 
 ### Fixed
