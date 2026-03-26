@@ -860,8 +860,8 @@ func vadAndSTTManager(
 				// the VAD threshold from 0.02 to 0.005 for the Lark M2, but that let
 				// YouTube bleed (RMS 0.006-0.015) trigger the VAD. Real speech into
 				// the mic is 0.02+ RMS. Use 3x normal threshold as media filter.
-				if cfg.Audio.DuckEnabled && audio.IsMediaPlayingCached() {
-					mediaThreshold := float64(cfg.VAD.EnergyThreshold) * 3
+				if cfg.Audio.DuckEnabled && audio.IsMediaPlaying() {
+					mediaThreshold := float64(cfg.VAD.EnergyThreshold) * 5
 					if vad.LastRMS() < mediaThreshold {
 						logger.Debug("[Media] Audio bleed suppressed (RMS %.4f < media threshold %.4f)", vad.LastRMS(), mediaThreshold)
 						vad.Reset()

@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.87"
+	Version        = "1.8.88"
 	BuildDate      = "2026-03-26"
 	VersionName    = "Ultra Fast"
-	VersionSummary = "Fix YouTube bleed: RMS filter for media, restore original ducking behavior"
+	VersionSummary = "Fix media RMS filter: synchronous detection + 5x threshold (0.025)"
 )

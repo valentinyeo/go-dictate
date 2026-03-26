@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.88] - 2026-03-26
+
+### Fixed
+- **Media RMS filter actually working now** — Two bugs in v1.8.87: (1) used `IsMediaPlayingCached()` but the ticker never updates the cache when `duck_enabled=true` — switched to synchronous `IsMediaPlaying()` at SpeechStarted. (2) 3x threshold (0.015) was too low — YouTube bleed peaks at 0.02 RMS. Raised to 5x (0.025) which sits above YouTube bleed (~0.02) and below real speech (~0.03+).
+
+---
+
 ## [1.8.87] - 2026-03-26
 
 ### Fixed
