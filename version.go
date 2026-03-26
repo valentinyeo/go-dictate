@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.83"
+	Version        = "1.8.84"
 	BuildDate      = "2026-03-26"
 	VersionName    = "Ultra Fast"
-	VersionSummary = "Fix media auto-pause broken when ducking enabled"
+	VersionSummary = "Fix YouTube flicker: session-based detection, VAD skip, volume restore"
 )

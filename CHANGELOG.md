@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.84] - 2026-03-26
+
+### Fixed
+- **YouTube rapid green/white flicker** — Three bugs combined to break media suppression when ducking was enabled: (1) `IsMediaPlaying()` used peak meter which read near-zero after ducking reduced volume to 5%, so media was never detected — added `IsAudioSessionActive()` that checks session state only. (2) VAD still processed audio chunks during `MediaPaused`, so YouTube audio triggered `SpeechStarted` overriding the pause — now skips VAD in `MediaPaused`. (3) `Duck()` saved 5% as "original" when Edge was already ducked from rapid cycles — now detects already-ducked volume and stores 100% instead.
+
+---
+
 ## [1.8.83] - 2026-03-26
 
 ### Fixed

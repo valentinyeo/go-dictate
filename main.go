@@ -759,7 +759,16 @@ func vadAndSTTManager(
 			currentState := stateManager.Get()
 			meetingActive := cfg.Audio.AutoPauseOnMedia && audio.IsMeetingActive()
 			recordingActive := cfg.Audio.AutoPauseOnMedia && audio.IsRecordingActive()
-			mediaPlaying := cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying()
+			// When ducking is enabled, use session-state-only check because
+			// ducking reduces volume so much that the peak meter reads near-zero.
+			var mediaPlaying bool
+			if cfg.Audio.AutoPauseOnMedia {
+				if cfg.Audio.DuckEnabled {
+					mediaPlaying = audio.IsAudioSessionActive()
+				} else {
+					mediaPlaying = audio.IsMediaPlaying()
+				}
+			}
 
 			if meetingActive || recordingActive || mediaPlaying {
 				if currentState != state.MediaPaused {
@@ -833,6 +842,17 @@ func vadAndSTTManager(
 				} else if currentState == state.MediaPaused {
 					continue
 				}
+			}
+
+			// Skip VAD when in MediaPaused — don't let YouTube audio trigger SpeechStarted
+			if currentState == state.MediaPaused {
+				if len(preRoll) >= preRollSize {
+					copy(preRoll, preRoll[1:])
+					preRoll[len(preRoll)-1] = audioChunk
+				} else {
+					preRoll = append(preRoll, audioChunk)
+				}
+				continue
 			}
 
 			// Skip VAD during ghost speech cooldown
