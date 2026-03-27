@@ -681,10 +681,6 @@ func vadAndSTTManager(
 	const ghostCooldown = 30 * time.Second
 	var ghostCooldownUntil time.Time
 
-	// After unducking, suppress low-RMS VAD triggers for 2s to prevent
-	// the feedback loop: unduck → YouTube bleed → SpeechStarted → duck → repeat.
-	var duckCooldownUntil time.Time
-
 	var sttCtx context.Context
 	var sttCancel context.CancelFunc
 	var sttAudioTx chan []int16
@@ -852,22 +848,6 @@ func vadAndSTTManager(
 				continue
 			}
 
-			// Duck cooldown: after unducking, suppress low-RMS chunks for 2s.
-			// This breaks the feedback loop (unduck → YouTube bleed → duck → repeat)
-			// without relying on flaky COM media detection.
-			if cfg.Audio.DuckEnabled && time.Now().Before(duckCooldownUntil) {
-				rms := audio.ComputeRMS(audioChunk)
-				if rms < 0.025 {
-					if len(preRoll) >= preRollSize {
-						copy(preRoll, preRoll[1:])
-						preRoll[len(preRoll)-1] = audioChunk
-					} else {
-						preRoll = append(preRoll, audioChunk)
-					}
-					continue
-				}
-			}
-
 			vadEvent := vad.Process(audioChunk)
 
 			switch vadEvent {
@@ -1027,7 +1007,7 @@ func vadAndSTTManager(
 							if err := ducker.Restore(); err != nil {
 								logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
 							}
-							duckCooldownUntil = time.Now().Add(2 * time.Second)
+	
 						}
 						if sttCancel != nil {
 							sttCancel()
@@ -1057,7 +1037,6 @@ func vadAndSTTManager(
 					if err := ducker.Restore(); err != nil {
 						logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
 					}
-					duckCooldownUntil = time.Now().Add(2 * time.Second)
 				}
 
 				if cfg.Audio.ZeroLatency && !cfg.Offline.Enabled {

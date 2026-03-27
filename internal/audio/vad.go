@@ -31,19 +31,29 @@ func (e VADEvent) String() string {
 }
 
 type VoiceActivityDetector struct {
-	energyThreshold   float32
-	silenceThreshold  time.Duration
-	lastSpeechTime    *time.Time
-	isSpeaking        bool
-	lastRMS           atomic.Uint64 // last computed RMS (float64 bits) for diagnostics
+	energyThreshold    float32       // threshold to START detecting speech (high)
+	continueThreshold  float32       // threshold to CONTINUE speech (low, avoids mid-sentence cuts)
+	silenceThreshold   time.Duration
+	lastSpeechTime     *time.Time
+	isSpeaking         bool
+	lastRMS            atomic.Uint64 // last computed RMS (float64 bits) for diagnostics
 }
 
+// NewVAD creates a VAD with hysteresis: a high start threshold and a low continue
+// threshold. The start threshold (energyThreshold * 4, min 0.02) prevents YouTube
+// audio bleed from triggering false speech. The continue threshold (energyThreshold)
+// prevents inter-syllable dips from cutting speech mid-sentence (the v1.8.81 fix).
 func NewVAD(energyThreshold float32, silenceThresholdMs uint64) *VoiceActivityDetector {
+	startThreshold := energyThreshold * 4
+	if startThreshold < 0.02 {
+		startThreshold = 0.02
+	}
 	return &VoiceActivityDetector{
-		energyThreshold:  energyThreshold,
-		silenceThreshold: time.Duration(silenceThresholdMs) * time.Millisecond,
-		lastSpeechTime:   nil,
-		isSpeaking:       false,
+		energyThreshold:   startThreshold,
+		continueThreshold: energyThreshold,
+		silenceThreshold:  time.Duration(silenceThresholdMs) * time.Millisecond,
+		lastSpeechTime:    nil,
+		isSpeaking:        false,
 	}
 }
 
@@ -91,6 +101,13 @@ func (v *VoiceActivityDetector) detectSpeech(audioChunk []int16) bool {
 
 	rms := math.Sqrt(sumSquares / float64(len(audioChunk)))
 	v.lastRMS.Store(math.Float64bits(rms))
+
+	// Hysteresis: use higher threshold to start speech, lower to continue.
+	// This prevents YouTube bleed (0.005-0.02) from starting speech while
+	// still allowing inter-syllable dips (0.006-0.016) during real speech.
+	if v.isSpeaking {
+		return float32(rms) > v.continueThreshold
+	}
 	return float32(rms) > v.energyThreshold
 }
 

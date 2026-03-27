@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.91] - 2026-03-27
+
+### Fixed
+- **VAD hysteresis fixes YouTube bleed AND mid-sentence cutoffs** — The real root cause: v1.8.81 lowered the VAD threshold from 0.02 to 0.005, which fixed mid-sentence cutoffs but let YouTube bleed trigger SpeechStarted. The proper fix is hysteresis — two thresholds: a **high start threshold (0.02)** to begin speech (YouTube bleed at 0.005-0.02 can't trigger it), and a **low continue threshold (0.005)** to sustain speech (inter-syllable dips at 0.006-0.016 don't cause premature silence). Removed all previous media detection hacks, duck cooldowns, and RMS filters — the VAD itself now handles everything cleanly.
+
+---
+
 ## [1.8.90] - 2026-03-27
 
 ### Fixed
