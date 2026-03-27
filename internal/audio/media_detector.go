@@ -81,23 +81,6 @@ func IsMediaPlaying() bool {
 	return mediaCache.isPlaying
 }
 
-// IsAudioSessionActive checks if any non-self audio session is in Active state,
-// WITHOUT checking the peak meter. Use this when ducking is enabled, because
-// ducking reduces the app volume so much that the peak meter reads near-zero,
-// making IsMediaPlaying() return false even though media IS playing.
-func IsAudioSessionActive() bool {
-	mediaCache.Lock()
-	defer mediaCache.Unlock()
-
-	if time.Since(mediaCache.lastCheck) < cacheDuration {
-		return mediaCache.isPlaying
-	}
-
-	mediaCache.isPlaying = checkAudioSessionActive()
-	mediaCache.lastCheck = time.Now()
-	return mediaCache.isPlaying
-}
-
 // checkMediaPlayback performs the actual Windows API check
 func checkMediaPlayback() bool {
 	// Lock this goroutine to the current OS thread for COM safety
@@ -263,107 +246,6 @@ func checkMediaPlayback() bool {
 		}
 
 		syscall.Syscall(getVTable(session, 2), 1, session, 0, 0) // Release session
-	}
-
-	return false
-}
-
-// checkAudioSessionActive checks if any non-self audio session is Active.
-// Unlike checkMediaPlayback, it does NOT check the peak meter — useful when
-// we've ducked the volume and the peak meter reads near-zero.
-func checkAudioSessionActive() bool {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	ret, _, _ := coInitializeEx.Call(0, 0x0)
-	if ret != 0 && ret != 0x00000001 {
-		return false
-	}
-	defer coUninitialize.Call()
-
-	var deviceEnumerator uintptr
-	ret, _, _ = coCreateInstance.Call(
-		uintptr(unsafe.Pointer(&CLSID_MMDeviceEnumerator)),
-		0, CLSCTX_INPROC_SERVER,
-		uintptr(unsafe.Pointer(&IID_IMMDeviceEnumerator)),
-		uintptr(unsafe.Pointer(&deviceEnumerator)),
-	)
-	if ret != 0 || deviceEnumerator == 0 {
-		return false
-	}
-	defer syscall.Syscall(getVTable(deviceEnumerator, 2), 1, deviceEnumerator, 0, 0)
-
-	var device uintptr
-	ret, _, _ = syscall.Syscall6(
-		getVTable(deviceEnumerator, 4), 4,
-		deviceEnumerator, uintptr(eRender), uintptr(eConsole),
-		uintptr(unsafe.Pointer(&device)), 0, 0,
-	)
-	if ret != 0 || device == 0 {
-		return false
-	}
-	defer syscall.Syscall(getVTable(device, 2), 1, device, 0, 0)
-
-	var sessionManager uintptr
-	ret, _, _ = syscall.Syscall6(
-		getVTable(device, 3), 5, device,
-		uintptr(unsafe.Pointer(&IID_IAudioSessionManager2)),
-		CLSCTX_INPROC_SERVER, 0,
-		uintptr(unsafe.Pointer(&sessionManager)), 0,
-	)
-	if ret != 0 || sessionManager == 0 {
-		return false
-	}
-	defer syscall.Syscall(getVTable(sessionManager, 2), 1, sessionManager, 0, 0)
-
-	var sessionEnumerator uintptr
-	ret, _, _ = syscall.Syscall(
-		getVTable(sessionManager, 5), 2,
-		sessionManager, uintptr(unsafe.Pointer(&sessionEnumerator)), 0,
-	)
-	if ret != 0 || sessionEnumerator == 0 {
-		return false
-	}
-	defer syscall.Syscall(getVTable(sessionEnumerator, 2), 1, sessionEnumerator, 0, 0)
-
-	var sessionCount int32
-	ret, _, _ = syscall.Syscall(
-		getVTable(sessionEnumerator, 3), 2,
-		sessionEnumerator, uintptr(unsafe.Pointer(&sessionCount)), 0,
-	)
-	if ret != 0 {
-		return false
-	}
-
-	ourPID := getCurrentProcessID()
-
-	for i := int32(0); i < sessionCount; i++ {
-		var session uintptr
-		ret, _, _ = syscall.Syscall(
-			getVTable(sessionEnumerator, 4), 3,
-			sessionEnumerator, uintptr(i), uintptr(unsafe.Pointer(&session)),
-		)
-		if ret != 0 || session == 0 {
-			continue
-		}
-
-		var sessionState int32
-		syscall.Syscall(
-			getVTable(session, 3), 2,
-			session, uintptr(unsafe.Pointer(&sessionState)), 0,
-		)
-
-		var processID uint32
-		syscall.Syscall(
-			getVTable(session, 14), 2,
-			session, uintptr(unsafe.Pointer(&processID)), 0,
-		)
-
-		syscall.Syscall(getVTable(session, 2), 1, session, 0, 0) // Release
-
-		if sessionState == AudioSessionStateActive && processID != ourPID {
-			return true
-		}
 	}
 
 	return false

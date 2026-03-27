@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.92"
+	Version        = "1.8.93"
 	BuildDate      = "2026-03-27"
 	VersionName    = "Ultra Fast"
-	VersionSummary = "Raise VAD start threshold to 0.03 (YouTube bleed peaks at 0.026)"
+	VersionSummary = "Revert media/ducking changes to v1.8.82 baseline"
 )

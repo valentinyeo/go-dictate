@@ -214,20 +214,8 @@ func (d *AppVolumeDucker) Duck() error {
 		logger.Info("[AppVolumeDucker] %s (PID %d) current volume: %.0f%%",
 			processName, processID, currentVolume*100)
 
-		// Store original volume — but don't overwrite if already stored (from a
-		// previous duck that wasn't properly restored) or if the volume is already
-		// at/below duck level (indicating it was left ducked from a prior session).
-		if _, alreadyStored := d.originalVolumes[processID]; !alreadyStored {
-			if currentVolume <= d.duckVolume {
-				// Volume already at/below duck level — assume it was left ducked.
-				// Store 1.0 (full) as the original so restore actually restores.
-				d.originalVolumes[processID] = 1.0
-				logger.Info("[AppVolumeDucker] %s (PID %d) already at duck level (%.0f%%), will restore to 100%%",
-					processName, processID, currentVolume*100)
-			} else {
-				d.originalVolumes[processID] = currentVolume
-			}
-		}
+		// Store original volume
+		d.originalVolumes[processID] = currentVolume
 
 		// Set ducked volume - pass float bits directly so Go's asmstdcall
 		// loads them into the XMM register (COM expects float by value, not pointer)

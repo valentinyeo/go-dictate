@@ -825,17 +825,6 @@ func vadAndSTTManager(
 				}
 			}
 
-			// Skip VAD when in MediaPaused (meeting/recording/media without ducking)
-			if currentState == state.MediaPaused {
-				if len(preRoll) >= preRollSize {
-					copy(preRoll, preRoll[1:])
-					preRoll[len(preRoll)-1] = audioChunk
-				} else {
-					preRoll = append(preRoll, audioChunk)
-				}
-				continue
-			}
-
 			// Skip VAD during ghost speech cooldown
 			if time.Now().Before(ghostCooldownUntil) {
 				// Still collect pre-roll so first words aren't lost when cooldown ends
@@ -863,7 +852,7 @@ func vadAndSTTManager(
 					logger.Debug("[VAD] Reset keyboard context after %.1fs silence", time.Since(silenceStartTime).Seconds())
 				}
 
-				// Duck Chrome/Edge volume during real speech
+				// Duck Chrome/Edge volume
 				if !meetingActive && cfg.Audio.DuckEnabled {
 					if err := ducker.Duck(); err != nil {
 						logger.Error("[AppVolumeDucker] Failed to duck: %v", err)
@@ -1007,7 +996,6 @@ func vadAndSTTManager(
 							if err := ducker.Restore(); err != nil {
 								logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
 							}
-	
 						}
 						if sttCancel != nil {
 							sttCancel()
