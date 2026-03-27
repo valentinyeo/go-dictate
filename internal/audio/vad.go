@@ -44,9 +44,9 @@ type VoiceActivityDetector struct {
 // audio bleed from triggering false speech. The continue threshold (energyThreshold)
 // prevents inter-syllable dips from cutting speech mid-sentence (the v1.8.81 fix).
 func NewVAD(energyThreshold float32, silenceThresholdMs uint64) *VoiceActivityDetector {
-	startThreshold := energyThreshold * 4
-	if startThreshold < 0.02 {
-		startThreshold = 0.02
+	startThreshold := energyThreshold * 6
+	if startThreshold < 0.03 {
+		startThreshold = 0.03
 	}
 	return &VoiceActivityDetector{
 		energyThreshold:   startThreshold,

@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.91"
+	Version        = "1.8.92"
 	BuildDate      = "2026-03-27"
 	VersionName    = "Ultra Fast"
-	VersionSummary = "VAD hysteresis: high start threshold (0.02), low continue threshold (0.005)"
+	VersionSummary = "Raise VAD start threshold to 0.03 (YouTube bleed peaks at 0.026)"
 )
