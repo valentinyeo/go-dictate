@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.90] - 2026-03-27
+
+### Fixed
+- **Duck cooldown breaks feedback loop** — All previous attempts relied on `IsMediaPlaying()` COM detection, which turned out to be unreliable (often returns false even when YouTube is playing). New approach doesn't need media detection at all: after every unduck (Restore), a 2-second cooldown suppresses audio chunks with RMS < 0.025. This breaks the loop at the source (unduck → YouTube bleed → duck → repeat) because the bleed that follows an unduck is always low-RMS and gets filtered during the cooldown window. Real speech (0.03+) still passes through immediately.
+
+---
+
 ## [1.8.89] - 2026-03-27
 
 ### Fixed

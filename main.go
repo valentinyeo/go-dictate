@@ -681,6 +681,10 @@ func vadAndSTTManager(
 	const ghostCooldown = 30 * time.Second
 	var ghostCooldownUntil time.Time
 
+	// After unducking, suppress low-RMS VAD triggers for 2s to prevent
+	// the feedback loop: unduck → YouTube bleed → SpeechStarted → duck → repeat.
+	var duckCooldownUntil time.Time
+
 	var sttCtx context.Context
 	var sttCancel context.CancelFunc
 	var sttAudioTx chan []int16
@@ -759,11 +763,9 @@ func vadAndSTTManager(
 			currentState := stateManager.Get()
 			meetingActive := cfg.Audio.AutoPauseOnMedia && audio.IsMeetingActive()
 			recordingActive := cfg.Audio.AutoPauseOnMedia && audio.IsRecordingActive()
-			// Always check media to keep the cache fresh (used by VAD pre-filter).
-			// But only auto-pause when ducking is off — with ducking, user wants
-			// to keep dictating over media.
-			mediaDetected := cfg.Audio.AutoPauseOnMedia && audio.IsMediaPlaying()
-			mediaPlaying := mediaDetected && !cfg.Audio.DuckEnabled
+			// Only auto-pause on media if ducking is off. When ducking is enabled,
+			// the user wants to keep dictating with lowered media volume.
+			mediaPlaying := cfg.Audio.AutoPauseOnMedia && !cfg.Audio.DuckEnabled && audio.IsMediaPlaying()
 
 			if meetingActive || recordingActive || mediaPlaying {
 				if currentState != state.MediaPaused {
@@ -850,24 +852,17 @@ func vadAndSTTManager(
 				continue
 			}
 
-			// Pre-VAD media filter: when media is playing (cached, updated by ticker),
-			// compute RMS and skip low-energy chunks before they reach the VAD.
-			// This prevents YouTube bleed (RMS 0.005-0.023) from triggering false
-			// SpeechStarted events. Real speech (0.03+) still passes through.
-			// Replaces the old 0.02 VAD threshold that v1.8.81 lowered to 0.005.
-			if cfg.Audio.DuckEnabled && audio.IsMediaPlayingCached() {
+			// Duck cooldown: after unducking, suppress low-RMS chunks for 2s.
+			// This breaks the feedback loop (unduck → YouTube bleed → duck → repeat)
+			// without relying on flaky COM media detection.
+			if cfg.Audio.DuckEnabled && time.Now().Before(duckCooldownUntil) {
 				rms := audio.ComputeRMS(audioChunk)
 				if rms < 0.025 {
-					// Still feed to VAD so SilenceDetected can fire if we were speaking
-					if vad.IsSpeaking() {
-						vad.Process(audioChunk)
+					if len(preRoll) >= preRollSize {
+						copy(preRoll, preRoll[1:])
+						preRoll[len(preRoll)-1] = audioChunk
 					} else {
-						if len(preRoll) >= preRollSize {
-							copy(preRoll, preRoll[1:])
-							preRoll[len(preRoll)-1] = audioChunk
-						} else {
-							preRoll = append(preRoll, audioChunk)
-						}
+						preRoll = append(preRoll, audioChunk)
 					}
 					continue
 				}
@@ -1032,6 +1027,7 @@ func vadAndSTTManager(
 							if err := ducker.Restore(); err != nil {
 								logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
 							}
+							duckCooldownUntil = time.Now().Add(2 * time.Second)
 						}
 						if sttCancel != nil {
 							sttCancel()
@@ -1061,6 +1057,7 @@ func vadAndSTTManager(
 					if err := ducker.Restore(); err != nil {
 						logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
 					}
+					duckCooldownUntil = time.Now().Add(2 * time.Second)
 				}
 
 				if cfg.Audio.ZeroLatency && !cfg.Offline.Enabled {
