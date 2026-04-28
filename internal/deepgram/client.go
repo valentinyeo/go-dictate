@@ -320,18 +320,28 @@ waitLoop:
 							return nil
 						}
 					} else if strings.HasPrefix(transcript, dgText) {
-						// Progressive append — type only the new suffix
-						suffix := transcript[len(dgText):]
-						if suffix != "" {
-							logger.Debug("[Deepgram] Interim (append): '%s'", suffix)
-							fmt.Printf("[Deepgram] Interim: %s\n", transcript)
-							select {
-							case textTx <- "\x01" + suffix:
-							case <-ctx.Done():
-								closeDone()
-								return nil
+						// Progressive append — type only the new suffix.
+						// Skip past typedBy when a prior correction shrunk dgText
+						// below typedBy without emitting (otherwise we'd re-emit
+						// bytes already on screen — observed as duplicated words
+						// like "simply simply" mid-sentence).
+						skipTo := len(dgText)
+						if typedBy > skipTo {
+							skipTo = typedBy
+						}
+						if skipTo < len(transcript) {
+							suffix := transcript[skipTo:]
+							if suffix != "" {
+								logger.Debug("[Deepgram] Interim (append): '%s'", suffix)
+								fmt.Printf("[Deepgram] Interim: %s\n", transcript)
+								select {
+								case textTx <- "\x01" + suffix:
+								case <-ctx.Done():
+									closeDone()
+									return nil
+								}
+								typedBy = len(transcript)
 							}
-							typedBy = len(transcript)
 						}
 						dgText = transcript
 					} else {

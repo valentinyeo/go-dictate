@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.94] - 2026-04-28
+
+### Fixed
+- **Word duplication in Ultra Fast mode** ("simply simply", "you you" mid-sentence) — When Deepgram regressed an interim (sent a shorter version of already-typed text, e.g. during long sentences with brief pauses where the audio buffer is re-processed), `dgText` shrunk but `typedBy` stayed at the higher value. The next extending interim then computed the suffix from `len(dgText)` and re-emitted bytes between `len(dgText)` and `typedBy` — bytes already on screen. Fix: in the HasPrefix branch, skip past `max(len(dgText), typedBy)` so already-typed text never gets re-emitted.
+
+---
+
 ## [1.8.91] - 2026-03-27
 
 ### Fixed

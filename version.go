@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.93"
-	BuildDate      = "2026-03-27"
+	Version        = "1.8.94"
+	BuildDate      = "2026-04-28"
 	VersionName    = "Ultra Fast"
-	VersionSummary = "Revert media/ducking changes to v1.8.82 baseline"
+	VersionSummary = "Fix duplicated words after Deepgram interim regression"
 )
