@@ -3,6 +3,8 @@ package keyboard
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -33,19 +35,37 @@ type input struct {
 }
 
 var (
-	user32       = windows.NewLazySystemDLL("user32.dll")
+	user32        = windows.NewLazySystemDLL("user32.dll")
 	sendInputProc = user32.NewProc("SendInput")
 )
 
-type Simulator struct{
+type Simulator struct {
 	lastChar       rune
 	skipPeriodOnce bool // suppress the auto-period for the next emit (set by ResetContext)
+	typeMode       bool // config escape hatch: per-character key events instead of paste
+
+	// Clipboard save/restore state for paste injection. The user's clipboard
+	// is captured before the first paste of a burst and restored after a
+	// debounce window with no further pastes. Guarded by clipMu because the
+	// restore fires on a timer goroutine.
+	clipMu          sync.Mutex
+	clipSaved       bool
+	savedClip       string
+	savedClipIsText bool
+	lastPasted      string
+	restoreTimer    *time.Timer
 }
 
 func NewSimulator() *Simulator {
 	return &Simulator{
 		lastChar: 0,
 	}
+}
+
+// SetTypeMode switches text delivery to legacy per-character key events
+// (config: [keyboard] injection = "type"). Default is clipboard paste.
+func (s *Simulator) SetTypeMode(enabled bool) {
+	s.typeMode = enabled
 }
 
 // ResetContext is called when silence ends an utterance. A pause is NOT a new
@@ -69,14 +89,12 @@ func (s *Simulator) Run(ctx context.Context, textRx <-chan string) {
 				return
 			}
 			// Coalesce any fragments that are already queued into a single
-			// SendInput batch. Ultra Fast mode emits many tiny fragments
-			// (interim diffs + finals) in rapid bursts; injecting each as its
-			// own SendInput call saturates the input queue of busy windows
-			// (notably the Claude Code terminal), which then drops or repeats
-			// keystrokes. Merging what is already waiting cuts the call count
-			// without adding latency — the drain is non-blocking, so we only
-			// absorb fragments that have already arrived.
-			inputs := s.buildInputs(text)
+			// delivery. Ultra Fast mode emits many tiny fragments (interim
+			// diffs + finals) in rapid bursts; delivering each separately
+			// saturates the target window's input handling. The drain is
+			// non-blocking, so we only absorb fragments that have already
+			// arrived — no added latency.
+			payload := s.preparePayload(text)
 		drain:
 			for {
 				select {
@@ -84,23 +102,22 @@ func (s *Simulator) Run(ctx context.Context, textRx <-chan string) {
 					if !ok {
 						break drain
 					}
-					inputs = append(inputs, s.buildInputs(more)...)
+					payload += s.preparePayload(more)
 				default:
 					break drain
 				}
 			}
-			s.sendInputs(inputs)
+			s.deliver(payload)
 		}
 	}
 }
 
-// buildInputs converts a single text fragment into SendInput key events,
-// applying raw-mode (\x01) handling and auto-spacing, and advancing lastChar.
-// It does not call SendInput so callers can coalesce several fragments into one
-// atomic injection.
-func (s *Simulator) buildInputs(text string) []input {
+// preparePayload applies raw-mode (\x01) handling and auto-spacing to a single
+// fragment, logs it, and advances lastChar. Delivery happens separately so
+// several fragments can be coalesced into one paste/injection.
+func (s *Simulator) preparePayload(text string) string {
 	if text == "" {
-		return nil
+		return ""
 	}
 
 	// Raw mode: \x01 prefix means skip auto-spacing (used by interim result diffs)
@@ -109,7 +126,7 @@ func (s *Simulator) buildInputs(text string) []input {
 		raw = true
 		text = text[1:]
 		if text == "" {
-			return nil
+			return ""
 		}
 	}
 
@@ -131,39 +148,162 @@ func (s *Simulator) buildInputs(text string) []input {
 
 	logger.Typed(textToType)
 
-	runes := []rune(textToType)
+	for _, ch := range textToType {
+		if ch != '\b' {
+			s.lastChar = ch
+		}
+	}
+	return textToType
+}
+
+// deliver sends the payload to the focused window. Backspace runs become
+// VK_BACK key events; text segments are pasted (or typed in typeMode).
+func (s *Simulator) deliver(payload string) {
+	for len(payload) > 0 {
+		if payload[0] == '\b' {
+			n := 0
+			for n < len(payload) && payload[n] == '\b' {
+				n++
+			}
+			s.sendInputs(backspaceEvents(n))
+			payload = payload[n:]
+			continue
+		}
+		seg := payload
+		if i := strings.IndexByte(payload, '\b'); i >= 0 {
+			seg = payload[:i]
+			payload = payload[i:]
+		} else {
+			payload = ""
+		}
+		s.insertText(seg)
+	}
+}
+
+// insertText delivers a text segment. Default is clipboard paste: terminals
+// (ConPTY — cmd.exe, Windows Terminal, and therefore tmux/SSH inside them)
+// silently DROP space key-events from injected keystroke batches, even within
+// a single atomic SendInput call and regardless of Unicode vs VK_SPACE
+// encoding ("cloud code" -> "cloudcode", "accuracy of whatever" ->
+// "accuracyofwhatever"). Paste is immune: the terminal emulator itself reads
+// the clipboard and forwards literal bytes to whatever runs inside, so tmux
+// needs no clipboard support of its own. Falls back to key events if the
+// clipboard is unavailable.
+func (s *Simulator) insertText(text string) {
+	if text == "" {
+		return
+	}
+	if s.typeMode {
+		s.sendInputs(typingEvents(text))
+		return
+	}
+	if err := s.pasteText(text); err != nil {
+		logger.Error("[Keyboard] Paste failed (%v) - falling back to typing", err)
+		s.sendInputs(typingEvents(text))
+	}
+}
+
+const clipboardRestoreDelay = 1500 * time.Millisecond
+
+// pasteText puts text on the clipboard and sends Ctrl+V. The user's previous
+// clipboard text is captured before the first paste of a burst and restored
+// after clipboardRestoreDelay with no further pastes (debounced), and only if
+// the clipboard still holds our pasted text — never clobbering something the
+// user copied in the meantime. Non-text clipboard content (images, files)
+// cannot be saved/restored and is lost; that limitation is logged.
+func (s *Simulator) pasteText(text string) error {
+	s.clipMu.Lock()
+	defer s.clipMu.Unlock()
+
+	if !s.clipSaved {
+		if prev, ok := readClipboardText(); ok {
+			s.savedClip = prev
+			s.savedClipIsText = true
+		} else {
+			s.savedClipIsText = false
+			logger.Debug("[Keyboard] Previous clipboard not plain text - will not restore")
+		}
+		s.clipSaved = true
+	}
+
+	if err := writeClipboardText(text); err != nil {
+		// Best effort: put the user's text back before falling back to typing.
+		if s.savedClipIsText {
+			_ = writeClipboardText(s.savedClip)
+		}
+		s.clipSaved = false
+		return err
+	}
+	s.lastPasted = text
+
+	// Small settle so slow clipboard listeners see the new content before
+	// the paste keystroke arrives.
+	time.Sleep(15 * time.Millisecond)
+	s.sendInputs(pasteKeyEvents())
+
+	if s.restoreTimer != nil {
+		s.restoreTimer.Stop()
+	}
+	s.restoreTimer = time.AfterFunc(clipboardRestoreDelay, s.restoreClipboard)
+	return nil
+}
+
+// restoreClipboard runs on the debounce timer after a paste burst ends.
+func (s *Simulator) restoreClipboard() {
+	s.clipMu.Lock()
+	defer s.clipMu.Unlock()
+	if !s.clipSaved {
+		return
+	}
+	if cur, ok := readClipboardText(); ok && cur == s.lastPasted && s.savedClipIsText {
+		if err := writeClipboardText(s.savedClip); err != nil {
+			logger.Error("[Keyboard] Failed to restore clipboard: %v", err)
+		}
+	}
+	s.clipSaved = false
+}
+
+// typingEvents converts text to per-character SendInput key events
+// (legacy path / paste fallback).
+func typingEvents(text string) []input {
+	runes := []rune(text)
 	inputs := make([]input, 0, len(runes)*2)
 	for _, ch := range runes {
-		switch ch {
-		case '\b':
-			inputs = append(inputs,
-				input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkBack}},
-				input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkBack, dwFlags: keyeventfKeyUp}},
-			)
-		case ' ':
-			// Inject space as a real spacebar key (VK_SPACE), NOT a Unicode
-			// event. Terminals/ConPTY (e.g. the Claude Code prompt) reliably
-			// DROP Unicode-injected spaces under load — that is the cause of
-			// "cloud code" -> "cloudcode", "using it" -> "usingit", and
-			// "accuracy of whatever" -> "accuracyofwhatever" in BOTH fast and
-			// slow modes (our logged text always had the space; the terminal
-			// ate it). A real VK_SPACE keypress is delivered like any spacebar
-			// press, exactly as we already do for Backspace. Letters stay
-			// Unicode because their virtual key is keyboard-layout-dependent.
+		if ch == ' ' {
+			// Real spacebar key — Unicode-injected spaces are dropped by
+			// terminals far more often than VK_SPACE presses.
 			inputs = append(inputs,
 				input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkSpace}},
 				input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkSpace, dwFlags: keyeventfKeyUp}},
 			)
-			s.lastChar = ch
-		default:
-			inputs = append(inputs,
-				input{inputType: inputKeyboard, ki: keyboardInput{wScan: uint16(ch), dwFlags: keyeventfUnicode}},
-				input{inputType: inputKeyboard, ki: keyboardInput{wScan: uint16(ch), dwFlags: keyeventfUnicode | keyeventfKeyUp}},
-			)
-			s.lastChar = ch
+			continue
 		}
+		inputs = append(inputs,
+			input{inputType: inputKeyboard, ki: keyboardInput{wScan: uint16(ch), dwFlags: keyeventfUnicode}},
+			input{inputType: inputKeyboard, ki: keyboardInput{wScan: uint16(ch), dwFlags: keyeventfUnicode | keyeventfKeyUp}},
+		)
 	}
 	return inputs
+}
+
+func backspaceEvents(n int) []input {
+	inputs := make([]input, 0, n*2)
+	for i := 0; i < n; i++ {
+		inputs = append(inputs,
+			input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkBack}},
+			input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkBack, dwFlags: keyeventfKeyUp}},
+		)
+	}
+	return inputs
+}
+
+func pasteKeyEvents() []input {
+	return []input{
+		{inputType: inputKeyboard, ki: keyboardInput{wVk: vkControl}},
+		{inputType: inputKeyboard, ki: keyboardInput{wVk: vkV}},
+		{inputType: inputKeyboard, ki: keyboardInput{wVk: vkV, dwFlags: keyeventfKeyUp}},
+		{inputType: inputKeyboard, ki: keyboardInput{wVk: vkControl, dwFlags: keyeventfKeyUp}},
+	}
 }
 
 // sendInputs injects every event via SendInput. SendInput returns the number of
@@ -210,5 +350,9 @@ func needsPeriod(lastChar, firstChar rune) bool {
 	return unicode.IsUpper(firstChar)
 }
 
-const vkBack = 0x08  // VK_BACK virtual key code
-const vkSpace = 0x20 // VK_SPACE virtual key code
+const (
+	vkBack    = 0x08 // VK_BACK virtual key code
+	vkSpace   = 0x20 // VK_SPACE virtual key code
+	vkControl = 0x11 // VK_CONTROL virtual key code
+	vkV       = 0x56 // 'V' virtual key code
+)

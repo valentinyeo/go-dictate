@@ -2,15 +2,38 @@
 # Edit this file to configure the application
 # Get your Deepgram API key from: https://console.deepgram.com/
 
+profile = "terminal_agent"  # terminal_agent, email_writing, or custom
+
 [deepgram]
 api_key = "YOUR_API_KEY_HERE"
 language = "en"  # en or de
-model = "nova-2"
+model = "nova-3"  # nova-3, flux-general-en (experimental low latency), or flux-general-multi
+punctuate = true  # Add punctuation and capitalization
+smart_format = false  # Format numbers/dates/currency; Deepgram also enables punctuation when true
+filler_words = false  # Include filler words such as "um" and "uh"
+holdback = true  # Delay newest interim word slightly for better reliability
+keywords = []  # Nova-2 only
+keyterms = ["Codex", "PowerShell", "cmd.exe", "conhost", "go-dictate", "GitHub", "Deepgram", "Nova-3"]
 
 [audio]
 silence_threshold_ms = 3000   # Auto-pause after 3 seconds of silence
 duck_volume = 0.2            # Volume level (0.0-1.0) for other apps during dictation
 auto_pause_on_media = true   # Auto-pause when media is playing (YouTube, videos, etc.)
+zero_latency = true          # Ultra Fast mode
 
 [vad]
-energy_threshold = 0.02  # RMS threshold for speech detection (0.0-1.0)
+energy_threshold = 0.012  # Base RMS threshold for speech detection (0.0-1.0)
+adaptive_noise = true     # Raise threshold above learned room/fan noise floor
+noise_multiplier = 3.0    # Speech must be this many times louder than ambient noise
+min_start_threshold = 0.012
+speech_start_chunks = 2   # Require consecutive speech chunks to ignore typing/fan spikes
+
+[offline]
+enabled = false       # Use offline Vosk instead of Deepgram
+model_size = "small"  # Vosk model: small (~50MB) or large (~1.8GB)
+
+[diagnostics]
+save_failed_audio = false  # Privacy-sensitive: save WAVs only for utterances that produce no transcript
+
+[keyboard]
+injection = "paste"  # "paste" (default): clipboard + Ctrl+V — terminals can't drop spaces; works in cmd.exe, Windows Terminal, tmux/SSH. "type": legacy per-character key events (escape hatch; paste auto-falls back to it if the clipboard is unavailable)

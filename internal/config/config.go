@@ -4,25 +4,37 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 )
 
 type Config struct {
-	Deepgram DeepgramConfig `toml:"deepgram"`
-	Audio    AudioConfig    `toml:"audio"`
-	VAD      VADConfig      `toml:"vad"`
-	Offline  OfflineConfig  `toml:"offline"`
+	Profile     string            `toml:"profile"`
+	Deepgram    DeepgramConfig    `toml:"deepgram"`
+	Audio       AudioConfig       `toml:"audio"`
+	VAD         VADConfig         `toml:"vad"`
+	Offline     OfflineConfig     `toml:"offline"`
+	Diagnostics DiagnosticsConfig `toml:"diagnostics"`
+	Keyboard    KeyboardConfig    `toml:"keyboard"`
 }
 
+const (
+	ProfileTerminalAgent = "terminal_agent"
+	ProfileEmailWriting  = "email_writing"
+	ProfileCustom        = "custom"
+)
+
 type DeepgramConfig struct {
-	APIKey       string   `toml:"api_key"`
-	Language     string   `toml:"language"`
-	Model        string   `toml:"model"`
-	Punctuate    bool     `toml:"punctuate"`
-	FillerWords  bool     `toml:"filler_words"`
-	Keywords     []string `toml:"keywords"`
-	Keyterms     []string `toml:"keyterms"`
+	APIKey      string   `toml:"api_key"`
+	Language    string   `toml:"language"`
+	Model       string   `toml:"model"`
+	Punctuate   bool     `toml:"punctuate"`
+	SmartFormat bool     `toml:"smart_format"`
+	FillerWords bool     `toml:"filler_words"`
+	Holdback    bool     `toml:"holdback"`
+	Keywords    []string `toml:"keywords"`
+	Keyterms    []string `toml:"keyterms"`
 }
 
 type AudioConfig struct {
@@ -35,7 +47,11 @@ type AudioConfig struct {
 }
 
 type VADConfig struct {
-	EnergyThreshold float32 `toml:"energy_threshold"`
+	EnergyThreshold   float32 `toml:"energy_threshold"`
+	AdaptiveNoise     bool    `toml:"adaptive_noise"`
+	NoiseMultiplier   float32 `toml:"noise_multiplier"`
+	MinStartThreshold float32 `toml:"min_start_threshold"`
+	SpeechStartChunks int     `toml:"speech_start_chunks"`
 }
 
 type OfflineConfig struct {
@@ -43,14 +59,34 @@ type OfflineConfig struct {
 	ModelSize string `toml:"model_size"`
 }
 
+type DiagnosticsConfig struct {
+	SaveFailedAudio bool `toml:"save_failed_audio"`
+}
+
+type KeyboardConfig struct {
+	// Injection method for transcribed text:
+	//   "paste" (default) - put text on the clipboard and send Ctrl+V. The
+	//     terminal emulator converts the paste to plain input bytes, so it
+	//     works identically in cmd.exe, Windows Terminal, and tmux/SSH inside
+	//     them. Immune to the dropped-space bug: terminals (ConPTY) silently
+	//     drop space key-events from injected keystroke batches.
+	//   "type" - legacy per-character SendInput key events. Kept as an escape
+	//     hatch for targets where Ctrl+V does not paste.
+	// Paste automatically falls back to typing if the clipboard is unavailable.
+	Injection string `toml:"injection"`
+}
+
 func Default() Config {
 	return Config{
+		Profile: ProfileTerminalAgent,
 		Deepgram: DeepgramConfig{
 			APIKey:      "",
 			Language:    "en",
 			Model:       "nova-3",
 			Punctuate:   true,
-			FillerWords: true,
+			SmartFormat: false,
+			FillerWords: false,
+			Holdback:    true,
 			Keywords:    []string{},
 			Keyterms:    []string{"Claude Code", "exe", "GitHub", "Deepgram", "Vosk", "Valentin Yeo", "Hypertask", "Inne"},
 		},
@@ -59,13 +95,24 @@ func Default() Config {
 			DuckVolume:         0.05,
 			DuckEnabled:        false,
 			AutoPauseOnMedia:   true,
+			ZeroLatency:        true,
 		},
 		VAD: VADConfig{
-			EnergyThreshold: 0.02,
+			EnergyThreshold:   0.012,
+			AdaptiveNoise:     true,
+			NoiseMultiplier:   3.0,
+			MinStartThreshold: 0.012,
+			SpeechStartChunks: 2,
 		},
 		Offline: OfflineConfig{
 			Enabled:   false,
 			ModelSize: "small",
+		},
+		Diagnostics: DiagnosticsConfig{
+			SaveFailedAudio: false,
+		},
+		Keyboard: KeyboardConfig{
+			Injection: "paste",
 		},
 	}
 }
@@ -102,13 +149,83 @@ func LoadOrCreate() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
+	// Existing configs predate [keyboard]; default to paste injection.
+	if cfg.Keyboard.Injection == "" {
+		cfg.Keyboard.Injection = "paste"
+	}
+
+	migrated := false
+	if !hasTOMLKey(data, "punctuate") {
+		cfg.Deepgram.Punctuate = true
+		migrated = true
+	}
+	if !hasTOMLKey(data, "smart_format") {
+		// Previous versions used the Punctuation tray item to send
+		// smart_format=true, so preserve that behavior for old configs.
+		cfg.Deepgram.SmartFormat = cfg.Deepgram.Punctuate
+		migrated = true
+	}
+	if !hasTOMLKey(data, "filler_words") {
+		cfg.Deepgram.FillerWords = false
+		migrated = true
+	}
+	if !hasTOMLKey(data, "save_failed_audio") {
+		cfg.Diagnostics.SaveFailedAudio = false
+		migrated = true
+	}
+	if !hasTOMLKey(data, "adaptive_noise") {
+		cfg.VAD.AdaptiveNoise = true
+		migrated = true
+	}
+	if !hasTOMLKey(data, "noise_multiplier") || cfg.VAD.NoiseMultiplier <= 0 {
+		cfg.VAD.NoiseMultiplier = 3.0
+		migrated = true
+	}
+	if !hasTOMLKey(data, "min_start_threshold") || cfg.VAD.MinStartThreshold <= 0 {
+		cfg.VAD.MinStartThreshold = 0.012
+		migrated = true
+	}
+	if !hasTOMLKey(data, "speech_start_chunks") || cfg.VAD.SpeechStartChunks <= 0 {
+		cfg.VAD.SpeechStartChunks = 2
+		migrated = true
+	}
+	if cfg.VAD.EnergyThreshold <= 0 || cfg.VAD.EnergyThreshold < 0.01 {
+		// Values below ~0.01 caused fans, keyboard taps, and wireless mic noise
+		// to trigger endless empty utterances. Lift old configs to the safer floor.
+		cfg.VAD.EnergyThreshold = 0.012
+		migrated = true
+	}
+	if cfg.Profile == ProfileTerminalAgent && cfg.Audio.ZeroLatency && !cfg.Deepgram.Holdback {
+		// Type all but the newest unstable interim word. This is still fast, but it
+		// prevents many duplicated/missing word endings from Deepgram corrections.
+		cfg.Deepgram.Holdback = true
+		migrated = true
+	}
+	if !hasTOMLKey(data, "profile") {
+		cfg.Profile = cfg.InferProfile()
+		migrated = true
+	} else {
+		normalized := NormalizeProfile(cfg.Profile)
+		if normalized != cfg.Profile {
+			cfg.Profile = normalized
+			migrated = true
+		}
+	}
+
 	// Migrate: if keyterms is empty, copy keywords over (Nova-3 uses keyterms)
 	if len(cfg.Deepgram.Keyterms) == 0 && len(cfg.Deepgram.Keywords) > 0 {
 		cfg.Deepgram.Keyterms = cfg.Deepgram.Keywords
+		migrated = true
 	}
 
 	if err := cfg.Validate(); err != nil {
 		return nil, err
+	}
+
+	if migrated {
+		if err := cfg.Save(); err != nil {
+			return nil, fmt.Errorf("failed to save migrated config: %w", err)
+		}
 	}
 
 	return &cfg, nil
@@ -130,13 +247,17 @@ func (c *Config) Save() error {
 # Edit this file to configure the application
 # Get your Deepgram API key from: https://console.deepgram.com/
 
+# profile: terminal_agent, email_writing, or custom
+
 %s
 
 # Deepgram settings
-# model: nova-3 (latest), nova-2 (previous version)
+# model: nova-3 (stable dictation), flux-general-en (experimental lowest latency), flux-general-multi (experimental multilingual)
 # language: en (English), de (German) - toggle with Ctrl+Alt+Shift+L
 # punctuate: Enable automatic punctuation and capitalization (true/false)
-# filler_words: Remove "um", "uh", "like", etc. (true/false)
+# smart_format: Format numbers, dates, currency, etc. Deepgram also enables punctuation when this is true.
+# filler_words: Include filler words such as "um" and "uh" in transcripts (true/false)
+# holdback: Experimental. In Ultra Fast mode, hold back the newest interim word until it stabilizes (true/false)
 # keywords: List of words to boost recognition (e.g., ["GitHub", "API", "SQL"]) - Nova-2 only
 # keyterms: List of words/phrases for Nova-3 keyterm prompting (e.g., ["Claude Code", "exe"])
 
@@ -145,15 +266,23 @@ func (c *Config) Save() error {
 # duck_volume: Volume level (0.0-1.0) for other apps during dictation
 # duck_enabled: Enable/disable audio ducking (true/false)
 # device_name: Microphone to use (empty = system default, or exact device name)
-# zero_latency: Ultra-fast mode - keeps Deepgram connection open, 700ms silence threshold
+# zero_latency: Ultra-fast mode - keeps Deepgram connection open while still using the configured silence threshold
 
 # VAD settings
-# energy_threshold: RMS threshold for speech detection (0.0-1.0)
+# energy_threshold: Base RMS threshold for speech detection (0.0-1.0)
+# adaptive_noise: Raise the effective threshold above the learned room/fan noise floor.
+# noise_multiplier: Speech must be this many times louder than the ambient noise floor.
+# min_start_threshold: Minimum threshold required to start a new utterance.
+# speech_start_chunks: Consecutive above-threshold chunks needed before speech starts.
 
-# Offline settings (Vosk)
-# enabled: Use offline speech recognition instead of Deepgram (true/false)
-# model_size: "small" (~50MB, fast) or "large" (~1.8GB, more accurate)
-# Models are downloaded automatically when you enable offline mode
+# Vosk offline settings
+# enabled: Use offline Vosk speech recognition instead of Deepgram (true/false)
+# model_size: Vosk model size: "small" (~50MB, fast) or "large" (~1.8GB, more accurate)
+# Vosk models are downloaded automatically when you enable offline mode
+
+# Diagnostics
+# save_failed_audio: Save WAV files for utterances that triggered VAD but produced no transcript.
+# Files are written to %%APPDATA%%\dictation\failed-utterances. Disabled by default for privacy.
 
 # Global Hotkeys
 # Ctrl+Alt+X: Pause/Resume dictation
@@ -168,10 +297,111 @@ func (c *Config) Save() error {
 }
 
 func (c *Config) Validate() error {
+	c.Profile = NormalizeProfile(c.Profile)
 	if !c.Offline.Enabled && c.Deepgram.APIKey == "" {
 		return fmt.Errorf("API key not set. Please edit config.toml and add your Deepgram API key")
 	}
 	return nil
+}
+
+func NormalizeProfile(profile string) string {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "terminal", "terminal_agent", "terminal-agent", "agent":
+		return ProfileTerminalAgent
+	case "email", "email_writing", "email-writing", "writing":
+		return ProfileEmailWriting
+	case "custom":
+		return ProfileCustom
+	default:
+		return ProfileCustom
+	}
+}
+
+func (c *Config) ApplyProfile(profile string) {
+	profile = NormalizeProfile(profile)
+	c.Profile = profile
+
+	switch profile {
+	case ProfileEmailWriting:
+		c.Offline.Enabled = false
+		c.Deepgram.Model = "nova-3"
+		c.Audio.ZeroLatency = false
+		c.Deepgram.Punctuate = true
+		c.Deepgram.SmartFormat = true
+		c.Deepgram.FillerWords = false
+		c.Deepgram.Holdback = false
+	case ProfileTerminalAgent:
+		c.Offline.Enabled = false
+		c.Deepgram.Model = "nova-3"
+		c.Audio.ZeroLatency = true
+		c.Deepgram.Punctuate = true
+		c.Deepgram.SmartFormat = false
+		c.Deepgram.FillerWords = false
+		c.Deepgram.Holdback = true
+	default:
+		c.Profile = ProfileCustom
+	}
+}
+
+func (c Config) DisplayProfile() string {
+	profile := NormalizeProfile(c.Profile)
+	if profile == ProfileCustom {
+		return ProfileCustom
+	}
+	if c.MatchesProfile(profile) {
+		return profile
+	}
+	return ProfileCustom
+}
+
+func (c Config) InferProfile() string {
+	if c.MatchesProfile(ProfileTerminalAgent) {
+		return ProfileTerminalAgent
+	}
+	if c.MatchesProfile(ProfileEmailWriting) {
+		return ProfileEmailWriting
+	}
+	return ProfileCustom
+}
+
+func (c Config) MatchesProfile(profile string) bool {
+	switch NormalizeProfile(profile) {
+	case ProfileTerminalAgent:
+		return !c.Offline.Enabled &&
+			c.Deepgram.Model == "nova-3" &&
+			c.Audio.ZeroLatency &&
+			c.Deepgram.Punctuate &&
+			!c.Deepgram.SmartFormat &&
+			!c.Deepgram.FillerWords &&
+			c.Deepgram.Holdback
+	case ProfileEmailWriting:
+		return !c.Offline.Enabled &&
+			c.Deepgram.Model == "nova-3" &&
+			!c.Audio.ZeroLatency &&
+			c.Deepgram.Punctuate &&
+			c.Deepgram.SmartFormat &&
+			!c.Deepgram.FillerWords &&
+			!c.Deepgram.Holdback
+	default:
+		return false
+	}
+}
+
+func hasTOMLKey(data []byte, key string) bool {
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "[") {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, key) {
+			continue
+		}
+		rest := strings.TrimSpace(strings.TrimPrefix(trimmed, key))
+		if strings.HasPrefix(rest, "=") {
+			return true
+		}
+	}
+	return false
 }
 
 func GetConfigPath() (string, error) {

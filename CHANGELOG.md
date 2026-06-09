@@ -5,6 +5,15 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.116] - 2026-06-09
+
+### Changed
+- **Text is now delivered by clipboard paste (Ctrl+V) instead of keystroke injection** - v1.8.115's VK_SPACE encoding did NOT fix the dropped spaces: reconstruction showed the terminal dropped spaces even from within a single atomic SendInput batch (`' Especially if the outcome is a lot better...'` was sent as one batch; `isalotbetter` appeared on screen). ConPTY drops space key-events from injected batches regardless of encoding, so no keystroke-based method can be reliable. Paste is immune: the terminal emulator itself reads the clipboard and forwards literal bytes to whatever runs inside — cmd.exe, Windows Terminal, and tmux/SSH all receive the exact text without tmux needing any clipboard support of its own. Works for both fast and slow modes; no toggle needed.
+- The user's clipboard text is captured before a paste burst and restored ~1.5s after it ends — only if the clipboard still holds our pasted text, so anything you copy mid-dictation is never clobbered. Limitation: non-text clipboard content (images, files) can't be saved/restored across a paste.
+- New config (no tray toggle): `[keyboard] injection = "paste"` (default) or `"type"` (legacy per-character key events). Paste automatically falls back to typing if the clipboard is unavailable.
+
+---
+
 ## [1.8.115] - 2026-06-09
 
 ### Fixed
