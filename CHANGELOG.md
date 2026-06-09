@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.117] - 2026-06-09
+
+### Fixed
+- **Nothing appeared when pasting into Claude Code in classic cmd.exe (conhost)** - v1.8.116's paste worked in Notepad and tmux but not in a local Claude Code session hosted by classic conhost: conhost passes Ctrl+V THROUGH to raw-mode apps instead of pasting, and Claude Code treats a bare Ctrl+V as image-paste (no image → no-op). When the focused window is a classic console (`ConsoleWindowClass`), the app now sends conhost's system-menu "Edit > Paste" command (`WM_SYSCOMMAND` / `SC_PASTE` `0xFFF1`) so conhost itself injects the clipboard into the console input — works regardless of the app's input mode. Windows Terminal and GUI apps keep the regular Ctrl+V keystroke.
+
+---
+
 ## [1.8.116] - 2026-06-09
 
 ### Changed

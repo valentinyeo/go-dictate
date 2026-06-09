@@ -35,9 +35,31 @@ type input struct {
 }
 
 var (
-	user32        = windows.NewLazySystemDLL("user32.dll")
-	sendInputProc = user32.NewProc("SendInput")
+	user32                  = windows.NewLazySystemDLL("user32.dll")
+	sendInputProc           = user32.NewProc("SendInput")
+	getForegroundWindowProc = user32.NewProc("GetForegroundWindow")
+	getClassNameProc        = user32.NewProc("GetClassNameW")
+	postMessageProc         = user32.NewProc("PostMessageW")
 )
+
+const (
+	wmSysCommand   = 0x0112
+	scConsolePaste = 0xFFF1 // conhost system-menu "Edit > Paste" command ID
+)
+
+// foregroundWindowClass returns the focused top-level window and its class name.
+func foregroundWindowClass() (uintptr, string) {
+	hwnd, _, _ := getForegroundWindowProc.Call()
+	if hwnd == 0 {
+		return 0, ""
+	}
+	var buf [64]uint16
+	n, _, _ := getClassNameProc.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
+	if n == 0 {
+		return hwnd, ""
+	}
+	return hwnd, windows.UTF16ToString(buf[:n])
+}
 
 type Simulator struct {
 	lastChar       rune
@@ -239,7 +261,20 @@ func (s *Simulator) pasteText(text string) error {
 	// Small settle so slow clipboard listeners see the new content before
 	// the paste keystroke arrives.
 	time.Sleep(15 * time.Millisecond)
-	s.sendInputs(pasteKeyEvents())
+
+	// Classic conhost (class "ConsoleWindowClass") passes Ctrl+V THROUGH to
+	// raw-mode apps (Claude Code, ssh) instead of pasting — Claude Code
+	// receives a bare Ctrl+V keypress and nothing appears. Conhost's
+	// system-menu "Edit > Paste" command makes conhost itself inject the
+	// clipboard into the console input, app- and input-mode-agnostic.
+	// Windows Terminal (CASCADIA_HOSTING_WINDOW_CLASS) and GUI apps keep the
+	// regular Ctrl+V keystroke.
+	if hwnd, class := foregroundWindowClass(); class == "ConsoleWindowClass" {
+		logger.Debug("[Keyboard] Paste via conhost SC_PASTE")
+		postMessageProc.Call(hwnd, wmSysCommand, scConsolePaste, 0)
+	} else {
+		s.sendInputs(pasteKeyEvents())
+	}
 
 	if s.restoreTimer != nil {
 		s.restoreTimer.Stop()
