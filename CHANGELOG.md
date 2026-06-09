@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.113] - 2026-06-09
+
+### Fixed
+- **Words glued together after a thinking pause** - In Ultra Fast mode, pausing >3s triggered `ResetContext()`, which zeroed the keyboard's `lastChar`. The next word was then typed with no leading space and jammed onto the previous text (`opened` + `Let's` → `openedLet's`). A pause is not a new text field, so `ResetContext` now keeps `lastChar` (the next word stays space-separated) and only suppresses the auto-period once — so resuming in a genuinely fresh field still can't inject a stray leading `". "`.
+
+---
+
 ## [1.8.112] - 2026-06-09
 
 ### Fixed

@@ -38,7 +38,8 @@ var (
 )
 
 type Simulator struct{
-	lastChar rune
+	lastChar       rune
+	skipPeriodOnce bool // suppress the auto-period for the next emit (set by ResetContext)
 }
 
 func NewSimulator() *Simulator {
@@ -47,11 +48,15 @@ func NewSimulator() *Simulator {
 	}
 }
 
-// ResetContext clears the lastChar state so the next utterance
-// does not get a period prepended. Call when silence is detected
-// (STT session ends) so each speech session starts fresh.
+// ResetContext is called when silence ends an utterance. A pause is NOT a new
+// text field, so we must NOT clear lastChar — doing that dropped the leading
+// space and glued the next word onto the previous text ("opened" + "Let's" ->
+// "openedLet's") whenever the user paused >3s mid-dictation. Instead we keep
+// lastChar (so the next word stays space-separated) and only suppress the
+// auto-period for the next emit, so resuming in a genuinely fresh field can't
+// inject a stray leading ". ".
 func (s *Simulator) ResetContext() {
-	s.lastChar = 0
+	s.skipPeriodOnce = true
 }
 
 func (s *Simulator) Run(ctx context.Context, textRx <-chan string) {
@@ -111,13 +116,17 @@ func (s *Simulator) buildInputs(text string) []input {
 	// Add space before text if we've already typed something
 	// (i.e., this isn't the very first text being typed)
 	textToType := text
-	if !raw && s.lastChar != 0 {
-		firstRune, _ := utf8.DecodeRuneInString(text)
-		if needsPeriod(s.lastChar, firstRune) {
-			textToType = ". " + text
-		} else {
-			textToType = " " + text
+	if !raw {
+		if s.lastChar != 0 {
+			firstRune, _ := utf8.DecodeRuneInString(text)
+			if !s.skipPeriodOnce && needsPeriod(s.lastChar, firstRune) {
+				textToType = ". " + text
+			} else {
+				textToType = " " + text
+			}
 		}
+		// Consumed by the first real (non-raw) emit after a ResetContext.
+		s.skipPeriodOnce = false
 	}
 
 	logger.Typed(textToType)
