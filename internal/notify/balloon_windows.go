@@ -9,6 +9,11 @@ import (
 	"github.com/valen/go-dictate/internal/logger"
 )
 
+// CREATE_NO_WINDOW: never allocate a console for the child process.
+// HideWindow alone is ignored when Windows Terminal is the default console
+// host (Windows 11), which pops a visible terminal window per notification.
+const createNoWindow = 0x08000000
+
 // ShowBalloon displays a Windows balloon/toast notification.
 // The notification auto-dismisses after the given duration.
 func ShowBalloon(title, message string, duration time.Duration) {
@@ -34,7 +39,7 @@ $n.Dispose()`,
 		)
 
 		cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command", script)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
 		if err := cmd.Start(); err != nil {
 			logger.Error("[Notify] failed to launch notification: %v", err)
 		}

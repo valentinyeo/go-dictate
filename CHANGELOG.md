@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.120] - 2026-06-09
+
+### Fixed
+- **Visible terminal/PowerShell windows popping up** - balloon notifications and the helper spawns (open changelog/log/dashboard/sound settings/config, app restart) launched console processes with only `HideWindow`, which Windows 11 ignores when Windows Terminal is the default console host — so a terminal window appeared on every notification. All child-process spawns now also set `CREATE_NO_WINDOW`, which never allocates a console at all. Notifications and helpers still work; nothing is visible.
+
+---
+
 ## [1.8.119] - 2026-06-09
 
 ### Added

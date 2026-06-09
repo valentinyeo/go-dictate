@@ -263,14 +263,20 @@ func (m *Manager) handleVersionClick() {
 	}
 }
 
+// CREATE_NO_WINDOW: never allocate a console for the child process.
+// HideWindow alone is ignored when Windows Terminal is the default console
+// host (Windows 11), which pops a visible terminal window per spawn.
+const createNoWindow = 0x08000000
+
 func openChangelog() error {
 	exeDir := getExeDir()
 	changelogPath := fmt.Sprintf("%s\\CHANGELOG.md", exeDir)
 
 	cmd := exec.Command("cmd")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-		CmdLine:    fmt.Sprintf(`cmd /c start "" "%s"`, changelogPath),
+		HideWindow:    true,
+		CreationFlags: createNoWindow,
+		CmdLine:       fmt.Sprintf(`cmd /c start "" "%s"`, changelogPath),
 	}
 	return cmd.Start()
 }
@@ -897,8 +903,9 @@ func openLogFile() error {
 
 	cmd := exec.Command("cmd")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-		CmdLine:    fmt.Sprintf(`cmd /c start "" "%s"`, logPath),
+		HideWindow:    true,
+		CreationFlags: createNoWindow,
+		CmdLine:       fmt.Sprintf(`cmd /c start "" "%s"`, logPath),
 	}
 	return cmd.Start()
 }
@@ -921,8 +928,9 @@ func openDashboard() error {
 
 	cmd := exec.Command("cmd")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-		CmdLine:    fmt.Sprintf(`cmd /c start "" "%s"`, dashboardURL),
+		HideWindow:    true,
+		CreationFlags: createNoWindow,
+		CmdLine:       fmt.Sprintf(`cmd /c start "" "%s"`, dashboardURL),
 	}
 	return cmd.Start()
 }
@@ -935,8 +943,9 @@ func (m *Manager) handleSoundSettingsClick() {
 		case <-m.soundSettingsItem.ClickedCh:
 			cmd := exec.Command("cmd")
 			cmd.SysProcAttr = &syscall.SysProcAttr{
-				HideWindow: true,
-				CmdLine:    `cmd /c start ms-settings:sound`,
+				HideWindow:    true,
+				CreationFlags: createNoWindow,
+				CmdLine:       `cmd /c start ms-settings:sound`,
 			}
 			if err := cmd.Start(); err != nil {
 				fmt.Printf("[Tray] Failed to open sound settings: %v\n", err)
@@ -985,8 +994,9 @@ func restartApplication() error {
 	// Use CmdLine directly to avoid Go escaping quotes (which breaks cmd start).
 	cmd := exec.Command("cmd")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow: true,
-		CmdLine:    fmt.Sprintf(`cmd /c ping 127.0.0.1 -n 3 >nul & start "" "%s"`, exePath),
+		HideWindow:    true,
+		CreationFlags: createNoWindow,
+		CmdLine:       fmt.Sprintf(`cmd /c ping 127.0.0.1 -n 3 >nul & start "" "%s"`, exePath),
 	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to schedule restart: %w", err)

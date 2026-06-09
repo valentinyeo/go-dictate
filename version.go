@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.119"
+	Version        = "1.8.120"
 	BuildDate      = "2026-06-09"
 	VersionName    = "Reliable Dictation"
-	VersionSummary = "Profiles, adaptive VAD, utterance diagnostics + code-review fixes"
+	VersionSummary = "No more terminal windows popping up from notifications/helpers"
 )

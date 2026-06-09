@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/pelletier/go-toml/v2"
 )
@@ -418,9 +419,15 @@ func OpenInEditor() error {
 		return err
 	}
 
-	// Windows: use cmd.exe to open with default text editor
+	// Windows: use cmd.exe to open with default text editor. CREATE_NO_WINDOW
+	// keeps the helper cmd.exe from flashing a terminal window (HideWindow is
+	// ignored when Windows Terminal is the default console host).
 	proc := &os.ProcAttr{
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
+		Sys: &syscall.SysProcAttr{
+			HideWindow:    true,
+			CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+		},
 	}
 	_, err = os.StartProcess("C:\\Windows\\System32\\cmd.exe", []string{"/C", "start", "", configPath}, proc)
 	return err
