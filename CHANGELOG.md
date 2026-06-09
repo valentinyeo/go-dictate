@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.115] - 2026-06-09
+
+### Fixed
+- **Dropped spaces between words ("cloud code" → "cloudcode")** - Affected BOTH fast and slow modes, so it was never the interim diffing. Reconstructing the actual injected text proved we always sent the space correctly (`and duplicating`, `accuracy of whatever`); the terminal/app was dropping it. Root cause: spaces were injected as `KEYEVENTF_UNICODE` events, which terminals (ConPTY, e.g. the Claude Code prompt) drop under load — while letters come through fine. Spaces are now injected as a real `VK_SPACE` keypress (exactly how Backspace was already handled), which is delivered reliably. Mode-independent fix.
+
+---
+
 ## [1.8.114] - 2026-06-09
 
 ### Fixed

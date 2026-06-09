@@ -134,12 +134,28 @@ func (s *Simulator) buildInputs(text string) []input {
 	runes := []rune(textToType)
 	inputs := make([]input, 0, len(runes)*2)
 	for _, ch := range runes {
-		if ch == '\b' {
+		switch ch {
+		case '\b':
 			inputs = append(inputs,
 				input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkBack}},
 				input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkBack, dwFlags: keyeventfKeyUp}},
 			)
-		} else {
+		case ' ':
+			// Inject space as a real spacebar key (VK_SPACE), NOT a Unicode
+			// event. Terminals/ConPTY (e.g. the Claude Code prompt) reliably
+			// DROP Unicode-injected spaces under load — that is the cause of
+			// "cloud code" -> "cloudcode", "using it" -> "usingit", and
+			// "accuracy of whatever" -> "accuracyofwhatever" in BOTH fast and
+			// slow modes (our logged text always had the space; the terminal
+			// ate it). A real VK_SPACE keypress is delivered like any spacebar
+			// press, exactly as we already do for Backspace. Letters stay
+			// Unicode because their virtual key is keyboard-layout-dependent.
+			inputs = append(inputs,
+				input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkSpace}},
+				input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkSpace, dwFlags: keyeventfKeyUp}},
+			)
+			s.lastChar = ch
+		default:
 			inputs = append(inputs,
 				input{inputType: inputKeyboard, ki: keyboardInput{wScan: uint16(ch), dwFlags: keyeventfUnicode}},
 				input{inputType: inputKeyboard, ki: keyboardInput{wScan: uint16(ch), dwFlags: keyeventfUnicode | keyeventfKeyUp}},
@@ -194,4 +210,5 @@ func needsPeriod(lastChar, firstChar rune) bool {
 	return unicode.IsUpper(firstChar)
 }
 
-const vkBack = 0x08 // VK_BACK virtual key code
+const vkBack = 0x08  // VK_BACK virtual key code
+const vkSpace = 0x20 // VK_SPACE virtual key code
