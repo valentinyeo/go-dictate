@@ -281,6 +281,17 @@ waitLoop:
 	awaitInterim := false        // after a final resets state, ignore further finals until an interim arrives
 	lastFinalTranscript := ""    // suppress duplicate finals from the previous utterance
 
+	// Deepgram sometimes closes a final EARLIER than the interims it already
+	// streamed ("...to see if it's" after we typed "...it's dictating"), then
+	// re-delivers the overhang at the start of the next segment ("dictating a
+	// lot faster."). Without tracking this, the overhang gets typed twice
+	// ("dictating dictating", "not happening not happening"). pendingCarry
+	// holds the typed-but-not-finalized overhang so the next segment's first
+	// interim can skip past it. Time-limited so it can't misfire on a
+	// coincidental match in a later utterance.
+	pendingCarry := ""
+	var pendingCarrySetAt time.Time
+
 	for {
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
@@ -366,6 +377,17 @@ waitLoop:
 									return nil
 								}
 							}
+						} else if strings.HasPrefix(dgText, transcript) && typedBy > len(transcript) {
+							// Final ended EARLIER than the interims we already
+							// typed. Deepgram re-delivers the overhang at the
+							// start of the next segment — remember it so the
+							// next first-interim can skip it instead of typing
+							// it twice ("dictating dictating").
+							if carry := strings.TrimSpace(dgText[len(transcript):typedBy]); carry != "" {
+								pendingCarry = carry
+								pendingCarrySetAt = time.Now()
+								logger.Debug("[Deepgram] Final shorter than typed; carrying overhang '%s'", carry)
+							}
 						}
 					} else if transcript != "" {
 						// No interims came through, emit final directly
@@ -401,6 +423,30 @@ waitLoop:
 
 					if dgText == "" {
 						emitText, emitBy := emitStablePrefix(transcript, interimHoldbackWords)
+						// Skip a carried overhang from the previous final — that
+						// text is already on screen. typedBy must cover the
+						// skipped region too, or later appends would re-emit it.
+						if pendingCarry != "" {
+							carryLen := len(pendingCarry)
+							// Carry must end on a word boundary in the new
+							// transcript ("not" must not match "nothing").
+							boundaryOK := len(transcript) == carryLen ||
+								(len(transcript) > carryLen &&
+									(transcript[carryLen] == ' ' || transcript[carryLen] == '.' || transcript[carryLen] == ','))
+							if time.Since(pendingCarrySetAt) <= 3*time.Second &&
+								len(transcript) >= carryLen && boundaryOK &&
+								strings.EqualFold(transcript[:carryLen], pendingCarry) {
+								skip := carryLen
+								if emitBy > skip {
+									emitText = strings.TrimLeft(transcript[skip:emitBy], " ")
+								} else {
+									emitText = ""
+									emitBy = skip
+								}
+								logger.Debug("[Deepgram] Skipped carried overhang '%s'", pendingCarry)
+							}
+							pendingCarry = ""
+						}
 						logger.Debug("[Deepgram] Interim (first): '%s' (emit %d/%d bytes)", transcript, emitBy, len(transcript))
 						fmt.Printf("[Deepgram] Interim: %s\n", transcript)
 						dgText = transcript

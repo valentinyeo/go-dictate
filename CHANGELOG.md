@@ -5,6 +5,16 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.118] - 2026-06-09
+
+### Fixed
+- **Ultra Fast word doubling ("dictating dictating", "not happening not happening")** - Deepgram sometimes closes a final EARLIER than the interims it already streamed (interim: `...to see if it's dictating a`, final: `...to see if it's`), then re-delivers the overhang at the start of the next segment (`dictating a lot faster.`). The diff had already typed the overhang from the interim, so the next segment typed it again. The client now detects a final that ends before the typed offset, carries the typed-but-unfinalized overhang, and skips it when the next segment's first interim starts with it (word-boundary checked, case-insensitive, 3s expiry so it can't misfire on a later coincidental match).
+
+### Known limitation
+- A doubled word that Deepgram itself transcribes in an interim (`Testing Ultra Ultra fast`) and later corrects in a rewrite cannot be retracted — append-only typing never backspaces. This is inherent to live interim mode.
+
+---
+
 ## [1.8.117] - 2026-06-09
 
 ### Fixed
