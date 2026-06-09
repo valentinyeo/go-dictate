@@ -5,6 +5,168 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.112] - 2026-06-09
+
+### Fixed
+- **Dropped/garbled keystrokes in terminals (Claude Code prompt)** - Ultra Fast mode emits many tiny text fragments (interim diffs + finals) in rapid bursts. Each was injected as its own `SendInput` call, saturating the input queue of busy windows like the Claude Code terminal, which then dropped spaces (`using it` → `usingit`) or repeated characters (`see` → `ssssee`). The keyboard simulator now coalesces all already-queued fragments into a single `SendInput` batch via a non-blocking drain — far fewer, less-crowded injections, with no added latency.
+- **Silently lost keystrokes on blocked injection** - `SendInput` returns the count of events it actually inserted and stops at the first event blocked by another thread; the remainder were silently dropped (only `ret == 0` was checked). Injection now resumes from the returned offset and retries from there (bounded, with a brief back-off only when fully blocked) until every event lands.
+
+---
+
+## [1.8.111] - 2026-05-14
+
+### Fixed
+- **Skipped held-back words in Ultra Fast mode** - Fixed the interim holdback diff logic so words like `I`, `way`, `logs`, and `VWO` are emitted when they become stable instead of being skipped.
+- **Spacing for held-back words** - Held words that become the first emitted text in a segment now use normal spacing instead of being glued to the previous word.
+
+---
+
+## [1.8.110] - 2026-05-14
+
+### Fixed
+- **Reliability-first VAD defaults** - Replaced the overly sensitive fixed VAD behavior with adaptive noise-floor tracking, a safer speech-start threshold, and consecutive speech-chunk debouncing to reduce fan/keyboard false starts.
+- **Ultra Fast no longer chops sentences at 700ms** - Ultra Fast mode now keeps the configured silence threshold with a 2500ms minimum, so short pauses are less likely to split or drop sentence endings.
+- **Stale Deepgram sessions recover automatically** - Persistent Deepgram connections are recycled after 90 seconds and after repeated empty utterances, preventing the app from staying connected while returning no text.
+- **Real-time audio reliability mode** - Disabled Windows EcoQoS power throttling for the app and restored normal process priority to reduce wireless mic callback dropouts.
+
+### Changed
+- **Terminal / Agent default is safer** - Hold Back Last Word is now enabled for the Terminal / Agent profile to avoid typing unstable Deepgram interim words.
+
+---
+
+## [1.8.109] - 2026-05-11
+
+### Added
+- **Utterance diagnostics for missed dictation** - Each VAD-triggered utterance now logs `[UTT ...]` start/result lines with provider, model, mic, connection reuse, duration, chunks, dropped chunks, RMS levels, text timing, and recent STT reset context.
+- **Optional failed-utterance WAV capture** - Added `diagnostics.save_failed_audio` and a tray toggle under `General Options` to save WAV files only when VAD detects speech but no transcript is produced. This is disabled by default for privacy.
+
+---
+
+## [1.8.108] - 2026-05-11
+
+### Fixed
+- **Tray provider state stays in sync with actual mode** - Pending Vosk downloads/preparation are now intent-aware. If you switch back to Deepgram while Vosk is still preparing, completion no longer flips the tray/config back to `Offline (Vosk)`.
+- **Centralized tray version display** - Tray menu labels and provider tooltips now use the app version constants passed from `main`, preventing hardcoded version drift.
+
+---
+
+## [1.8.107] - 2026-05-09
+
+### Fixed
+- **Vosk finalization now drains buffered audio before ending** - On silence, offline mode now closes the Vosk audio channel and lets the recognizer consume queued chunks before calling `FinalResult`. Previously the context was cancelled first, which could discard the utterance and produce no transcript.
+- **Vosk empty finals are logged** - Empty Vosk final results now emit a debug log line to make future offline troubleshooting clearer.
+
+---
+
+## [1.8.106] - 2026-05-09
+
+### Fixed
+- **Vosk no longer gets stuck in speaking/green while loading** - Vosk models are now preloaded while idle/startup/settings change instead of first loading after speech starts. Large models can take many seconds to map into memory, and loading them during speech made the tray appear stuck.
+- **Ghost speech detection disabled for Vosk** - The ghost-speech timeout expects interim text while speaking, which Deepgram provides but Vosk does not. It was killing valid Vosk sessions before final transcripts could be emitted.
+- **Vosk model is kept loaded across audio restarts** - Audio-capture reset events no longer unload and reload the same selected Vosk model unnecessarily.
+
+---
+
+## [1.8.105] - 2026-05-09
+
+### Changed
+- **Active STT provider visible at the first menu level** - The tray now shows titles like `✓ Deepgram: Nova-3` or `✓ Vosk: Large`, so you do not need to open a submenu to see whether online or offline dictation is active.
+- **Deepgram-only options moved under Deepgram** - Punctuation, Smart Format, filler words, holdback, and keyterms now live in the `Deepgram` submenu because Vosk does not use those settings.
+- **General Options submenu** - Ultra Fast/Fast Finalize, Audio Ducking, and Auto-pause now live under `General Options` because they are app-level behavior rather than Deepgram/Vosk model settings.
+
+---
+
+## [1.8.104] - 2026-05-09
+
+### Changed
+- **Grouped STT provider tray menus** - Deepgram mode/model options now live under `Deepgram`, and Vosk offline/model options now live under `Vosk`.
+- **Vosk model naming** - The old `Offline Model` wording is now explicit `Vosk Model: Small` / `Vosk Model: Large`.
+
+### Fixed
+- **Vosk Large selection downloads instead of silently falling back** - When Vosk is enabled and the selected model is missing, the tray now prepares/downloads that Vosk model. Offline mode no longer silently falls back to Deepgram when the selected Vosk model is unavailable.
+
+---
+
+## [1.8.103] - 2026-05-09
+
+### Fixed
+- **Offline Vosk transcripts now type into the active window** - Vosk produces its final transcript while the STT session is shutting down; the text bridge now stays alive long enough to forward that final result, and the Vosk engine flushes final text whether VAD cancels the context or closes the audio channel.
+
+---
+
+## [1.8.102] - 2026-05-09
+
+### Added
+- **Profile submenu** - Right-click tray menu now has `Profile` with `Terminal / Agent`, `Email / Writing`, and read-only `Custom`.
+- **Terminal / Agent preset** - Uses Nova-3, Ultra Fast mode, punctuation, no smart format, no filler words, and no holdback for fast append-only dictation.
+- **Email / Writing preset** - Uses Nova-3, final-result mode, punctuation, smart format, no filler words, and no holdback for cleaner prose.
+
+### Changed
+- **Speech Options submenu** - Detailed toggles now live under `Speech Options` so profiles are the first-level control while advanced settings remain accessible.
+
+---
+
+## [1.8.101] - 2026-05-09
+
+### Added
+- **Separate Smart Format tray toggle** - Punctuation now sends Deepgram's `punctuate=true`, while Smart Format separately sends `smart_format=true` for numbers, dates, currency, and related formatting. Smart Format still inherently enables punctuation on Deepgram's side.
+- **Edit Keyterms tray shortcut** - Right-click tray menu now has `Edit Keyterms`, which opens the actual `config.toml` so Nova-3 keyterms can be edited quickly.
+
+### Changed
+- **Clearer filler-words toggle** - The tray menu now says `Include Filler Words`, matching Deepgram's `filler_words=true` behavior. Leaving it off lets Deepgram strip common fillers such as "uh" and "um".
+
+---
+
+## [1.8.100] - 2026-05-09
+
+### Changed
+- **Hold Back Last Word is opt-in** - The holdback feature remains available in the tray menu, but is now marked experimental and defaults off because delayed text is annoying when manually editing or deleting while dictation is still producing output.
+
+---
+
+## [1.8.99] - 2026-05-08
+
+### Added
+- **Hold Back Last Word tray toggle** — Right-click tray menu now lets you turn the one-word interim holdback on/off without editing config. This only affects Ultra Fast interim typing; normal mode still waits for final transcripts.
+
+---
+
+## [1.8.98] - 2026-05-08
+
+### Changed
+- **Hold back one unstable interim word in Ultra Fast Nova mode** — The app now types all but the newest interim word, then flushes the held word when Nova confirms it in a later interim or final result. This improves live-edge dictation quality without using risky terminal backspace corrections.
+
+---
+
+## [1.8.97] - 2026-05-08
+
+### Added
+- **Deepgram model selector in tray menu** — Right-click tray menu now includes `Deepgram Model` with `Nova-3` and `Flux (Experimental)`, so Flux can be tested without editing `config.toml`.
+
+### Changed
+- **Nova-3 restored as the practical default** — Flux remains available for low-latency testing, but early testing showed substantially worse dictation accuracy for general speech.
+
+---
+
+## [1.8.96] - 2026-05-08
+
+### Added
+- **Experimental Deepgram Flux adapter** — Setting `model = "flux-general-en"` uses Deepgram's `/v2/listen` Flux endpoint and parses `TurnInfo` events (`StartOfTurn`, `Update`, `EndOfTurn`) for Ultra Fast append-only dictation.
+
+### Changed
+- **80ms audio chunks** — Capture now uses 1280-frame chunks at 16kHz (~80ms) instead of 1600-frame chunks (~100ms), matching Deepgram's Flux latency recommendation while keeping the same linear16 mono audio format.
+
+---
+
+## [1.8.95] - 2026-05-08
+
+### Fixed
+- **Ultra Fast sometimes ignored speech after waking** — Deepgram can send a final transcript without an interim first. The stale-final guard treated those as old results and discarded them, so valid phrases like "Are you back?" never typed. Now final-only results are accepted when fresh audio was just sent, while duplicate stale finals are still suppressed.
+- **Lark M2 capture recovery is faster** — When the audio callback goes silent, the watchdog now performs a full capture rebuild immediately instead of spending two failed attempts on lightweight Stop/Start restarts. Any capture restart also resets the persistent STT session so Deepgram is not reused after a mic wake/reconnect.
+- **Pre-roll now matches the intended 500ms** — Capture chunks are 100ms, not 20ms, so the previous 25-chunk pre-roll sent up to 2.5s of old silence/audio before each utterance. This is now 5 chunks.
+
+---
+
 ## [1.8.94] - 2026-04-28
 
 ### Fixed

@@ -3,6 +3,7 @@ package keyboard
 import (
 	"context"
 	"fmt"
+	"time"
 	"unicode"
 	"unicode/utf8"
 	"unsafe"
@@ -62,14 +63,39 @@ func (s *Simulator) Run(ctx context.Context, textRx <-chan string) {
 			if !ok {
 				return
 			}
-			s.typeText(text)
+			// Coalesce any fragments that are already queued into a single
+			// SendInput batch. Ultra Fast mode emits many tiny fragments
+			// (interim diffs + finals) in rapid bursts; injecting each as its
+			// own SendInput call saturates the input queue of busy windows
+			// (notably the Claude Code terminal), which then drops or repeats
+			// keystrokes. Merging what is already waiting cuts the call count
+			// without adding latency — the drain is non-blocking, so we only
+			// absorb fragments that have already arrived.
+			inputs := s.buildInputs(text)
+		drain:
+			for {
+				select {
+				case more, ok := <-textRx:
+					if !ok {
+						break drain
+					}
+					inputs = append(inputs, s.buildInputs(more)...)
+				default:
+					break drain
+				}
+			}
+			s.sendInputs(inputs)
 		}
 	}
 }
 
-func (s *Simulator) typeText(text string) {
+// buildInputs converts a single text fragment into SendInput key events,
+// applying raw-mode (\x01) handling and auto-spacing, and advancing lastChar.
+// It does not call SendInput so callers can coalesce several fragments into one
+// atomic injection.
+func (s *Simulator) buildInputs(text string) []input {
 	if text == "" {
-		return
+		return nil
 	}
 
 	// Raw mode: \x01 prefix means skip auto-spacing (used by interim result diffs)
@@ -78,7 +104,7 @@ func (s *Simulator) typeText(text string) {
 		raw = true
 		text = text[1:]
 		if text == "" {
-			return
+			return nil
 		}
 	}
 
@@ -96,9 +122,6 @@ func (s *Simulator) typeText(text string) {
 
 	logger.Typed(textToType)
 
-	// Build a single batch of all key events and send atomically via SendInput.
-	// This prevents the target application from dropping keystrokes (especially
-	// spaces) that occurred when characters were sent individually with sleeps.
 	runes := []rune(textToType)
 	inputs := make([]input, 0, len(runes)*2)
 	for _, ch := range runes {
@@ -115,16 +138,40 @@ func (s *Simulator) typeText(text string) {
 			s.lastChar = ch
 		}
 	}
+	return inputs
+}
 
-	if len(inputs) > 0 {
+// sendInputs injects every event via SendInput. SendInput returns the number of
+// events it actually inserted and stops at the first one blocked by another
+// thread injecting input — the remainder are silently lost unless we resume
+// from the offset. We loop until all events are injected, backing off briefly
+// only when fully blocked (ret == 0). The normal path sends everything in one
+// call, so there is no added latency when injection is not contended.
+func (s *Simulator) sendInputs(inputs []input) {
+	if len(inputs) == 0 {
+		return
+	}
+	const maxBlockedRetries = 10
+	blocked := 0
+	for off := 0; off < len(inputs); {
+		remaining := inputs[off:]
 		ret, _, err := sendInputProc.Call(
-			uintptr(len(inputs)),
-			uintptr(unsafe.Pointer(&inputs[0])),
-			uintptr(unsafe.Sizeof(inputs[0])),
+			uintptr(len(remaining)),
+			uintptr(unsafe.Pointer(&remaining[0])),
+			uintptr(unsafe.Sizeof(remaining[0])),
 		)
-		if ret == 0 {
-			fmt.Printf("[Keyboard] SendInput batch (%d events) failed: %v\n", len(inputs), err)
+		n := int(ret)
+		if n <= 0 {
+			blocked++
+			if blocked >= maxBlockedRetries {
+				fmt.Printf("[Keyboard] SendInput blocked, lost %d of %d events: %v\n", len(remaining), len(inputs), err)
+				return
+			}
+			time.Sleep(2 * time.Millisecond)
+			continue
 		}
+		off += n
+		blocked = 0
 	}
 }
 
