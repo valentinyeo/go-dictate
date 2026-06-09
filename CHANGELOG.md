@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.114] - 2026-06-09
+
+### Fixed
+- **Phrases typed twice ("I still can. I still can dictate")** - With `endpointing=200`, Deepgram emits `is_final:true` responses with empty text at brief endpoints — even in the middle of an utterance. The Ultra Fast handler treated every final the same and reset `dgText`/`typedBy` to zero, so the next interim re-typed the entire phrase from scratch, duplicating what was already on screen. Empty finals are now ignored (no state reset); only a non-empty final or VAD silence ends an utterance.
+
+---
+
 ## [1.8.113] - 2026-06-09
 
 ### Fixed
