@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.121] - 2026-06-09
+
+### Fixed
+- **A console window opened together with the app** (the "debug window") - v1.8.119/1.8.120 were built with Zig as the CGO linker (MinGW gcc is no longer installed). With CGO, the external linker produces the final exe, and `-H windowsgui` was silently lost - the binaries were linked as console apps (PE subsystem 3). The build now also passes `CGO_LDFLAGS=-Wl,--subsystem,windows`, restoring the GUI subsystem (2). `build.bat` and CLAUDE.md updated so future builds can't regress.
+
+---
+
 ## [1.8.120] - 2026-06-09
 
 ### Fixed

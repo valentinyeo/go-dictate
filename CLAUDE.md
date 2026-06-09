@@ -13,10 +13,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build Commands
 
 ```bash
-# Build (requires Go 1.21+, MinGW-w64 GCC, CGO_ENABLED=1)
+# Build (requires Go 1.21+, CGO_ENABLED=1). MinGW gcc is NOT installed -
+# Zig (C:\Users\valen\zig) is the C toolchain: CC="zig cc", CXX="zig c++".
+# CRITICAL: with CGO the external linker does the final link and -H windowsgui
+# is silently lost (exe becomes a console app that opens a terminal window).
+# Always also set CGO_LDFLAGS="-Wl,--subsystem,windows".
 go build -ldflags="-s -w -H windowsgui" -trimpath -o go-dictate.exe .
 
-# Or use the batch script
+# Or use the batch script (sets all of the above)
 build.bat
 
 # Launch

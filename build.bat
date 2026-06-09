@@ -5,6 +5,15 @@ set GOOS=windows
 set GOARCH=amd64
 set CGO_ENABLED=1
 
+REM MinGW gcc is not installed; Zig provides the C toolchain for CGO (malgo).
+set PATH=C:\Users\valen\zig;%PATH%
+set CC=zig cc
+set CXX=zig c++
+
+REM With CGO the external linker produces the final exe and -H windowsgui is
+REM silently lost (binary becomes a console app). Force the GUI subsystem.
+set CGO_LDFLAGS=-Wl,--subsystem,windows
+
 REM Build with optimization flags and version info
 go build -ldflags="-s -w -H windowsgui" -trimpath -o go-dictate.exe .
 
