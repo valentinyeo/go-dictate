@@ -22,33 +22,57 @@ type Manager struct {
 	config       *config.Config
 	configMu     sync.RWMutex
 
-	versionItem   *systray.MenuItem
-	pauseItem     *systray.MenuItem
-	languageItem  *systray.MenuItem
-	autostartItem *systray.MenuItem
-	settingsItem  *systray.MenuItem
-	logItem       *systray.MenuItem
-	dashboardItem *systray.MenuItem
+	appVersion        string
+	appVersionName    string
+	appVersionSummary string
+
+	versionItem       *systray.MenuItem
+	pauseItem         *systray.MenuItem
+	languageItem      *systray.MenuItem
+	autostartItem     *systray.MenuItem
+	settingsItem      *systray.MenuItem
+	logItem           *systray.MenuItem
+	dashboardItem     *systray.MenuItem
 	soundSettingsItem *systray.MenuItem
 	resetAudioItem    *systray.MenuItem
 	restartItem       *systray.MenuItem
 	exitItem          *systray.MenuItem
 
-	// Feature toggles
-	duckingItem      *systray.MenuItem
-	autoPauseItem    *systray.MenuItem
-	punctuateItem    *systray.MenuItem
-	fillerWordsItem  *systray.MenuItem
-	zeroLatencyItem  *systray.MenuItem
+	// Speech profiles
+	profileParent       *systray.MenuItem
+	profileTerminalItem *systray.MenuItem
+	profileEmailItem    *systray.MenuItem
+	profileCustomItem   *systray.MenuItem
 
-	// STT mode selection
+	// Feature toggles
+	speechOptionsParent *systray.MenuItem
+	duckingItem         *systray.MenuItem
+	autoPauseItem       *systray.MenuItem
+	punctuateItem       *systray.MenuItem
+	smartFormatItem     *systray.MenuItem
+	fillerWordsItem     *systray.MenuItem
+	holdbackItem        *systray.MenuItem
+	zeroLatencyItem     *systray.MenuItem
+	failedAudioItem     *systray.MenuItem
+	keytermsItem        *systray.MenuItem
+
+	// STT provider selection
 	onlineItem  *systray.MenuItem
 	offlineItem *systray.MenuItem
 
-	// Offline model selection
+	// Deepgram provider/menu selection
+	deepgramModelParent *systray.MenuItem
+	modelNovaItem       *systray.MenuItem
+	modelFluxItem       *systray.MenuItem
+
+	// Vosk provider/menu selection
 	modelParent    *systray.MenuItem
 	modelSmallItem *systray.MenuItem
 	modelLargeItem *systray.MenuItem
+
+	offlinePrepareMu        sync.Mutex
+	offlinePrepareKey       string // model currently being prepared/downloaded
+	offlinePrepareWantedKey string // model user still wants activated when preparation finishes
 
 	// Microphone selection
 	micNames     []string // device names from enumeration
@@ -66,15 +90,18 @@ type Manager struct {
 	cancel context.CancelFunc
 }
 
-func NewManager(stateManager *state.Manager, cfg *config.Config, micDevices []string, selectedMic string) *Manager {
+func NewManager(stateManager *state.Manager, cfg *config.Config, micDevices []string, selectedMic, appVersion, appVersionName, appVersionSummary string) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
-		stateManager: stateManager,
-		config:       cfg,
-		ctx:          ctx,
-		cancel:       cancel,
-		micNames:     micDevices,
-		selectedMic:  selectedMic,
+		stateManager:      stateManager,
+		config:            cfg,
+		ctx:               ctx,
+		cancel:            cancel,
+		appVersion:        appVersion,
+		appVersionName:    appVersionName,
+		appVersionSummary: appVersionSummary,
+		micNames:          micDevices,
+		selectedMic:       selectedMic,
 		MicChangedCh:      make(chan string, 1),
 		SettingsChangedCh: make(chan struct{}, 1),
 		readyCh:           make(chan struct{}),
@@ -88,25 +115,47 @@ func (m *Manager) Run() {
 func (m *Manager) onReady() {
 	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
-	systray.SetTooltip("Dictation App v1.8.94")
+	systray.SetTooltip(m.baseTooltip())
 
 	// Create menu items - clicking version opens changelog
-	m.versionItem = systray.AddMenuItem("v1.8.94 - Ultra Fast", "Click to view changelog")
-	summaryItem := systray.AddMenuItem("  Fix duplicated words after Deepgram interim regression", "")
+	m.versionItem = systray.AddMenuItem(fmt.Sprintf("v%s - %s", m.appVersion, m.appVersionName), "Click to view changelog")
+	summaryItem := systray.AddMenuItem("  "+m.appVersionSummary, "")
 	summaryItem.Disable()
 	systray.AddSeparator()
 
-	// STT mode selection
+	// Profile and STT mode selection
 	m.configMu.RLock()
+	profile := m.config.DisplayProfile()
 	offlineEnabled := m.config.Offline.Enabled
 	isLargeModel := m.config.Offline.ModelSize == "large"
+	isFluxModel := m.config.Deepgram.Model == "flux-general-en"
+	language := m.config.Deepgram.Language
+	punctuate := m.config.Deepgram.Punctuate
+	smartFormat := m.config.Deepgram.SmartFormat
+	fillerWords := m.config.Deepgram.FillerWords
+	holdback := m.config.Deepgram.Holdback
 	m.configMu.RUnlock()
 
-	m.onlineItem = systray.AddMenuItemCheckbox("Online (Deepgram)", "Use Deepgram cloud API", !offlineEnabled)
-	m.offlineItem = systray.AddMenuItemCheckbox("Offline (Vosk)", "Use local Vosk model (no internet needed)", offlineEnabled)
-	m.modelParent = systray.AddMenuItem("Offline Model", "Select offline model size")
-	m.modelSmallItem = m.modelParent.AddSubMenuItemCheckbox("Small (~50 MB)", "Fast, lower accuracy", !isLargeModel)
-	m.modelLargeItem = m.modelParent.AddSubMenuItemCheckbox("Large (~1.8 GB)", "Slower, higher accuracy", isLargeModel)
+	m.profileParent = systray.AddMenuItem("Profile", "Choose a dictation preset")
+	m.profileTerminalItem = m.profileParent.AddSubMenuItemCheckbox("Terminal / Agent", "Fast append-only dictation for terminals and AI agents", profile == config.ProfileTerminalAgent)
+	m.profileEmailItem = m.profileParent.AddSubMenuItemCheckbox("Email / Writing", "Slower final transcripts with cleaner formatting", profile == config.ProfileEmailWriting)
+	m.profileCustomItem = m.profileParent.AddSubMenuItemCheckbox("Custom", "Current settings do not match a preset", profile == config.ProfileCustom)
+	m.profileCustomItem.Disable()
+
+	m.deepgramModelParent = systray.AddMenuItem("Deepgram", "Cloud speech recognition")
+	m.onlineItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Use Deepgram (Online)", "Use Deepgram cloud API", !offlineEnabled)
+	m.modelNovaItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Model: Nova-3", "Stable dictation quality", !isFluxModel)
+	m.modelFluxItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Model: Flux (Experimental)", "Lower latency, worse dictation accuracy in testing", isFluxModel)
+	m.punctuateItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Punctuation", "Deepgram only: auto punctuation and capitalization", punctuate)
+	m.smartFormatItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Smart Format", "Deepgram only: format numbers, dates, currency, etc.", smartFormat)
+	m.fillerWordsItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Include Filler Words", "Deepgram only: include um, uh, etc. instead of stripping common fillers", fillerWords)
+	m.holdbackItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Hold Back Last Word (Experimental)", "Deepgram Ultra Fast only: delay the newest interim word", holdback)
+	m.keytermsItem = m.deepgramModelParent.AddSubMenuItem("Edit Keyterms", "Deepgram only: open config.toml to edit keyterms")
+
+	m.modelParent = systray.AddMenuItem("Vosk", "Offline local speech recognition")
+	m.offlineItem = m.modelParent.AddSubMenuItemCheckbox("Use Vosk (Offline)", "Use local Vosk model (no internet needed)", offlineEnabled)
+	m.modelSmallItem = m.modelParent.AddSubMenuItemCheckbox("Model: Small (~50 MB)", "Fast, lower accuracy", !isLargeModel)
+	m.modelLargeItem = m.modelParent.AddSubMenuItemCheckbox("Model: Large (~1.8 GB)", "Slower, higher accuracy", isLargeModel)
 
 	systray.AddSeparator()
 	m.languageItem = systray.AddMenuItem("Language: English", "Ctrl+Alt+L: Toggle language (EN ↔ DE)")
@@ -129,13 +178,13 @@ func (m *Manager) onReady() {
 	m.autostartItem = systray.AddMenuItemCheckbox("Start on Boot", "Start application on boot", isAutostartEnabled())
 	systray.AddSeparator()
 
-	// Feature toggles
+	// General options that are not tied to a specific STT provider.
 	m.configMu.RLock()
-	m.zeroLatencyItem = systray.AddMenuItemCheckbox("Ultra Fast Mode", "Persistent connection + 700ms silence (zero-latency)", m.config.Audio.ZeroLatency)
-	m.duckingItem = systray.AddMenuItemCheckbox("Audio Ducking", "Lower other apps' volume while speaking", m.config.Audio.DuckEnabled)
-	m.autoPauseItem = systray.AddMenuItemCheckbox("Auto-pause in Meetings", "Pause dictation during calls", m.config.Audio.AutoPauseOnMedia)
-	m.punctuateItem = systray.AddMenuItemCheckbox("Punctuation", "Auto punctuation and capitalization", m.config.Deepgram.Punctuate)
-	m.fillerWordsItem = systray.AddMenuItemCheckbox("Remove Filler Words", "Remove um, uh, like, etc.", m.config.Deepgram.FillerWords)
+	m.speechOptionsParent = systray.AddMenuItem("General Options", "Dictation behavior outside the STT provider")
+	m.zeroLatencyItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Ultra Fast / Fast Finalize", "Deepgram: persistent connection. Vosk: shorter silence cutoff before final text.", m.config.Audio.ZeroLatency)
+	m.duckingItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Audio Ducking", "Lower other apps' volume while speaking", m.config.Audio.DuckEnabled)
+	m.autoPauseItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Auto-pause in Meetings", "Pause dictation during calls", m.config.Audio.AutoPauseOnMedia)
+	m.failedAudioItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Save Failed Utterance WAVs", "Privacy-sensitive: save audio only when VAD detects speech but no transcript is produced", m.config.Diagnostics.SaveFailedAudio)
 	m.configMu.RUnlock()
 
 	systray.AddSeparator()
@@ -153,7 +202,9 @@ func (m *Manager) onReady() {
 	m.updateLanguageMenu()
 
 	// Start event handlers
+	go m.handleProfileClicks()
 	go m.handleModeClicks()
+	go m.handleDeepgramModelClicks()
 	go m.handleModelClicks()
 	go m.handleMicClicks()
 	go m.handlePauseClick()
@@ -162,6 +213,7 @@ func (m *Manager) onReady() {
 	go m.handleVersionClick()
 	go m.handleFeatureToggles()
 	go m.handleSettingsClick()
+	go m.handleKeytermsClick()
 	go m.handleLogClick()
 	go m.handleDashboardClick()
 	go m.handleSoundSettingsClick()
@@ -173,8 +225,21 @@ func (m *Manager) onReady() {
 	// Subclass systray window for left-click toggle + right-click menu fix
 	m.EnableLeftClick()
 
+	// Set first-level provider titles (e.g. ✓ Deepgram: Nova-3 / Vosk: Small).
+	m.syncMenuChecks()
+
 	// Signal that tray menu is fully constructed
 	close(m.readyCh)
+
+	// If config starts in offline mode but the selected Vosk model is missing
+	// (for example after choosing Large previously), prepare it automatically
+	// instead of leaving the app to fall back to Deepgram unexpectedly.
+	if offlineEnabled {
+		modelKey := vosk.ModelKeyForLanguage(language, isLargeModel)
+		if !vosk.IsAvailable() || !vosk.IsModelDownloaded(modelKey) {
+			m.startOfflinePreparation(modelKey)
+		}
+	}
 }
 
 func (m *Manager) ReadyCh() <-chan struct{} {
@@ -215,6 +280,192 @@ func (m *Manager) notifySettingsChanged() {
 	case m.SettingsChangedCh <- struct{}{}:
 	default:
 	}
+}
+
+func setMenuItemChecked(item *systray.MenuItem, checked bool) {
+	if item == nil {
+		return
+	}
+	if checked {
+		item.Check()
+	} else {
+		item.Uncheck()
+	}
+}
+
+func voskModelReady(modelKey string) bool {
+	return vosk.IsAvailable() && vosk.IsModelDownloaded(modelKey)
+}
+
+func voskModelSizeFromKey(modelKey string) string {
+	switch modelKey {
+	case "en-large", "de-large":
+		return "large"
+	default:
+		return "small"
+	}
+}
+
+func profileDisplayName(profile string) string {
+	switch config.NormalizeProfile(profile) {
+	case config.ProfileTerminalAgent:
+		return "Terminal / Agent"
+	case config.ProfileEmailWriting:
+		return "Email / Writing"
+	default:
+		return "Custom"
+	}
+}
+
+func (m *Manager) updateProviderMenuTitles(offlineEnabled, isFluxModel, isLargeModel bool) {
+	deepgramModel := "Nova-3"
+	if isFluxModel {
+		deepgramModel = "Flux"
+	}
+	voskModel := "Small"
+	if isLargeModel {
+		voskModel = "Large"
+	}
+
+	deepgramPrefix := ""
+	voskPrefix := ""
+	if offlineEnabled {
+		voskPrefix = "✓ "
+	} else {
+		deepgramPrefix = "✓ "
+	}
+
+	if m.deepgramModelParent != nil {
+		m.deepgramModelParent.SetTitle(fmt.Sprintf("%sDeepgram: %s", deepgramPrefix, deepgramModel))
+	}
+	if m.modelParent != nil {
+		m.modelParent.SetTitle(fmt.Sprintf("%sVosk: %s", voskPrefix, voskModel))
+	}
+}
+
+func (m *Manager) baseTooltip() string {
+	if m.appVersion == "" {
+		return "Dictation App"
+	}
+	return fmt.Sprintf("Dictation App v%s", m.appVersion)
+}
+
+func (m *Manager) updateProviderTooltip(offlineEnabled bool) {
+	if offlineEnabled {
+		systray.SetTooltip(m.baseTooltip() + " - Offline (Vosk)")
+	} else {
+		systray.SetTooltip(m.baseTooltip() + " - Online (Deepgram)")
+	}
+}
+
+func (m *Manager) startOfflinePreparation(modelKey string) {
+	m.offlinePrepareMu.Lock()
+	m.offlinePrepareWantedKey = modelKey
+	if m.offlinePrepareKey != "" {
+		logger.Info("[Offline] Vosk preparation already running for %s; queued wanted model %s", m.offlinePrepareKey, modelKey)
+		m.offlinePrepareMu.Unlock()
+		return
+	}
+	m.offlinePrepareKey = modelKey
+	m.offlinePrepareMu.Unlock()
+	go m.prepareOffline(modelKey)
+}
+
+func (m *Manager) cancelOfflinePreparation() {
+	m.offlinePrepareMu.Lock()
+	m.offlinePrepareWantedKey = ""
+	m.offlinePrepareMu.Unlock()
+	if m.offlineItem != nil {
+		m.offlineItem.SetTitle("Use Vosk (Offline)")
+	}
+}
+
+func (m *Manager) isOfflinePreparationWanted(modelKey string) bool {
+	m.offlinePrepareMu.Lock()
+	defer m.offlinePrepareMu.Unlock()
+	return m.offlinePrepareWantedKey == modelKey
+}
+
+func (m *Manager) finishOfflinePreparation(modelKey string, success bool) (activate bool, nextKey string) {
+	m.offlinePrepareMu.Lock()
+	activate = success && m.offlinePrepareWantedKey == modelKey
+	if m.offlinePrepareKey == modelKey {
+		m.offlinePrepareKey = ""
+	}
+	if activate || (!success && m.offlinePrepareWantedKey == modelKey) {
+		m.offlinePrepareWantedKey = ""
+	}
+	if m.offlinePrepareWantedKey != "" && m.offlinePrepareWantedKey != modelKey && m.offlinePrepareKey == "" {
+		nextKey = m.offlinePrepareWantedKey
+		m.offlinePrepareKey = nextKey
+	}
+	m.offlinePrepareMu.Unlock()
+	return activate, nextKey
+}
+
+func (m *Manager) completeOfflinePreparation(modelKey string, success bool) bool {
+	activate, nextKey := m.finishOfflinePreparation(modelKey, success)
+	if nextKey != "" {
+		go m.prepareOffline(nextKey)
+	}
+	return activate
+}
+
+func (m *Manager) syncMenuChecks() {
+	m.configMu.RLock()
+	profile := m.config.DisplayProfile()
+	offlineEnabled := m.config.Offline.Enabled
+	isFluxModel := m.config.Deepgram.Model == "flux-general-en"
+	isLargeModel := m.config.Offline.ModelSize == "large"
+	zeroLatency := m.config.Audio.ZeroLatency
+	ducking := m.config.Audio.DuckEnabled
+	autoPause := m.config.Audio.AutoPauseOnMedia
+	saveFailedAudio := m.config.Diagnostics.SaveFailedAudio
+	punctuate := m.config.Deepgram.Punctuate
+	smartFormat := m.config.Deepgram.SmartFormat
+	fillerWords := m.config.Deepgram.FillerWords
+	holdback := m.config.Deepgram.Holdback
+	m.configMu.RUnlock()
+
+	setMenuItemChecked(m.profileTerminalItem, profile == config.ProfileTerminalAgent)
+	setMenuItemChecked(m.profileEmailItem, profile == config.ProfileEmailWriting)
+	setMenuItemChecked(m.profileCustomItem, profile == config.ProfileCustom)
+	setMenuItemChecked(m.onlineItem, !offlineEnabled)
+	setMenuItemChecked(m.offlineItem, offlineEnabled)
+	setMenuItemChecked(m.modelNovaItem, !isFluxModel)
+	setMenuItemChecked(m.modelFluxItem, isFluxModel)
+	setMenuItemChecked(m.modelSmallItem, !isLargeModel)
+	setMenuItemChecked(m.modelLargeItem, isLargeModel)
+	setMenuItemChecked(m.zeroLatencyItem, zeroLatency)
+	setMenuItemChecked(m.duckingItem, ducking)
+	setMenuItemChecked(m.autoPauseItem, autoPause)
+	setMenuItemChecked(m.failedAudioItem, saveFailedAudio)
+	setMenuItemChecked(m.punctuateItem, punctuate)
+	setMenuItemChecked(m.smartFormatItem, smartFormat)
+	setMenuItemChecked(m.fillerWordsItem, fillerWords)
+	setMenuItemChecked(m.holdbackItem, holdback)
+	m.updateProviderMenuTitles(offlineEnabled, isFluxModel, isLargeModel)
+	m.updateProviderTooltip(offlineEnabled)
+}
+
+func (m *Manager) markProfileCustomLocked() {
+	m.config.Profile = config.ProfileCustom
+}
+
+func (m *Manager) applySpeechProfile(profile string) {
+	normalized := config.NormalizeProfile(profile)
+	m.cancelOfflinePreparation()
+	m.configMu.Lock()
+	m.config.ApplyProfile(normalized)
+	if err := m.config.Save(); err != nil {
+		fmt.Printf("[Tray] Failed to save config: %v\n", err)
+	}
+	m.configMu.Unlock()
+
+	m.syncMenuChecks()
+	logger.Info("[Tray] Profile: %s", profileDisplayName(normalized))
+	fmt.Printf("[Tray] Profile: %s\n", profileDisplayName(normalized))
+	m.notifySettingsChanged()
 }
 
 // CycleMic advances to the next microphone in the list and returns the display name.
@@ -291,6 +542,7 @@ func (m *Manager) ToggleZeroLatency() bool {
 
 	m.configMu.Lock()
 	m.config.Audio.ZeroLatency = !m.config.Audio.ZeroLatency
+	m.markProfileCustomLocked()
 	enabled := m.config.Audio.ZeroLatency
 	if enabled {
 		m.zeroLatencyItem.Check()
@@ -302,6 +554,7 @@ func (m *Manager) ToggleZeroLatency() bool {
 	}
 	m.configMu.Unlock()
 
+	m.syncMenuChecks()
 	m.notifySettingsChanged()
 	return enabled
 }
@@ -467,6 +720,7 @@ func (m *Manager) handleFeatureToggles() {
 		case <-m.zeroLatencyItem.ClickedCh:
 			m.configMu.Lock()
 			m.config.Audio.ZeroLatency = !m.config.Audio.ZeroLatency
+			m.markProfileCustomLocked()
 			if m.config.Audio.ZeroLatency {
 				m.zeroLatencyItem.Check()
 			} else {
@@ -477,6 +731,7 @@ func (m *Manager) handleFeatureToggles() {
 			}
 			fmt.Printf("[Tray] Ultra Fast mode: %v\n", m.config.Audio.ZeroLatency)
 			m.configMu.Unlock()
+			m.syncMenuChecks()
 			m.notifySettingsChanged()
 
 		case <-m.duckingItem.ClickedCh:
@@ -506,10 +761,27 @@ func (m *Manager) handleFeatureToggles() {
 			}
 			fmt.Printf("[Tray] Auto-pause in meetings: %v\n", m.config.Audio.AutoPauseOnMedia)
 			m.configMu.Unlock()
+			m.syncMenuChecks()
+
+		case <-m.failedAudioItem.ClickedCh:
+			m.configMu.Lock()
+			m.config.Diagnostics.SaveFailedAudio = !m.config.Diagnostics.SaveFailedAudio
+			if m.config.Diagnostics.SaveFailedAudio {
+				m.failedAudioItem.Check()
+			} else {
+				m.failedAudioItem.Uncheck()
+			}
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save config: %v\n", err)
+			}
+			fmt.Printf("[Tray] Save failed utterance WAVs: %v\n", m.config.Diagnostics.SaveFailedAudio)
+			m.configMu.Unlock()
+			m.syncMenuChecks()
 
 		case <-m.punctuateItem.ClickedCh:
 			m.configMu.Lock()
 			m.config.Deepgram.Punctuate = !m.config.Deepgram.Punctuate
+			m.markProfileCustomLocked()
 			if m.config.Deepgram.Punctuate {
 				m.punctuateItem.Check()
 			} else {
@@ -520,11 +792,30 @@ func (m *Manager) handleFeatureToggles() {
 			}
 			fmt.Printf("[Tray] Punctuation: %v\n", m.config.Deepgram.Punctuate)
 			m.configMu.Unlock()
+			m.syncMenuChecks()
+			m.notifySettingsChanged()
+
+		case <-m.smartFormatItem.ClickedCh:
+			m.configMu.Lock()
+			m.config.Deepgram.SmartFormat = !m.config.Deepgram.SmartFormat
+			m.markProfileCustomLocked()
+			if m.config.Deepgram.SmartFormat {
+				m.smartFormatItem.Check()
+			} else {
+				m.smartFormatItem.Uncheck()
+			}
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save config: %v\n", err)
+			}
+			fmt.Printf("[Tray] Smart format: %v\n", m.config.Deepgram.SmartFormat)
+			m.configMu.Unlock()
+			m.syncMenuChecks()
 			m.notifySettingsChanged()
 
 		case <-m.fillerWordsItem.ClickedCh:
 			m.configMu.Lock()
 			m.config.Deepgram.FillerWords = !m.config.Deepgram.FillerWords
+			m.markProfileCustomLocked()
 			if m.config.Deepgram.FillerWords {
 				m.fillerWordsItem.Check()
 			} else {
@@ -533,8 +824,26 @@ func (m *Manager) handleFeatureToggles() {
 			if err := m.config.Save(); err != nil {
 				fmt.Printf("[Tray] Failed to save config: %v\n", err)
 			}
-			fmt.Printf("[Tray] Remove filler words: %v\n", m.config.Deepgram.FillerWords)
+			fmt.Printf("[Tray] Include filler words: %v\n", m.config.Deepgram.FillerWords)
 			m.configMu.Unlock()
+			m.syncMenuChecks()
+			m.notifySettingsChanged()
+
+		case <-m.holdbackItem.ClickedCh:
+			m.configMu.Lock()
+			m.config.Deepgram.Holdback = !m.config.Deepgram.Holdback
+			m.markProfileCustomLocked()
+			if m.config.Deepgram.Holdback {
+				m.holdbackItem.Check()
+			} else {
+				m.holdbackItem.Uncheck()
+			}
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save config: %v\n", err)
+			}
+			fmt.Printf("[Tray] Hold back last word: %v\n", m.config.Deepgram.Holdback)
+			m.configMu.Unlock()
+			m.syncMenuChecks()
 			m.notifySettingsChanged()
 		}
 	}
@@ -548,6 +857,19 @@ func (m *Manager) handleSettingsClick() {
 		case <-m.settingsItem.ClickedCh:
 			if err := config.OpenInEditor(); err != nil {
 				fmt.Printf("[Tray] Failed to open settings: %v\n", err)
+			}
+		}
+	}
+}
+
+func (m *Manager) handleKeytermsClick() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-m.keytermsItem.ClickedCh:
+			if err := config.OpenInEditor(); err != nil {
+				fmt.Printf("[Tray] Failed to open config for keyterms: %v\n", err)
 			}
 		}
 	}
@@ -676,111 +998,244 @@ func restartApplication() error {
 	return nil
 }
 
+func (m *Manager) handleProfileClicks() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-m.profileTerminalItem.ClickedCh:
+			m.applySpeechProfile(config.ProfileTerminalAgent)
+		case <-m.profileEmailItem.ClickedCh:
+			m.applySpeechProfile(config.ProfileEmailWriting)
+		}
+	}
+}
+
 func (m *Manager) handleModeClicks() {
 	for {
 		select {
 		case <-m.ctx.Done():
 			return
 		case <-m.onlineItem.ClickedCh:
-			logger.Info("[Tray] User clicked Online (Deepgram)")
+			logger.Info("[Tray] User clicked Use Deepgram (Online)")
+			m.cancelOfflinePreparation()
 			m.onlineItem.Check()
 			m.offlineItem.Uncheck()
 			m.configMu.Lock()
 			m.config.Offline.Enabled = false
+			m.markProfileCustomLocked()
 			if err := m.config.Save(); err != nil {
 				logger.Error("[Tray] Failed to save config: %v", err)
 			}
 			m.configMu.Unlock()
 			logger.Info("[Tray] Switched to Online (Deepgram)")
-			systray.SetTooltip("Dictation App v1.8.94 - Online (Deepgram)")
+			m.syncMenuChecks()
 			m.notifySettingsChanged()
 
 		case <-m.offlineItem.ClickedCh:
-			logger.Info("[Tray] User clicked Offline (Vosk)")
+			logger.Info("[Tray] User clicked Use Vosk (Offline)")
 			m.configMu.RLock()
 			lang := m.config.Deepgram.Language
 			isLarge := m.config.Offline.ModelSize == "large"
 			m.configMu.RUnlock()
 
 			modelKey := vosk.ModelKeyForLanguage(lang, isLarge)
-			logger.Info("[Tray] Offline model key: %s (DLL available: %v, model downloaded: %v)",
+			logger.Info("[Tray] Vosk model key: %s (DLL available: %v, model downloaded: %v)",
 				modelKey, vosk.IsAvailable(), vosk.IsModelDownloaded(modelKey))
 
-			if vosk.IsAvailable() && vosk.IsModelDownloaded(modelKey) {
+			if voskModelReady(modelKey) {
+				m.cancelOfflinePreparation()
 				m.offlineItem.Check()
 				m.onlineItem.Uncheck()
 				m.configMu.Lock()
 				m.config.Offline.Enabled = true
+				m.markProfileCustomLocked()
 				m.config.Save()
 				m.configMu.Unlock()
 				logger.Info("[Tray] Switched to Offline (Vosk) - already ready")
-				systray.SetTooltip("Dictation App v1.8.94 - Offline (Vosk)")
+				m.syncMenuChecks()
 				m.notifySettingsChanged()
 			} else {
-				logger.Info("[Tray] Starting offline preparation (download DLL + model)...")
-				go m.prepareOffline(modelKey)
+				logger.Info("[Tray] Starting Vosk preparation (download DLL/model if needed)...")
+				m.startOfflinePreparation(modelKey)
 			}
 		}
 	}
 }
 
 func (m *Manager) prepareOffline(modelKey string) {
-	// Download DLL if needed
+	modelSize := voskModelSizeFromKey(modelKey)
+	info, ok := vosk.Models[modelKey]
+	if !ok {
+		logger.Error("[Offline] Unknown Vosk model key: %s", modelKey)
+		if m.isOfflinePreparationWanted(modelKey) {
+			m.offlineItem.SetTitle("Use Vosk (Offline) - model error")
+		}
+		m.completeOfflinePreparation(modelKey, false)
+		m.syncMenuChecks()
+		return
+	}
+
+	if m.isOfflinePreparationWanted(modelKey) {
+		m.offlineItem.SetTitle("Use Vosk (preparing...)")
+	}
+
+	// Download DLL if needed. Downloads cannot be cancelled mid-flight, but the
+	// final activation is guarded by offlinePrepareWantedKey so completing a
+	// background download cannot switch the app back to Vosk after the user chose
+	// Deepgram.
 	if !vosk.IsAvailable() {
 		logger.Info("[Offline] Downloading Vosk library...")
-		m.offlineItem.SetTitle("Offline (downloading library...)")
-		systray.SetTooltip("Downloading Vosk library...")
+		if m.isOfflinePreparationWanted(modelKey) {
+			m.offlineItem.SetTitle("Use Vosk (downloading library...)")
+			systray.SetTooltip("Downloading Vosk library...")
+		}
 		if err := vosk.EnsureVoskLibrary(func(downloaded, total int64) {
-			if total > 0 {
+			if total > 0 && m.isOfflinePreparationWanted(modelKey) {
 				pct := float64(downloaded) / float64(total) * 100
-				msg := fmt.Sprintf("Offline (library %.0f%%)", pct)
+				msg := fmt.Sprintf("Use Vosk (library %.0f%%)", pct)
 				m.offlineItem.SetTitle(msg)
 				systray.SetTooltip(fmt.Sprintf("Downloading Vosk library... %.0f%%", pct))
 			}
 		}); err != nil {
-			logger.Error("[Offline] Failed to download vosk library: %v", err)
-			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.94")
+			logger.Error("[Offline] Failed to download Vosk library: %v", err)
+			if m.isOfflinePreparationWanted(modelKey) {
+				m.offlineItem.SetTitle("Use Vosk (Offline) - download failed")
+			}
+			m.completeOfflinePreparation(modelKey, false)
+			m.syncMenuChecks()
 			return
 		}
 		logger.Info("[Offline] Vosk library downloaded successfully")
 	}
 
-	// Download model if needed
+	// Download selected Vosk model if needed.
 	if !vosk.IsModelDownloaded(modelKey) {
-		info := vosk.Models[modelKey]
-		logger.Info("[Offline] Downloading model: %s (%s)...", info.Name, info.Size)
-		m.offlineItem.SetTitle(fmt.Sprintf("Offline (downloading %s...)", info.Name))
-		systray.SetTooltip(fmt.Sprintf("Downloading %s model...", info.Name))
+		logger.Info("[Offline] Downloading Vosk model: %s (%s)...", info.Name, info.Size)
+		if m.isOfflinePreparationWanted(modelKey) {
+			m.offlineItem.SetTitle(fmt.Sprintf("Use Vosk (downloading %s...)", info.Name))
+			systray.SetTooltip(fmt.Sprintf("Downloading %s model...", info.Name))
+		}
 		if err := vosk.DownloadModel(modelKey, func(downloaded, total int64) {
-			if total > 0 {
+			if total > 0 && m.isOfflinePreparationWanted(modelKey) {
 				pct := float64(downloaded) / float64(total) * 100
-				m.offlineItem.SetTitle(fmt.Sprintf("Offline (model %.0f%%)", pct))
+				m.offlineItem.SetTitle(fmt.Sprintf("Use Vosk (model %.0f%%)", pct))
 				systray.SetTooltip(fmt.Sprintf("Downloading %s... %.0f%%", info.Name, pct))
 			}
 		}); err != nil {
-			logger.Error("[Offline] Failed to download model %s: %v", modelKey, err)
-			m.offlineItem.SetTitle("Offline (Vosk) - download failed")
-			systray.SetTooltip("Dictation App v1.8.94")
+			logger.Error("[Offline] Failed to download Vosk model %s: %v", modelKey, err)
+			if m.isOfflinePreparationWanted(modelKey) {
+				m.offlineItem.SetTitle("Use Vosk (Offline) - download failed")
+			}
+			m.completeOfflinePreparation(modelKey, false)
+			m.syncMenuChecks()
 			return
 		}
-		logger.Info("[Offline] Model %s downloaded successfully", modelKey)
+		logger.Info("[Offline] Vosk model %s downloaded successfully", modelKey)
 	}
 
-	// All ready
-	m.offlineItem.SetTitle("Offline (Vosk)")
+	if !m.completeOfflinePreparation(modelKey, true) {
+		logger.Info("[Offline] Vosk model %s prepared but no longer requested; keeping current provider", modelKey)
+		m.syncMenuChecks()
+		return
+	}
+
+	// All ready and still requested: switch to Vosk and persist the model.
+	m.offlineItem.SetTitle("Use Vosk (Offline)")
 	m.offlineItem.Check()
 	m.onlineItem.Uncheck()
 	m.configMu.Lock()
 	m.config.Offline.Enabled = true
-	if m.config.Offline.ModelSize == "" {
-		m.config.Offline.ModelSize = "small"
+	m.config.Offline.ModelSize = modelSize
+	m.markProfileCustomLocked()
+	if err := m.config.Save(); err != nil {
+		logger.Error("[Offline] Failed to save config: %v", err)
 	}
-	m.config.Save()
 	m.configMu.Unlock()
-	logger.Info("[Offline] Offline mode ready!")
-	systray.SetTooltip("Dictation App v1.8.94 - Offline (Vosk)")
+	logger.Info("[Offline] Vosk offline mode ready with %s", info.Name)
+	m.syncMenuChecks()
 	m.notifySettingsChanged()
+}
+
+func (m *Manager) handleDeepgramModelClicks() {
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-m.modelNovaItem.ClickedCh:
+			m.modelNovaItem.Check()
+			m.modelFluxItem.Uncheck()
+			m.configMu.Lock()
+			m.config.Deepgram.Model = "nova-3"
+			m.markProfileCustomLocked()
+			online := !m.config.Offline.Enabled
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save: %v\n", err)
+			}
+			m.configMu.Unlock()
+			logger.Info("[Tray] Deepgram model: nova-3")
+			fmt.Println("[Tray] Deepgram model: nova-3")
+			m.syncMenuChecks()
+			if online {
+				m.notifySettingsChanged()
+			}
+
+		case <-m.modelFluxItem.ClickedCh:
+			m.modelFluxItem.Check()
+			m.modelNovaItem.Uncheck()
+			m.configMu.Lock()
+			m.config.Deepgram.Model = "flux-general-en"
+			m.markProfileCustomLocked()
+			online := !m.config.Offline.Enabled
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save: %v\n", err)
+			}
+			m.configMu.Unlock()
+			logger.Info("[Tray] Deepgram model: flux-general-en")
+			fmt.Println("[Tray] Deepgram model: flux-general-en")
+			m.syncMenuChecks()
+			if online {
+				m.notifySettingsChanged()
+			}
+		}
+	}
+}
+
+func (m *Manager) selectVoskModel(size string) {
+	isLarge := size == "large"
+	setMenuItemChecked(m.modelSmallItem, !isLarge)
+	setMenuItemChecked(m.modelLargeItem, isLarge)
+
+	m.configMu.RLock()
+	lang := m.config.Deepgram.Language
+	offline := m.config.Offline.Enabled
+	m.configMu.RUnlock()
+
+	modelKey := vosk.ModelKeyForLanguage(lang, isLarge)
+	if offline && !voskModelReady(modelKey) {
+		logger.Info("[Tray] Vosk model %s is not ready; downloading before switching model", modelKey)
+		fmt.Printf("[Tray] Vosk model %s not ready, downloading...\n", modelKey)
+		m.startOfflinePreparation(modelKey)
+		return
+	}
+
+	m.configMu.Lock()
+	m.config.Offline.ModelSize = size
+	if err := m.config.Save(); err != nil {
+		fmt.Printf("[Tray] Failed to save: %v\n", err)
+	}
+	m.configMu.Unlock()
+
+	label := "Small"
+	if isLarge {
+		label = "Large"
+	}
+	logger.Info("[Tray] Vosk model: %s", label)
+	fmt.Printf("[Tray] Vosk model: %s\n", label)
+	m.syncMenuChecks()
+	if offline {
+		m.notifySettingsChanged()
+	}
 }
 
 func (m *Manager) handleModelClicks() {
@@ -789,32 +1244,9 @@ func (m *Manager) handleModelClicks() {
 		case <-m.ctx.Done():
 			return
 		case <-m.modelSmallItem.ClickedCh:
-			m.modelSmallItem.Check()
-			m.modelLargeItem.Uncheck()
-			m.configMu.Lock()
-			m.config.Offline.ModelSize = "small"
-			if err := m.config.Save(); err != nil {
-				fmt.Printf("[Tray] Failed to save: %v\n", err)
-			}
-			m.configMu.Unlock()
-			fmt.Println("[Tray] Offline model: Small")
-			if m.config.Offline.Enabled {
-				m.notifySettingsChanged()
-			}
-
+			m.selectVoskModel("small")
 		case <-m.modelLargeItem.ClickedCh:
-			m.modelLargeItem.Check()
-			m.modelSmallItem.Uncheck()
-			m.configMu.Lock()
-			m.config.Offline.ModelSize = "large"
-			if err := m.config.Save(); err != nil {
-				fmt.Printf("[Tray] Failed to save: %v\n", err)
-			}
-			m.configMu.Unlock()
-			fmt.Println("[Tray] Offline model: Large")
-			if m.config.Offline.Enabled {
-				m.notifySettingsChanged()
-			}
+			m.selectVoskModel("large")
 		}
 	}
 }
@@ -906,4 +1338,3 @@ func setAutostart(enable bool) error {
 
 	return nil
 }
-

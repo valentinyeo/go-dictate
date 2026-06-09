@@ -1,8 +1,15 @@
 # Binaries
 *.exe
+*.exe~
 *.dll
 *.so
 *.dylib
+
+# Windows redirect accidents
+nul
+
+# Local Claude Code settings
+.claude/settings.local.json
 
 # Test binary
 *.test

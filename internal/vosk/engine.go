@@ -36,23 +36,34 @@ func (e *Engine) StartStreaming(ctx context.Context, audioRx <-chan []int16, tex
 	}
 	defer rec.Free()
 
+	flushFinal := func() {
+		result := rec.FinalResult()
+		text := parseResultText(result)
+		if text == "" {
+			logger.Debug("[Vosk] Final result was empty")
+			return
+		}
+		logger.Transcript(text)
+		fmt.Printf("[Vosk] Final: %s\n", text)
+		select {
+		case textTx <- text:
+		default:
+			logger.Error("[Vosk] Dropped final transcript because text channel is full")
+		}
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
-			// Flush any pending speech
-			result := rec.FinalResult()
-			if text := parseResultText(result); text != "" {
-				logger.Transcript(text)
-				fmt.Printf("[Vosk] Final: %s\n", text)
-				select {
-				case textTx <- text:
-				default:
-				}
-			}
+			// Flush any pending speech when VAD cancels the session.
+			flushFinal()
 			return nil
 
 		case chunk, ok := <-audioRx:
 			if !ok {
+				// Audio channel closes on normal end-of-utterance. Flush here too,
+				// because ctx cancellation and channel close can race.
+				flushFinal()
 				return nil
 			}
 

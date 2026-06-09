@@ -5,6 +5,27 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.119] - 2026-06-09
+
+### Added
+- **Dictation profiles** in the tray menu: Terminal / Agent (fast append-only dictation), Email / Writing (slower, cleaner final transcripts), or Custom. Selecting a profile applies a settings bundle; manual tweaks flip the profile to Custom.
+- **Deepgram model picker**: Nova-3 (stable) vs Flux (experimental, lower latency). Audio chunks reduced from 100ms to 80ms per Deepgram's Flux latency recommendation (applies to all providers).
+- **Adaptive VAD noise gate**: learns the ambient noise floor during silence (slow upward, fast recovery), debounces speech onset (`speech_start_chunks`, default 2) so single loud chunks (key press, chair bump) no longer open an STT connection — the pre-roll buffer preserves the debounced chunks so no audio is lost — and uses a lower release threshold while speaking so quiet syllables don't chop the utterance. Config: `[vad] adaptive_noise`, `noise_multiplier`, `min_start_threshold`, `speech_start_chunks`.
+- **Utterance diagnostics** (`internal/diagnostics`): every utterance logs compact `[UTT n]` start/result lines (provider, connection reuse, RMS/threshold, text latency, char counts, drop counts) to debug.log. Optional "Save Failed Utterance WAVs" tray toggle stores audio of empty-result utterances under `%APPDATA%\dictation\failed-utterances` (privacy-sensitive, off by default).
+- Vosk now flushes the final transcript when the audio stream closes (was silently lost before), and logs when a transcript is dropped because the text channel is full.
+
+### Changed
+- Balloon notifications are generated via a hidden PowerShell NotifyIcon process.
+- Version/tooltip strings now flow from `version.go` through `tray.NewManager` — no more hardcoded version strings scattered through manager.go.
+
+### Fixed (code review of this release)
+- Notification launch failures are now logged instead of silently discarded, and line breaks in notification text can no longer break the generated PowerShell script.
+- Diagnostics transcript preview no longer splits multi-byte UTF-8 characters (umlauts, emoji) at the 500-byte cap, which produced invalid UTF-8 in debug.log and a missing truncation ellipsis.
+- Failed-utterance WAV writer batches all samples into one write instead of ~1M per-sample writes (seconds → milliseconds for a 60s clip).
+- VAD atomic float64 diagnostics fields now go through shared load/store helpers instead of 7 copies of the bit-conversion boilerplate.
+
+---
+
 ## [1.8.118] - 2026-06-09
 
 ### Fixed

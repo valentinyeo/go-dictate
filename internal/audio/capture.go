@@ -55,7 +55,7 @@ func ListCaptureDevices() ([]CaptureDevice, error) {
 type Capture struct {
 	device           *malgo.Device
 	ctx              *malgo.AllocatedContext
-	lastCallbackNano atomic.Int64 // UnixNano timestamp of last audio callback
+	lastCallbackNano atomic.Int64  // UnixNano timestamp of last audio callback
 	peakRMS          atomic.Uint64 // Peak RMS (float64 bits) over recent window, reset on read
 }
 
@@ -80,10 +80,12 @@ func NewCapture(audioChunks chan<- []int16, selectedDevice *CaptureDevice) (*Cap
 		deviceConfig.Capture.DeviceID = id.Pointer()
 	}
 
-	// Buffer size for ~100ms chunks (1600 samples at 16kHz)
-	deviceConfig.PeriodSizeInFrames = 1600
+	// Buffer size for ~80ms chunks (1280 samples at 16kHz). Deepgram Flux
+	// recommends 80ms chunks for optimal streaming latency, and Nova works
+	// fine with the slightly smaller cadence too.
+	deviceConfig.PeriodSizeInFrames = 1280
 
-	sizeInBytes := uint32(1600 * 2) // 1600 samples * 2 bytes per sample
+	sizeInBytes := uint32(deviceConfig.PeriodSizeInFrames * 2) // samples * 2 bytes per sample
 
 	// Create capture object first so callback can reference it
 	c := &Capture{ctx: ctx}

@@ -30,24 +30,14 @@ There are no tests in this project. `-H windowsgui` hides the console window; om
 
 ## Version Tracking Workflow
 
-Current version: **1.8.73 "Ultra Fast"**
+`version.go` is the single source of truth (Version, BuildDate, VersionName, VersionSummary). Per release:
 
-1. Update `version.go` (Version, BuildDate, VersionName, VersionSummary)
-2. Update `CHANGELOG.md` with new version header and changes
-3. Update `internal/tray/manager.go` tooltip, version menu item, and summary line
-4. Make code changes
-5. Build
-6. Commit with format: `vX.X.X: Brief description`
-7. Push to GitHub
+1. Update `version.go`
+2. Add a `CHANGELOG.md` entry
+3. Make code changes, build
+4. Commit with format `vX.X.X: Brief description`, push
 
-### Tray Menu Version Pattern
-
-The top of the right-click tray menu MUST always have:
-1. **Version item** (top-most): `"vX.X.X - Version Name"` - clickable, opens CHANGELOG.md in default editor
-2. **Summary item** (below version): `"  One-line summary of what changed"` - disabled/greyed out, informational only
-3. **Separator** - then the rest of the menu
-
-The tooltip string `"Dictation App vX.X.X"` appears in 6 places in manager.go (onReady, handleModeClicks online/offline/error/default, prepareOffline). Update all of them - use `replace_all` when editing.
+Version strings flow from `version.go` into the tray via `tray.NewManager(...)` and `tooltipText()` — do not hardcode version strings anywhere else. The top of the tray menu MUST keep: clickable version item (`"vX.X.X - Version Name"`, opens CHANGELOG.md), greyed-out one-line summary item, separator.
 
 ## Architecture
 
@@ -58,47 +48,28 @@ Windows system tray dictation app: captures microphone audio, detects speech via
 ```
 main thread (systray.Run - blocks)
   +-- Audio Capture (malgo/WASAPI) -> audioChunks chan []int16 (buf:100)
-  +-- vadAndSTTManager goroutine
-  |     +-- VAD processes each audio chunk (RMS energy)
-  |     +-- SpeechStarted -> opens STT engine (Deepgram or Vosk)
-  |     +-- SilenceDetected -> closes STT connection
-  |     +-- Ghost speech detection (15s no-text timeout + 30s cooldown)
-  |     +-- Media/meeting/recording detection -> auto-pause
-  |     +-- Per-app volume ducking (Chrome/Edge/etc)
-  +-- Text Bridge goroutine (STT -> keyboard, tracks last-text time for ghost detection)
+  +-- vadAndSTTManager goroutine - owns VAD, STT connection lifecycle,
+  |       ghost-speech detection, media/meeting/recording auto-pause, ducking
+  +-- Text Bridge goroutine (STT -> keyboard, tracks last-text time)
   +-- Audio Watchdog (5s check, 10s timeout -> restart capture)
   +-- Keyboard Simulator <- transcriptText chan string (buf:10)
-  +-- Hotkey listener (internal/hotkey, blocking GetMessageW, single thread)
-  +-- Tray menu handlers (settings, mic switch, feature toggles, STT mode)
+  +-- Hotkey listener (blocking GetMessageW, single OS-locked thread)
+  +-- Tray menu handlers
 ```
 
 ### Key Packages
 
-- **internal/audio/**: WASAPI capture (`malgo`) with watchdog heartbeat, VAD (RMS energy), media detection (IAudioSessionManager2 COM), meeting detection, recording detection (process/window enumeration), volume ducking (IAudioEndpointVolume, ISimpleAudioVolume)
+- **internal/audio/**: WASAPI capture (`malgo`) with watchdog heartbeat, VAD (RMS energy, adaptive noise floor, speech-onset debounce), media/meeting detection (COM), recording detection, volume ducking
 - **internal/stt/**: `Engine` interface - abstraction for speech-to-text backends
-- **internal/deepgram/**: WebSocket streaming client with send/receive goroutines, JSON response types, KeepAlive auto-send, interim result diffing. `NewClient` takes `useInterim bool` as last arg. Implements `stt.Engine`.
-- **internal/vosk/**: Offline speech-to-text via Vosk. DLL loaded at runtime via syscall (no CGO). Model download manager with progress reporting. Implements `stt.Engine`.
-- **internal/hotkey/**: Global hotkey registration using blocking `GetMessageW` (zero CPU when idle). Single OS-thread-locked goroutine handles all hotkeys. Replaced `golang.design/x/hotkey` which polled PeekMessage at 10ms per hotkey.
-- **internal/keyboard/**: Windows SendInput Unicode character injection
-- **internal/state/**: Thread-safe state machine (Active/Paused/AutoPaused/MediaPaused/Speaking/MicConflict) with change notification channel
-- **internal/tray/**: System tray UI, menu items, feature toggles, mic selector, STT mode toggle, autostart registry
-  - `icons.go` - Loads 128x128 source PNGs from `icons/` folder, scales to multi-size ICO (16/20/24/32/48), tints by state, theme-aware standby color
-  - `manager.go` - Menu construction, event handlers, online/offline toggle, model selection
-- **internal/config/**: TOML config at `%APPDATA%\dictation\config.toml`
-- **internal/logger/**: File logger at `%APPDATA%\dictation\debug.log`, crash log redirect (`crash.log`) for capturing panics in windowsgui builds
-
-### Icons
-
-Source PNGs in `icons/` folder (128x128, white on transparent, rendered from Fluent UI SVGs):
-
-| File | Icon | Used For | Tint Color |
-|------|------|----------|------------|
-| `mic-on.png` | Filled chat bubble with sparkle stars | Speaking/active | Green `#10B981` |
-| `mic-standby.png` | Outline chat bubble with sparkle stars | Standby/idle | Dark `#202020` (light taskbar) or Light `#D0D0D0` (dark taskbar) |
-| `mic-off.png` | Slashed microphone | Paused/off | Red `#EF4444` |
-| `mic-media.png` | Same as standby | Media detected | Amber `#F59E0B` |
-
-Theme detection: reads `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize\SystemUsesLightTheme` from Windows registry.
+- **internal/deepgram/**: WebSocket streaming client (implements `stt.Engine`), KeepAlive auto-send, interim result diffing. `NewClient` takes `useInterim bool` as last arg.
+- **internal/vosk/**: Offline STT (implements `stt.Engine`). DLL + models auto-download to `%APPDATA%\dictation\` on first use; DLL loaded at runtime via syscall (no CGO). App works without `libvosk.dll` — offline mode just won't be available.
+- **internal/hotkey/**: Global hotkeys via blocking `GetMessageW` on one OS-locked thread (zero CPU idle)
+- **internal/keyboard/**: Text injection (clipboard paste by default, SendInput fallback)
+- **internal/state/**: Thread-safe state machine with change notification channel
+- **internal/tray/**: Menu construction/handlers (`manager.go`), state-tinted multi-size icons from `icons/` PNGs with light/dark-theme detection (`icons.go`), autostart registry
+- **internal/config/**: TOML config at `%APPDATA%\dictation\config.toml` — see `config.go` for the full structure and defaults
+- **internal/logger/**: File logger at `%APPDATA%\dictation\debug.log`; `RedirectStderr()` sends panics to `crash.log` (vital — `-H windowsgui` has no console, panics would vanish silently)
+- **internal/diagnostics/**: Per-utterance tracker — logs compact `[UTT n]` start/result lines, optionally saves failed utterances as WAVs under `%APPDATA%\dictation\failed-utterances`
 
 ### Windows COM Threading
 
@@ -112,56 +83,34 @@ Side states: Paused (red, manual), MediaPaused (amber, meeting/recording detecte
 
 Ghost speech: if Speaking for 15s with no text from STT, force-close connection and enter 30s cooldown (VAD suppressed). Prevents background noise (TV, podcasts) from keeping the app stuck in Speaking state.
 
-### Connection Lifecycle
-
-STT connections open only when speech starts and close after silence (normal mode). In Ultra Fast mode, connections persist via KeepAlive between utterances — `sttDoneCh` tracks connection liveness. Deepgram API cost: nova-3 at $0.36/hr (KeepAlive is free). The `vadAndSTTManager` goroutine owns the connection lifecycle.
-
 ### Pause Behavior (Zero CPU)
 
 When paused (manual or MicConflict), the app achieves truly zero CPU:
-1. **WASAPI capture stopped** - `audioCapture.Stop()` releases the device, `audiodg.exe` goes idle. Controlled by `audioPaused` atomic flag.
-2. **VAD select channels nil'd** - Both `activeAudioRx` and `activeMeetingTick` are set to nil, so the select blocks only on `ctx.Done()`, `stateManager.Changed()`, and `settingsChangedCh`.
-3. **Watchdog/mic-sync skip** - Check `audioPaused.Load()` and `continue` immediately.
-4. **Hotkeys use blocking GetMessageW** - Thread sleeps in kernel, zero polling.
+1. **WASAPI capture stopped** - `audioCapture.Stop()` releases the device. Controlled by `audioPaused` atomic flag.
+2. **VAD select channels nil'd** - `activeAudioRx` and `activeMeetingTick` set to nil; select blocks only on ctx/state/settings channels.
+3. **Watchdog/mic-sync skip** - check `audioPaused.Load()` and `continue`.
+4. **Hotkeys use blocking GetMessageW** - thread sleeps in kernel.
 
-On unpause, capture is restarted with the current `selectedDevice`. Mic changes while paused update `selectedDevice` but defer the actual restart.
+On unpause, capture restarts with the current `selectedDevice`. Mic changes while paused update `selectedDevice` but defer the restart.
 
-A `textBridge` channel sits between the STT engine and keyboard simulator. The bridge goroutine tracks the last-text timestamp for ghost speech detection. NEVER close `textBridge` directly (causes "send on closed channel" panics) - instead set it to nil and let the bridge goroutine exit via its context.
-
-### Offline Mode (Vosk)
-
-- Toggle Online (Deepgram) / Offline (Vosk) via tray menu radio buttons
-- Vosk DLL (`libvosk.dll`) auto-downloads from GitHub releases on first use
-- Models auto-download on first use: Small (~50MB) or Large (~1.8GB)
-- Models stored at `%APPDATA%\dictation\models\`
-- DLL loaded at runtime via syscall - no CGO dependency for Vosk
-- App works without libvosk.dll (offline mode just won't be available)
+A `textBridge` channel sits between the STT engine and keyboard simulator. NEVER close `textBridge` directly (causes "send on closed channel" panics) - set it to nil and let the bridge goroutine exit via its context.
 
 ### Audio Watchdog
 
-The audio capture callback updates an atomic timestamp on every frame. A watchdog goroutine checks every 5s - if no audio for 10s (e.g. after sleep/wake, USB disconnect), it restarts the capture device. Falls back to system default mic if the selected device fails. Protected by `audioMu sync.Mutex`.
+The capture callback updates an atomic timestamp per frame. A watchdog checks every 5s - if no audio for 10s (sleep/wake, USB disconnect), it restarts the capture device, falling back to the system default mic. Protected by `audioMu sync.Mutex`.
 
 ### Recording Detection
 
-Auto-pauses dictation during screen recording. Uses Windows Toolhelp32 process snapshots and EnumWindows:
-- **screencast2-go/OBS**: Detects `ffmpeg.exe` process (only spawned during active recording)
-- **Loom**: Detects visible Loom windows (hides to tray when idle, shows recording UI when recording)
-- Results cached for 2s to avoid expensive syscalls
-- `syscall.NewCallback` created ONCE at init (Go has a global limit of ~2000) - never per-call
-
-### Crash Logging
-
-`logger.RedirectStderr()` redirects Windows stderr to `%APPDATA%\dictation\crash.log` via `SetStdHandle`. Since `-H windowsgui` has no console, panics would otherwise vanish silently.
+Auto-pauses during screen recording via Toolhelp32 process snapshots and EnumWindows (`ffmpeg.exe` for OBS/screencast2-go, visible Loom windows). Results cached 2s. `syscall.NewCallback` created ONCE at init (Go has a global limit of ~2000) - never per-call.
 
 ### Ultra Fast Mode (Zero Latency)
 
-Toggle via tray menu checkbox or Ctrl+Alt+U hotkey. Online (Deepgram) only.
-- **Persistent connection**: WebSocket stays open between utterances via `{"type":"KeepAlive"}` JSON messages (free, no audio billed). `sttDoneCh` channel detects dead connections for reconnection.
-- **Interim results**: `interim_results=true&endpointing=200` added to Deepgram URL. Text streams word-by-word.
-- **700ms silence threshold** (vs 3000ms default) for snappy single-word commands.
-- **Append-only diffing** in `client.go`: tracks `dgText` (Deepgram's version) and `typedBy` (bytes on screen) separately. NEVER backspace — corrections silently update `dgText` and emit new words beyond `typedBy` at word boundaries. Backspace approach was tried and causes visible gibberish.
-- **Keyboard raw mode**: `\x01` prefix on text skips auto-spacing in simulator. Used for interim suffixes.
-- Config: `[audio] zero_latency = true/false`
+Toggle via tray checkbox or Ctrl+Alt+U. Online (Deepgram) only. Config: `[audio] zero_latency`.
+- **Persistent connection**: WebSocket stays open between utterances via `{"type":"KeepAlive"}` (free, no audio billed); `sttDoneCh` detects dead connections for reconnect. In normal mode, connections open on speech start and close after silence. `vadAndSTTManager` owns the lifecycle.
+- **Interim results**: `interim_results=true&endpointing=200` on the Deepgram URL; text streams word-by-word.
+- **700ms silence threshold** (vs 3000ms default).
+- **Append-only diffing** in `client.go`: tracks `dgText` (Deepgram's version) and `typedBy` (bytes on screen). NEVER backspace - corrections silently update `dgText` and emit new words beyond `typedBy` at word boundaries. Backspace was tried and causes visible gibberish.
+- **Keyboard raw mode**: `\x01` prefix on text skips auto-spacing in the simulator (used for interim suffixes).
 
 ### Global Hotkeys
 
@@ -175,19 +124,3 @@ Toggle via tray menu checkbox or Ctrl+Alt+U hotkey. Online (Deepgram) only.
 ### Single Instance
 
 Enforced via Windows named mutex (`Global\GoDictateAppMutex`). Second instances exit immediately. Restart uses `cmd.exe` with ping delay to release the mutex before the new instance starts.
-
-## Config Structure
-
-```toml
-[deepgram]
-api_key, language (en/de), model (nova-3), punctuate, filler_words, keywords
-
-[audio]
-silence_threshold_ms (3000), duck_volume (0.05), duck_enabled, auto_pause_on_media, device_name, zero_latency (false)
-
-[vad]
-energy_threshold (0.02)
-
-[offline]
-enabled (false), model_size (small/large)
-```
