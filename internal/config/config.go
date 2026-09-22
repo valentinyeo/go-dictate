@@ -276,7 +276,7 @@ func (c *Config) Save() error {
 # duck_enabled: Enable/disable audio ducking (true/false)
 # device_name: Microphone to use (empty = system default, or exact device name)
 # zero_latency: Ultra-fast mode - keeps Deepgram connection open while still using the configured silence threshold
-# push_to_talk: Hold Ctrl+Alt+Space to record; release to finish. Microphone is closed while idle.
+# push_to_talk: Hold Ctrl+Space to record; release to finish. Microphone is closed while idle.
 # battery_budget_saver: Close Deepgram after each utterance, shorten billable silence, and skip paid keyterms.
 
 # VAD settings

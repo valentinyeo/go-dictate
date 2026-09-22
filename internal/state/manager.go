@@ -22,7 +22,7 @@ const (
 func (s AppState) String() string {
 	switch s {
 	case PushToTalkIdle:
-		return "Push-to-talk ready: hold Ctrl+Alt+Space"
+		return "Push-to-talk ready: hold Ctrl+Space"
 	case PushToTalkRecording:
 		return "Push-to-talk recording"
 	case PushToTalkFinishing:

@@ -4,7 +4,7 @@ A Windows system tray dictation application that uses Deepgram's speech-to-text 
 
 ## Push to talk
 
-Enable **General Options > Push to Talk** in the tray menu. Hold **Ctrl+Alt+Space**, allow a brief moment for the microphone to open, and speak. Release the shortcut to stop capture and insert the final transcript. Release Ctrl and Alt too so they cannot affect pasting. Wait for the tray tooltip to say "Push-to-talk ready" before starting another recording.
+Enable **General Options > Push to Talk** in the tray menu. Hold **Ctrl+Space**, allow a brief moment for the microphone to open, and speak. Release the shortcut to stop capture and insert the final transcript. Release Ctrl too so it cannot affect pasting. Wait for the tray tooltip to say "Push-to-talk ready" before starting another recording.
 
 The microphone stays closed between recordings, including after restarting the app. Speech profiles preserve this choice. To configure it directly, set `push_to_talk = true` under `[audio]` in `config.toml` and restart.
 

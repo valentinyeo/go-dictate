@@ -655,9 +655,11 @@ func registerHotkeys() {
 	time.Sleep(500 * time.Millisecond)
 
 	hkMgr := hk.NewManager()
-	if err := hkMgr.RegisterHold(ctx, hk.MOD_CONTROL|hk.MOD_ALT, 0x20, "Ctrl+Alt+Space push-to-talk", stateManager.Hold); err != nil {
+	if err := hkMgr.RegisterHold(ctx, hk.MOD_CONTROL, 0x20, "Ctrl+Space push-to-talk", stateManager.Hold); err != nil {
 		logger.Error("[Hotkey] Push-to-talk registration failed: %v", err)
-		notify.ShowBalloon("Push-to-talk shortcut unavailable", "Ctrl+Alt+Space is used by another app. Free the shortcut and restart Go Dictate.", 8*time.Second)
+		notify.ShowBalloon("Push-to-talk shortcut unavailable", "Ctrl+Space is used by another app. Free the shortcut and restart Go Dictate.", 8*time.Second)
+	} else {
+		logger.Info("[Hotkey] Successfully registered Ctrl+Space for push-to-talk")
 	}
 
 	// Pause/Resume: Ctrl+Alt+X

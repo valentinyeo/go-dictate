@@ -163,7 +163,7 @@ func (m *Manager) onReady() {
 	// General options that are not tied to a specific STT provider.
 	m.configMu.RLock()
 	m.speechOptionsParent = systray.AddMenuItem("General Options", "Dictation behavior outside the STT provider")
-	m.pushToTalkItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Push to Talk (hold Ctrl+Alt+Space)", "Release the microphone when idle; release the shortcut to finish the transcript", m.config.Audio.PushToTalk)
+	m.pushToTalkItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Push to Talk (hold Ctrl+Space)", "Release the microphone when idle; release the shortcut to finish the transcript", m.config.Audio.PushToTalk)
 	m.zeroLatencyItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Ultra Fast / Fast Finalize", "Keep a persistent Deepgram connection and type interim results", m.config.Audio.ZeroLatency)
 	m.saverModeItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Battery & Budget Saver", "Close each request quickly, shorten trailing audio, and skip paid keyterms", m.config.Audio.BatteryBudgetSaver)
 	m.duckingItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Audio Ducking", "Lower other apps' volume while speaking", m.config.Audio.DuckEnabled)
