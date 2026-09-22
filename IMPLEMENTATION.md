@@ -62,7 +62,7 @@ All phases of the implementation plan have been completed successfully.
   - GetText(): Extracts final transcripts
 
 - **client.go**: WebSocket streaming client
-  - Connects to wss://api.deepgram.com/v1/listen
+  - Connects to wss://api.eu.deepgram.com/v1/listen
   - Dual goroutines (send audio, receive transcripts)
   - Converts i16 to little-endian bytes
   - Context-based cancellation

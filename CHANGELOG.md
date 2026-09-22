@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.127] - 2026-09-22
+
+### Changed
+- Route Nova-3 streaming requests through Deepgram's EU endpoint. The same API key and transcription settings continue to apply.
+
+---
+
 ## [1.8.126] - 2026-09-22
 
 ### Changed

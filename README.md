@@ -2,6 +2,8 @@
 
 A Windows system tray dictation application that uses Deepgram's speech-to-text API to transcribe your voice and type it into any active window.
 
+Dictation uses Deepgram's EU endpoint with your existing API key.
+
 ## Push to talk
 
 Right-click the tray icon and choose **Push to talk** or **Always on** near the top of the menu. The current mode is checked and your choice is saved. Hold **Ctrl+Space**, allow a brief moment for the microphone to open, and speak. Release the shortcut to stop capture and insert the final transcript. Release Ctrl too so it cannot affect pasting. Wait for the tray tooltip to say "Push-to-talk ready" before starting another recording.

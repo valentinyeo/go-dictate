@@ -94,7 +94,7 @@ func shouldAppendRaw(suffix string, emittedBefore bool) bool {
 func (c *Client) startNovaStreaming(ctx context.Context, audioRx <-chan []int16, textTx chan<- string) error {
 	// Build URL with optional punctuation and dictation parameters
 	wsURL := fmt.Sprintf(
-		"wss://api.deepgram.com/v1/listen?model=%s&encoding=linear16&sample_rate=16000&channels=1&language=%s",
+		"wss://api.eu.deepgram.com/v1/listen?model=%s&encoding=linear16&sample_rate=16000&channels=1&language=%s",
 		c.model, c.language,
 	)
 
