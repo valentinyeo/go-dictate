@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.125"
+	Version        = "1.8.126"
 	BuildDate      = "2026-09-22"
 	VersionName    = "Push to Talk"
-	VersionSummary = "Hold Ctrl+Space to talk; release to finish"
+	VersionSummary = "Choose Push to talk or Always on from the tray menu"
 )

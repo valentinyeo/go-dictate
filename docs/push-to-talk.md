@@ -1,6 +1,6 @@
 # Push-to-talk implementation and verification
 
-Push-to-talk is opt-in through General Options or `[audio] push_to_talk = true`. It reserves Ctrl+Space. `RegisterHotKey` blocks while idle; release checks run every 20 ms only during a hold. The capture device and its context are uninitialized on release. The startup path skips capture when this mode is saved.
+Right-click the tray icon to choose Push to talk or Always on. The two top-level choices are mutually exclusive and persist across restarts. Selecting the already checked mode does nothing. The equivalent config setting is `[audio] push_to_talk = true`. It reserves Ctrl+Space. `RegisterHotKey` blocks while idle; release checks run every 20 ms only during a hold. The capture device and its context are uninitialized on release. The startup path skips capture when this mode is saved.
 
 The state manager gates microphone access. Automatic VAD, media, watchdog, and default-device transitions cannot reopen it while idle. Ctrl+Alt+X cancels the recording; resume waits for a fresh press. New presses during finalization are ignored. Each deliberate hold bypasses VAD and meeting auto-pause, uses final-only Nova-3 transcription, and retains the selected formatting settings. The microphone opens again for the next hold, which adds device startup latency.
 

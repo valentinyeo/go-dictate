@@ -46,6 +46,10 @@ type Manager struct {
 	noiseNormalItem     *systray.MenuItem
 	noiseTrainItem      *systray.MenuItem
 
+	// Capture mode choices in the top-level right-click menu.
+	pushToTalkItem *systray.MenuItem
+	alwaysOnItem   *systray.MenuItem
+
 	// Feature toggles
 	speechOptionsParent *systray.MenuItem
 	duckingItem         *systray.MenuItem
@@ -56,7 +60,6 @@ type Manager struct {
 	holdbackItem        *systray.MenuItem
 	zeroLatencyItem     *systray.MenuItem
 	saverModeItem       *systray.MenuItem
-	pushToTalkItem      *systray.MenuItem
 	failedAudioItem     *systray.MenuItem
 	keytermsItem        *systray.MenuItem
 
@@ -114,6 +117,7 @@ func (m *Manager) onReady() {
 
 	// Profile and Deepgram settings
 	m.configMu.RLock()
+	pushToTalk := m.config.Audio.PushToTalk
 	profile := m.config.DisplayProfile()
 	punctuate := m.config.Deepgram.Punctuate
 	smartFormat := m.config.Deepgram.SmartFormat
@@ -121,6 +125,10 @@ func (m *Manager) onReady() {
 	holdback := m.config.Deepgram.Holdback
 	noiseMode := config.NormalizeNoiseMode(m.config.VAD.NoiseMode)
 	m.configMu.RUnlock()
+
+	m.pushToTalkItem = systray.AddMenuItemCheckbox("Push to talk (hold Ctrl+Space)", "Open the microphone only while holding Ctrl+Space", pushToTalk)
+	m.alwaysOnItem = systray.AddMenuItemCheckbox("Always on", "Keep the microphone open and detect speech automatically", !pushToTalk)
+	systray.AddSeparator()
 
 	m.profileParent = systray.AddMenuItem("Profile", "Choose a dictation preset")
 	m.profileTerminalItem = m.profileParent.AddSubMenuItemCheckbox("Terminal / Agent", "Fast append-only dictation for terminals and AI agents", profile == config.ProfileTerminalAgent)
@@ -163,7 +171,6 @@ func (m *Manager) onReady() {
 	// General options that are not tied to a specific STT provider.
 	m.configMu.RLock()
 	m.speechOptionsParent = systray.AddMenuItem("General Options", "Dictation behavior outside the STT provider")
-	m.pushToTalkItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Push to Talk (hold Ctrl+Space)", "Release the microphone when idle; release the shortcut to finish the transcript", m.config.Audio.PushToTalk)
 	m.zeroLatencyItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Ultra Fast / Fast Finalize", "Keep a persistent Deepgram connection and type interim results", m.config.Audio.ZeroLatency)
 	m.saverModeItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Battery & Budget Saver", "Close each request quickly, shorten trailing audio, and skip paid keyterms", m.config.Audio.BatteryBudgetSaver)
 	m.duckingItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Audio Ducking", "Lower other apps' volume while speaking", m.config.Audio.DuckEnabled)
@@ -324,6 +331,7 @@ func (m *Manager) syncMenuChecks() {
 	setMenuItemChecked(m.zeroLatencyItem, zeroLatency)
 	setMenuItemChecked(m.saverModeItem, saverMode)
 	setMenuItemChecked(m.pushToTalkItem, pushToTalk)
+	setMenuItemChecked(m.alwaysOnItem, !pushToTalk)
 	if m.zeroLatencyItem != nil {
 		if saverMode || pushToTalk {
 			m.zeroLatencyItem.Disable()
@@ -619,6 +627,24 @@ func (m *Manager) handleAutostartClick() {
 	}
 }
 
+// Selecting the checked mode is a no-op, so it cannot interrupt a recording.
+func (m *Manager) setPushToTalk(enabled bool) {
+	m.configMu.Lock()
+	if m.config.Audio.PushToTalk == enabled {
+		m.configMu.Unlock()
+		return
+	}
+	m.config.Audio.PushToTalk = enabled
+	if err := m.config.Save(); err != nil {
+		logger.Error("[Tray] Failed to save capture mode: %v", err)
+	}
+	m.configMu.Unlock()
+	m.stateManager.SetPushToTalk(enabled)
+	m.syncMenuChecks()
+	m.notifySettingsChanged()
+	logger.Info("[Tray] Capture mode changed: push_to_talk=%v", enabled)
+}
+
 func (m *Manager) handleFeatureToggles() {
 	for {
 		select {
@@ -626,16 +652,10 @@ func (m *Manager) handleFeatureToggles() {
 			return
 
 		case <-m.pushToTalkItem.ClickedCh:
-			m.configMu.Lock()
-			m.config.Audio.PushToTalk = !m.config.Audio.PushToTalk
-			enabled := m.config.Audio.PushToTalk
-			if err := m.config.Save(); err != nil {
-				logger.Error("[Tray] Failed to save push-to-talk setting: %v", err)
-			}
-			m.configMu.Unlock()
-			m.stateManager.SetPushToTalk(enabled)
-			m.syncMenuChecks()
-			m.notifySettingsChanged()
+			m.setPushToTalk(true)
+
+		case <-m.alwaysOnItem.ClickedCh:
+			m.setPushToTalk(false)
 
 		case <-m.zeroLatencyItem.ClickedCh:
 			m.configMu.Lock()
