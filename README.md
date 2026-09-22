@@ -2,6 +2,16 @@
 
 A Windows system tray dictation application that uses Deepgram's speech-to-text API to transcribe your voice and type it into any active window.
 
+## Push to talk
+
+Enable **General Options > Push to Talk** in the tray menu. Hold **Ctrl+Alt+Space**, allow a brief moment for the microphone to open, and speak. Release the shortcut to stop capture and insert the final transcript. Release Ctrl and Alt too so they cannot affect pasting. Wait for the tray tooltip to say "Push-to-talk ready" before starting another recording.
+
+The microphone stays closed between recordings, including after restarting the app. Speech profiles preserve this choice. To configure it directly, set `push_to_talk = true` under `[audio]` in `config.toml` and restart.
+
+Push-to-talk overrides Ultra Fast streaming and automatic meeting/VAD gating for each deliberate hold. Text appears after release; microphone startup and network finalization add some latency. Ctrl+Alt+X pauses the app and cancels a recording. Resuming returns to push-to-talk standby. Disabling Push to Talk restores continuous listening. A hold ends automatically after five minutes.
+
+Battery & Budget Saver alone still captures audio continuously to detect speech. Use Push to Talk to release the microphone between recordings. The actual battery saving depends on the microphone and Windows audio driver.
+
 ## Features
 
 - **Real-time transcription**: Streams audio to Deepgram API for fast, accurate transcription
@@ -21,12 +31,12 @@ A Windows system tray dictation application that uses Deepgram's speech-to-text 
 
 1. **Download** or build the application:
    ```bash
-   go build -ldflags="-s -w -H windowsgui" -trimpath -o dictation.exe .
+   .\build.bat
    ```
 
 2. **Run** the application for the first time:
    ```bash
-   dictation.exe
+   go-dictate.exe
    ```
    This will create a default config file at `%APPDATA%\dictation\config.toml`
 

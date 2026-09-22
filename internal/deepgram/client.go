@@ -24,13 +24,12 @@ type Client struct {
 	punctuate   bool
 	smartFormat bool
 	fillerWords bool
-	keywords    []string
 	keyterms    []string
 	useInterim  bool // Ultra Fast mode: emit interim results for instant feedback
 	holdback    bool
 }
 
-func NewClient(apiKey, language, model string, punctuate, smartFormat, fillerWords, holdback bool, keywords, keyterms []string, useInterim bool) *Client {
+func NewClient(apiKey, language, model string, punctuate, smartFormat, fillerWords, holdback bool, keyterms []string, useInterim bool) *Client {
 	return &Client{
 		apiKey:      apiKey,
 		language:    language,
@@ -38,7 +37,6 @@ func NewClient(apiKey, language, model string, punctuate, smartFormat, fillerWor
 		punctuate:   punctuate,
 		smartFormat: smartFormat,
 		fillerWords: fillerWords,
-		keywords:    keywords,
 		keyterms:    keyterms,
 		useInterim:  useInterim,
 		holdback:    holdback,
@@ -46,14 +44,7 @@ func NewClient(apiKey, language, model string, punctuate, smartFormat, fillerWor
 }
 
 func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, textTx chan<- string) error {
-	if isFluxModel(c.model) {
-		return c.startFluxStreaming(ctx, audioRx, textTx)
-	}
 	return c.startNovaStreaming(ctx, audioRx, textTx)
-}
-
-func isFluxModel(model string) bool {
-	return strings.HasPrefix(strings.ToLower(model), "flux")
 }
 
 func emitStablePrefix(transcript string, holdbackWords int) (string, int) {
@@ -132,6 +123,13 @@ func (c *Client) startNovaStreaming(ctx context.Context, audioRx <-chan []int16,
 	headers := http.Header{}
 	headers.Set("Authorization", fmt.Sprintf("Token %s", c.apiKey))
 
+	return c.streamNova(ctx, audioRx, textTx, wsURL, headers)
+}
+
+// streamNova accepts an endpoint so the stream lifecycle can be tested locally.
+func (c *Client) streamNova(ctx context.Context, audioRx <-chan []int16, textTx chan<- string, wsURL string, headers http.Header) error {
+	dialCtx, cancelDial := context.WithCancel(ctx)
+	defer cancelDial()
 	logger.Info("[Deepgram] Connecting to %s", wsURL)
 
 	// Dial in background so we can buffer audio while connecting
@@ -139,7 +137,7 @@ func (c *Client) startNovaStreaming(ctx context.Context, audioRx <-chan []int16,
 		conn *websocket.Conn
 		err  error
 	}
-	dialCh := make(chan dialResult, 1)
+	dialCh := make(chan dialResult)
 	go func() {
 		dialer := websocket.Dialer{
 			HandshakeTimeout: 10 * time.Second,
@@ -147,12 +145,20 @@ func (c *Client) startNovaStreaming(ctx context.Context, audioRx <-chan []int16,
 				Timeout: 10 * time.Second,
 			}).DialContext,
 		}
-		conn, _, err := dialer.Dial(wsURL, headers)
-		dialCh <- dialResult{conn, err}
+		conn, _, err := dialer.DialContext(dialCtx, wsURL, headers)
+		select {
+		case dialCh <- dialResult{conn, err}:
+		case <-dialCtx.Done():
+			if conn != nil {
+				conn.Close()
+			}
+		}
 	}()
 
 	// Buffer audio chunks while waiting for connection
 	var preBuffer [][]byte
+	var connected *websocket.Conn
+	input := audioRx
 waitLoop:
 	for {
 		select {
@@ -162,11 +168,13 @@ waitLoop:
 				return fmt.Errorf("failed to connect: %w", result.err)
 			}
 			// Connection ready - break out to flush buffer and start streaming
-			dialCh <- result // put it back for reading below
+			connected = result.conn
 			break waitLoop
-		case chunk, ok := <-audioRx:
+		case chunk, ok := <-input:
 			if !ok {
-				return nil
+				// Keep buffered audio even when release precedes connection setup.
+				input = nil
+				continue
 			}
 			bytes := make([]byte, len(chunk)*2)
 			for i, s := range chunk {
@@ -178,8 +186,9 @@ waitLoop:
 		}
 	}
 
-	conn := (<-dialCh).conn
+	conn := connected
 	defer conn.Close()
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 
 	// Flush pre-buffered audio
 	logger.Info("[Deepgram] Connected successfully, flushing %d buffered chunks", len(preBuffer))
@@ -196,6 +205,7 @@ waitLoop:
 	done := make(chan struct{})
 	var doneOnce sync.Once
 	closeDone := func() { doneOnce.Do(func() { close(done) }) }
+	defer closeDone()
 
 	// Mutex to protect websocket writes (gorilla/websocket does NOT allow concurrent writes)
 	var wsMu sync.Mutex
@@ -226,6 +236,22 @@ waitLoop:
 				return
 			case audioChunk, ok := <-audioRx:
 				if !ok {
+					// CloseStream asks Deepgram to flush final words before closing.
+					wsMu.Lock()
+					conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+					err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"CloseStream"}`))
+					wsMu.Unlock()
+					if err != nil {
+						conn.Close()
+						return
+					}
+					timer := time.NewTimer(5 * time.Second)
+					defer timer.Stop()
+					select {
+					case <-done:
+					case <-timer.C:
+						conn.Close()
+					}
 					return
 				}
 
@@ -239,6 +265,7 @@ waitLoop:
 				}
 
 				wsMu.Lock()
+				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 				err := conn.WriteMessage(websocket.BinaryMessage, bytes)
 				wsMu.Unlock()
 				if err != nil {
@@ -251,6 +278,7 @@ waitLoop:
 			case <-keepAliveTicker.C:
 				if time.Since(lastAudioSend) >= 5*time.Second {
 					wsMu.Lock()
+					conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 					err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"KeepAlive"}`))
 					wsMu.Unlock()
 					if err != nil {
@@ -529,261 +557,6 @@ waitLoop:
 					}
 				}
 			}
-		}
-	}
-}
-
-func (c *Client) startFluxStreaming(ctx context.Context, audioRx <-chan []int16, textTx chan<- string) error {
-	model := c.model
-	switch strings.ToLower(model) {
-	case "flux", "flux-general":
-		if c.language == "en" {
-			model = "flux-general-en"
-		} else {
-			model = "flux-general-multi"
-		}
-	}
-
-	wsURL := fmt.Sprintf(
-		"wss://api.deepgram.com/v2/listen?model=%s&encoding=linear16&sample_rate=16000&eot_threshold=0.5&eot_timeout_ms=1000",
-		model,
-	)
-	if model == "flux-general-multi" && c.language != "" {
-		wsURL += "&language_hint=" + url.QueryEscape(c.language)
-	}
-	for _, term := range c.keyterms {
-		wsURL += "&keyterm=" + url.QueryEscape(term)
-	}
-
-	headers := http.Header{}
-	headers.Set("Authorization", fmt.Sprintf("Token %s", c.apiKey))
-
-	logger.Info("[Deepgram/Flux] Connecting to %s", wsURL)
-
-	type dialResult struct {
-		conn *websocket.Conn
-		err  error
-	}
-	dialCh := make(chan dialResult, 1)
-	go func() {
-		dialer := websocket.Dialer{
-			HandshakeTimeout: 10 * time.Second,
-			NetDialContext: (&net.Dialer{
-				Timeout: 10 * time.Second,
-			}).DialContext,
-		}
-		conn, _, err := dialer.Dial(wsURL, headers)
-		dialCh <- dialResult{conn, err}
-	}()
-
-	var preBuffer [][]byte
-waitLoop:
-	for {
-		select {
-		case result := <-dialCh:
-			if result.err != nil {
-				logger.Error("[Deepgram/Flux] Connection failed: %v", result.err)
-				return fmt.Errorf("failed to connect to Flux: %w", result.err)
-			}
-			dialCh <- result
-			break waitLoop
-		case chunk, ok := <-audioRx:
-			if !ok {
-				return nil
-			}
-			bytes := make([]byte, len(chunk)*2)
-			for i, s := range chunk {
-				binary.LittleEndian.PutUint16(bytes[i*2:], uint16(s))
-			}
-			preBuffer = append(preBuffer, bytes)
-		case <-ctx.Done():
-			return nil
-		}
-	}
-
-	conn := (<-dialCh).conn
-	defer conn.Close()
-
-	logger.Info("[Deepgram/Flux] Connected successfully, flushing %d buffered chunks", len(preBuffer))
-	for _, b := range preBuffer {
-		if err := conn.WriteMessage(websocket.BinaryMessage, b); err != nil {
-			return fmt.Errorf("failed to send buffered audio to Flux: %w", err)
-		}
-	}
-	preBuffer = nil
-
-	done := make(chan struct{})
-	var doneOnce sync.Once
-	closeDone := func() { doneOnce.Do(func() { close(done) }) }
-	var wsMu sync.Mutex
-
-	go func() {
-		select {
-		case <-ctx.Done():
-			closeDone()
-			wsMu.Lock()
-			_ = conn.WriteMessage(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-			_ = conn.Close()
-			wsMu.Unlock()
-		case <-done:
-		}
-	}()
-
-	go func() {
-		for {
-			select {
-			case <-done:
-				return
-			case audioChunk, ok := <-audioRx:
-				if !ok {
-					return
-				}
-				if len(audioChunk) == 0 {
-					continue
-				}
-
-				bytes := make([]byte, len(audioChunk)*2)
-				for i, sample := range audioChunk {
-					binary.LittleEndian.PutUint16(bytes[i*2:], uint16(sample))
-				}
-
-				wsMu.Lock()
-				err := conn.WriteMessage(websocket.BinaryMessage, bytes)
-				wsMu.Unlock()
-				if err != nil {
-					logger.Debug("[Deepgram/Flux] Send error: %v", err)
-					return
-				}
-			}
-		}
-	}()
-
-	var fluxText string
-	var typedBy int
-	var lastResultTime time.Time
-
-	emit := func(text string, raw bool) bool {
-		if text == "" {
-			return true
-		}
-		if raw {
-			text = "\x01" + text
-		}
-		select {
-		case textTx <- text:
-			return true
-		case <-ctx.Done():
-			closeDone()
-			return false
-		}
-	}
-
-	for {
-		messageType, message, err := conn.ReadMessage()
-		if err != nil {
-			closeDone()
-			return nil
-		}
-
-		if messageType == websocket.CloseMessage {
-			closeDone()
-			return nil
-		}
-
-		if messageType != websocket.TextMessage {
-			continue
-		}
-
-		var response FluxResponse
-		if err := json.Unmarshal(message, &response); err != nil {
-			fmt.Printf("[Deepgram/Flux] JSON parse error: %v\n", err)
-			continue
-		}
-		if response.Type != "" && response.Type != "TurnInfo" {
-			if response.Type == "Error" {
-				logger.Error("[Deepgram/Flux] Error message: %s", string(message))
-				closeDone()
-				return nil
-			}
-			logger.Debug("[Deepgram/Flux] Message type: %s", response.Type)
-			continue
-		}
-
-		transcript := response.Transcript
-		logger.Debug("[Deepgram/Flux] event: %s, text: '%s'", response.Event, transcript)
-		if transcript == "" {
-			continue
-		}
-
-		if !c.useInterim && response.Event != "EndOfTurn" {
-			continue
-		}
-
-		if fluxText != "" && !lastResultTime.IsZero() && time.Since(lastResultTime) > 10*time.Second {
-			logger.Debug("[Deepgram/Flux] Stale update state reset (%.1fs gap)", time.Since(lastResultTime).Seconds())
-			fluxText = ""
-			typedBy = 0
-		}
-		lastResultTime = time.Now()
-
-		if !c.useInterim {
-			logger.Transcript(transcript)
-			if !emit(transcript, false) {
-				return nil
-			}
-			continue
-		}
-
-		if fluxText == "" {
-			logger.Debug("[Deepgram/Flux] Update (first): '%s'", transcript)
-			fluxText = transcript
-			typedBy = len(transcript)
-			if !emit(transcript, false) {
-				return nil
-			}
-		} else if strings.HasPrefix(transcript, fluxText) {
-			skipTo := len(fluxText)
-			if typedBy > skipTo {
-				skipTo = typedBy
-			}
-			if skipTo < len(transcript) {
-				suffix := transcript[skipTo:]
-				logger.Debug("[Deepgram/Flux] Update (append): '%s'", suffix)
-				if !emit(suffix, true) {
-					return nil
-				}
-				typedBy = len(transcript)
-			}
-			fluxText = transcript
-		} else {
-			logger.Debug("[Deepgram/Flux] Update correction: '%s' (typed %d bytes)", transcript, typedBy)
-			if len(transcript) > typedBy {
-				emitFrom := typedBy
-				if emitFrom > 0 && emitFrom < len(transcript) && transcript[emitFrom] != ' ' && transcript[emitFrom] != '.' && transcript[emitFrom] != ',' {
-					idx := strings.IndexByte(transcript[emitFrom:], ' ')
-					if idx >= 0 {
-						emitFrom += idx
-					} else {
-						emitFrom = len(transcript)
-					}
-				}
-				if emitFrom < len(transcript) {
-					suffix := transcript[emitFrom:]
-					logger.Debug("[Deepgram/Flux] Update correction emits tail: '%s'", suffix)
-					if !emit(suffix, true) {
-						return nil
-					}
-					typedBy = len(transcript)
-				}
-			}
-			fluxText = transcript
-		}
-
-		if response.Event == "EndOfTurn" {
-			logger.Transcript(transcript)
-			fluxText = ""
-			typedBy = 0
 		}
 	}
 }

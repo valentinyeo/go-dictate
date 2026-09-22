@@ -15,7 +15,6 @@ type Config struct {
 	Deepgram    DeepgramConfig    `toml:"deepgram"`
 	Audio       AudioConfig       `toml:"audio"`
 	VAD         VADConfig         `toml:"vad"`
-	Offline     OfflineConfig     `toml:"offline"`
 	Diagnostics DiagnosticsConfig `toml:"diagnostics"`
 	Keyboard    KeyboardConfig    `toml:"keyboard"`
 }
@@ -24,6 +23,9 @@ const (
 	ProfileTerminalAgent = "terminal_agent"
 	ProfileEmailWriting  = "email_writing"
 	ProfileCustom        = "custom"
+
+	NoiseModeNormal = "normal"
+	NoiseModeTrain  = "train"
 )
 
 type DeepgramConfig struct {
@@ -34,17 +36,18 @@ type DeepgramConfig struct {
 	SmartFormat bool     `toml:"smart_format"`
 	FillerWords bool     `toml:"filler_words"`
 	Holdback    bool     `toml:"holdback"`
-	Keywords    []string `toml:"keywords"`
 	Keyterms    []string `toml:"keyterms"`
 }
 
 type AudioConfig struct {
+	PushToTalk         bool    `toml:"push_to_talk"`
 	SilenceThresholdMs uint64  `toml:"silence_threshold_ms"`
 	DuckVolume         float32 `toml:"duck_volume"`
 	DuckEnabled        bool    `toml:"duck_enabled"`
 	AutoPauseOnMedia   bool    `toml:"auto_pause_on_media"`
 	DeviceName         string  `toml:"device_name"`
 	ZeroLatency        bool    `toml:"zero_latency"`
+	BatteryBudgetSaver bool    `toml:"battery_budget_saver"`
 }
 
 type VADConfig struct {
@@ -53,11 +56,7 @@ type VADConfig struct {
 	NoiseMultiplier   float32 `toml:"noise_multiplier"`
 	MinStartThreshold float32 `toml:"min_start_threshold"`
 	SpeechStartChunks int     `toml:"speech_start_chunks"`
-}
-
-type OfflineConfig struct {
-	Enabled   bool   `toml:"enabled"`
-	ModelSize string `toml:"model_size"`
+	NoiseMode         string  `toml:"noise_mode"`
 }
 
 type DiagnosticsConfig struct {
@@ -88,8 +87,7 @@ func Default() Config {
 			SmartFormat: false,
 			FillerWords: false,
 			Holdback:    true,
-			Keywords:    []string{},
-			Keyterms:    []string{"Claude Code", "exe", "GitHub", "Deepgram", "Vosk", "Valentin Yeo", "Hypertask", "Inne"},
+			Keyterms:    []string{"Claude Code", "exe", "GitHub", "Deepgram", "Valentin Yeo", "Hypertask", "Inne"},
 		},
 		Audio: AudioConfig{
 			SilenceThresholdMs: 3000,
@@ -97,6 +95,7 @@ func Default() Config {
 			DuckEnabled:        false,
 			AutoPauseOnMedia:   true,
 			ZeroLatency:        true,
+			BatteryBudgetSaver: false,
 		},
 		VAD: VADConfig{
 			EnergyThreshold:   0.012,
@@ -104,10 +103,7 @@ func Default() Config {
 			NoiseMultiplier:   3.0,
 			MinStartThreshold: 0.012,
 			SpeechStartChunks: 2,
-		},
-		Offline: OfflineConfig{
-			Enabled:   false,
-			ModelSize: "small",
+			NoiseMode:         NoiseModeNormal,
 		},
 		Diagnostics: DiagnosticsConfig{
 			SaveFailedAudio: false,
@@ -174,6 +170,10 @@ func LoadOrCreate() (*Config, error) {
 		cfg.Diagnostics.SaveFailedAudio = false
 		migrated = true
 	}
+	if !hasTOMLKey(data, "battery_budget_saver") {
+		cfg.Audio.BatteryBudgetSaver = false
+		migrated = true
+	}
 	if !hasTOMLKey(data, "adaptive_noise") {
 		cfg.VAD.AdaptiveNoise = true
 		migrated = true
@@ -189,6 +189,16 @@ func LoadOrCreate() (*Config, error) {
 	if !hasTOMLKey(data, "speech_start_chunks") || cfg.VAD.SpeechStartChunks <= 0 {
 		cfg.VAD.SpeechStartChunks = 2
 		migrated = true
+	}
+	if !hasTOMLKey(data, "noise_mode") {
+		cfg.VAD.NoiseMode = NoiseModeNormal
+		migrated = true
+	} else {
+		normalized := NormalizeNoiseMode(cfg.VAD.NoiseMode)
+		if normalized != cfg.VAD.NoiseMode {
+			cfg.VAD.NoiseMode = normalized
+			migrated = true
+		}
 	}
 	if cfg.VAD.EnergyThreshold <= 0 || cfg.VAD.EnergyThreshold < 0.01 {
 		// Values below ~0.01 caused fans, keyboard taps, and wireless mic noise
@@ -213,9 +223,8 @@ func LoadOrCreate() (*Config, error) {
 		}
 	}
 
-	// Migrate: if keyterms is empty, copy keywords over (Nova-3 uses keyterms)
-	if len(cfg.Deepgram.Keyterms) == 0 && len(cfg.Deepgram.Keywords) > 0 {
-		cfg.Deepgram.Keyterms = cfg.Deepgram.Keywords
+	if cfg.Deepgram.Model != "nova-3" {
+		cfg.Deepgram.Model = "nova-3"
 		migrated = true
 	}
 
@@ -253,13 +262,12 @@ func (c *Config) Save() error {
 %s
 
 # Deepgram settings
-# model: nova-3 (stable dictation), flux-general-en (experimental lowest latency), flux-general-multi (experimental multilingual)
+# model: nova-3 (the only supported online dictation model)
 # language: en (English), de (German) - toggle with Ctrl+Alt+Shift+L
 # punctuate: Enable automatic punctuation and capitalization (true/false)
 # smart_format: Format numbers, dates, currency, etc. Deepgram also enables punctuation when this is true.
 # filler_words: Include filler words such as "um" and "uh" in transcripts (true/false)
 # holdback: Experimental. In Ultra Fast mode, hold back the newest interim word until it stabilizes (true/false)
-# keywords: List of words to boost recognition (e.g., ["GitHub", "API", "SQL"]) - Nova-2 only
 # keyterms: List of words/phrases for Nova-3 keyterm prompting (e.g., ["Claude Code", "exe"])
 
 # Audio settings
@@ -268,6 +276,8 @@ func (c *Config) Save() error {
 # duck_enabled: Enable/disable audio ducking (true/false)
 # device_name: Microphone to use (empty = system default, or exact device name)
 # zero_latency: Ultra-fast mode - keeps Deepgram connection open while still using the configured silence threshold
+# push_to_talk: Hold Ctrl+Alt+Space to record; release to finish. Microphone is closed while idle.
+# battery_budget_saver: Close Deepgram after each utterance, shorten billable silence, and skip paid keyterms.
 
 # VAD settings
 # energy_threshold: Base RMS threshold for speech detection (0.0-1.0)
@@ -275,11 +285,7 @@ func (c *Config) Save() error {
 # noise_multiplier: Speech must be this many times louder than the ambient noise floor.
 # min_start_threshold: Minimum threshold required to start a new utterance.
 # speech_start_chunks: Consecutive above-threshold chunks needed before speech starts.
-
-# Vosk offline settings
-# enabled: Use offline Vosk speech recognition instead of Deepgram (true/false)
-# model_size: Vosk model size: "small" (~50MB, fast) or "large" (~1.8GB, more accurate)
-# Vosk models are downloaded automatically when you enable offline mode
+# noise_mode: normal uses the configured values; train adds rumble filtering and stricter speech gating.
 
 # Diagnostics
 # save_failed_audio: Save WAV files for utterances that triggered VAD but produced no transcript.
@@ -299,10 +305,45 @@ func (c *Config) Save() error {
 
 func (c *Config) Validate() error {
 	c.Profile = NormalizeProfile(c.Profile)
-	if !c.Offline.Enabled && c.Deepgram.APIKey == "" {
+	c.VAD.NoiseMode = NormalizeNoiseMode(c.VAD.NoiseMode)
+	c.Deepgram.Model = "nova-3"
+	if c.Deepgram.APIKey == "" {
 		return fmt.Errorf("API key not set. Please edit config.toml and add your Deepgram API key")
 	}
 	return nil
+}
+
+func NormalizeNoiseMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "train", "travel", "noisy", "noisy_travel", "noisy-travel":
+		return NoiseModeTrain
+	default:
+		return NoiseModeNormal
+	}
+}
+
+// Effective returns the VAD settings to use for the selected environment.
+// Train mode only raises minimums, so stricter user-provided values remain intact.
+func (v VADConfig) Effective() VADConfig {
+	v.NoiseMode = NormalizeNoiseMode(v.NoiseMode)
+	if v.NoiseMode != NoiseModeTrain {
+		return v
+	}
+
+	v.AdaptiveNoise = true
+	if v.EnergyThreshold < 0.018 {
+		v.EnergyThreshold = 0.018
+	}
+	if v.NoiseMultiplier < 4.0 {
+		v.NoiseMultiplier = 4.0
+	}
+	if v.MinStartThreshold < 0.020 {
+		v.MinStartThreshold = 0.020
+	}
+	if v.SpeechStartChunks < 4 {
+		v.SpeechStartChunks = 4
+	}
+	return v
 }
 
 func NormalizeProfile(profile string) string {
@@ -324,7 +365,6 @@ func (c *Config) ApplyProfile(profile string) {
 
 	switch profile {
 	case ProfileEmailWriting:
-		c.Offline.Enabled = false
 		c.Deepgram.Model = "nova-3"
 		c.Audio.ZeroLatency = false
 		c.Deepgram.Punctuate = true
@@ -332,7 +372,6 @@ func (c *Config) ApplyProfile(profile string) {
 		c.Deepgram.FillerWords = false
 		c.Deepgram.Holdback = false
 	case ProfileTerminalAgent:
-		c.Offline.Enabled = false
 		c.Deepgram.Model = "nova-3"
 		c.Audio.ZeroLatency = true
 		c.Deepgram.Punctuate = true
@@ -368,16 +407,14 @@ func (c Config) InferProfile() string {
 func (c Config) MatchesProfile(profile string) bool {
 	switch NormalizeProfile(profile) {
 	case ProfileTerminalAgent:
-		return !c.Offline.Enabled &&
-			c.Deepgram.Model == "nova-3" &&
+		return c.Deepgram.Model == "nova-3" &&
 			c.Audio.ZeroLatency &&
 			c.Deepgram.Punctuate &&
 			!c.Deepgram.SmartFormat &&
 			!c.Deepgram.FillerWords &&
 			c.Deepgram.Holdback
 	case ProfileEmailWriting:
-		return !c.Offline.Enabled &&
-			c.Deepgram.Model == "nova-3" &&
+		return c.Deepgram.Model == "nova-3" &&
 			!c.Audio.ZeroLatency &&
 			c.Deepgram.Punctuate &&
 			c.Deepgram.SmartFormat &&

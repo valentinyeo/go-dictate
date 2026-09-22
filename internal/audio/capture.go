@@ -80,9 +80,8 @@ func NewCapture(audioChunks chan<- []int16, selectedDevice *CaptureDevice) (*Cap
 		deviceConfig.Capture.DeviceID = id.Pointer()
 	}
 
-	// Buffer size for ~80ms chunks (1280 samples at 16kHz). Deepgram Flux
-	// recommends 80ms chunks for optimal streaming latency, and Nova works
-	// fine with the slightly smaller cadence too.
+	// Buffer size for ~80ms chunks (1280 samples at 16kHz), balancing Nova-3
+	// streaming latency with callback and channel overhead.
 	deviceConfig.PeriodSizeInFrames = 1280
 
 	sizeInBytes := uint32(deviceConfig.PeriodSizeInFrames * 2) // samples * 2 bytes per sample
@@ -191,11 +190,16 @@ func (c *Capture) QuickRestart() error {
 }
 
 func (c *Capture) Stop() {
+	if c == nil {
+		return
+	}
 	if c.device != nil {
 		c.device.Uninit()
+		c.device = nil
 	}
 	if c.ctx != nil {
 		_ = c.ctx.Uninit() // must uninit before free
 		c.ctx.Free()
+		c.ctx = nil
 	}
 }

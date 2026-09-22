@@ -21,7 +21,6 @@ import (
 	"github.com/valen/go-dictate/internal/state"
 	"github.com/valen/go-dictate/internal/stt"
 	"github.com/valen/go-dictate/internal/tray"
-	"github.com/valen/go-dictate/internal/vosk"
 )
 
 var (
@@ -35,6 +34,7 @@ var (
 	audioPaused       atomic.Bool // true when capture is stopped due to pause
 	missedWake        atomic.Bool // true when wake happened while paused
 	trayMgr           *tray.Manager
+	releaseCapture    func()
 
 	lastSTTResetMu     sync.Mutex
 	lastSTTResetAt     time.Time
@@ -169,6 +169,7 @@ func run() {
 
 	// Create state manager
 	stateManager = state.NewManager()
+	stateManager.SetPushToTalk(cfg.Audio.PushToTalk)
 
 	// Create channels
 	audioChunks = make(chan []int16, 100)
@@ -202,14 +203,30 @@ func run() {
 
 	// Start audio capture (protected by mutex for watchdog + mic change access)
 	var audioMu sync.Mutex
+	captureChanged := make(chan struct{}, 1)
 	fmt.Println("[Main] Starting audio capture...")
-	audioCapture, err := audio.NewCapture(audioChunks, selectedDevice)
-	if err != nil {
+	var audioCapture *audio.Capture
+	audioPaused.Store(!stateManager.CaptureAllowed())
+	if stateManager.CaptureAllowed() {
+		audioCapture, err = audio.NewCapture(audioChunks, selectedDevice)
+	}
+	if audioCapture == nil && stateManager.CaptureAllowed() && err != nil {
 		fmt.Printf("[Main] Failed to start audio capture: %v\n", err)
 		time.Sleep(5 * time.Second)
 		os.Exit(1)
 	}
+
 	defer func() { audioMu.Lock(); audioCapture.Stop(); audioMu.Unlock() }()
+	releaseCapture = func() {
+		audioMu.Lock()
+		defer audioMu.Unlock()
+		audioCapture.Stop()
+		audioPaused.Store(true)
+		select {
+		case captureChanged <- struct{}{}:
+		default:
+		}
+	}
 
 	// Start keyboard simulator
 	fmt.Println("[Main] Starting keyboard simulator...")
@@ -263,16 +280,17 @@ func run() {
 			}
 
 			// Update selectedDevice so unpause uses the right mic
+			audioMu.Lock()
 			selectedDevice = newDevice
 
 			// If paused, just remember the choice - capture restarts on unpause
-			if audioPaused.Load() {
+			if audioPaused.Load() || !stateManager.CaptureAllowed() {
+				audioMu.Unlock()
 				fmt.Printf("[Main] Microphone will switch to %s on resume\n", displayName)
 				continue
 			}
 
 			// Restart audio capture with new device
-			audioMu.Lock()
 			audioCapture.Stop()
 			newCapture, err := audio.NewCapture(audioChunks, newDevice)
 			if err != nil {
@@ -338,6 +356,10 @@ func run() {
 				time.Sleep(5 * time.Second)
 				logger.Info("[Watchdog] Restarting audio capture after wake")
 				audioMu.Lock()
+				if !stateManager.CaptureAllowed() || stateManager.PushToTalkEnabled() {
+					audioMu.Unlock()
+					continue
+				}
 				audioCapture.Stop()
 				time.Sleep(500 * time.Millisecond)
 				newCapture, err := audio.NewCapture(audioChunks, selectedDevice)
@@ -363,6 +385,10 @@ func run() {
 					continue
 				}
 				audioMu.Lock()
+				if audioPaused.Load() || !stateManager.CaptureAllowed() || stateManager.PushToTalkEnabled() {
+					audioMu.Unlock()
+					continue
+				}
 				alive := audioCapture.IsAlive(watchdogTimeout)
 				peakRMS := audioCapture.PeakRMS()
 
@@ -494,56 +520,60 @@ func run() {
 		}
 	}()
 
-	// Pause/resume audio capture when the app enters/exits Paused state.
-	// Stopping the WASAPI capture device lets audiodg.exe go idle (zero CPU).
+	// One owner reconciles capture with state changes, including PTT releases.
+	// Subscribe before starting the goroutine so the first press cannot be lost.
+	pauseChangeCh := stateManager.Changed()
+	select {
+	case captureChanged <- struct{}{}:
+	default:
+	}
 	go func() {
-		pauseChangeCh := stateManager.Changed()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-pauseChangeCh:
-				s := stateManager.Get()
-				isPaused := s == state.Paused || s == state.MicConflict
-				wasPaused := audioPaused.Load()
-
-				if isPaused && !wasPaused {
-					// Entering pause - stop capture
-					audioMu.Lock()
+			case <-captureChanged:
+			}
+			if missedWake.Swap(false) && !stateManager.PushToTalkEnabled() && stateManager.CaptureAllowed() {
+				timer := time.NewTimer(5 * time.Second)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				case <-timer.C:
+				}
+			}
+			{
+				audioMu.Lock()
+				allowed := stateManager.CaptureAllowed()
+				if !allowed && !audioPaused.Load() {
 					audioCapture.Stop()
 					audioPaused.Store(true)
-					audioMu.Unlock()
-					logger.Info("[Pause] Audio capture stopped (audiodg.exe can idle)")
-					fmt.Println("[Pause] Audio capture stopped")
-				} else if !isPaused && wasPaused {
-					// Leaving pause - restart capture
-					wakeDeferred := missedWake.Swap(false)
-					if wakeDeferred {
-						logger.Info("[Pause] Wake event was deferred - waiting 5s for audio subsystem to settle")
-						time.Sleep(5 * time.Second)
-					}
-					audioMu.Lock()
-					newCapture, err := audio.NewCapture(audioChunks, selectedDevice)
+					logger.Info("[Capture] Microphone released")
+				} else if allowed && audioPaused.Load() {
+					// The previous recording has finished before another hold is accepted.
+					drainAudio(audioChunks)
+					fresh, err := audio.NewCapture(audioChunks, selectedDevice)
 					if err != nil {
-						logger.Error("[Pause] Failed to restart capture: %v", err)
-						newCapture, err = audio.NewCapture(audioChunks, nil)
+						fresh, err = audio.NewCapture(audioChunks, nil)
 					}
-					if err == nil {
-						audioCapture = newCapture
-						audioPaused.Store(false)
-						if wakeDeferred {
-							logger.Info("[Pause] Audio capture restarted (post-wake)")
-							requestSTTReset("audio capture restarted after paused wake")
-						} else {
-							logger.Info("[Pause] Audio capture restarted")
-							requestSTTReset("audio capture restarted after pause")
-						}
-						fmt.Println("[Pause] Audio capture restarted")
+					if err != nil {
+						logger.Error("[Capture] Cannot open microphone: %v", err)
+						stateManager.Set(state.Paused)
+						notify.ShowBalloon("Microphone unavailable", "Check Sound Settings and resume to retry.", 5*time.Second)
+					} else if !stateManager.CaptureAllowed() {
+						fresh.Stop()
 					} else {
-						logger.Error("[Pause] CRITICAL: Cannot restart audio: %v", err)
+						audioCapture = fresh
+						audioPaused.Store(false)
+						logger.Info("[Capture] Microphone opened")
+						if !stateManager.PushToTalkEnabled() {
+							requestSTTReset("audio capture resumed")
+						}
 					}
-					audioMu.Unlock()
 				}
+				audioMu.Unlock()
 			}
 		}
 	}()
@@ -587,6 +617,10 @@ func run() {
 					lastDefault = currentDefault
 
 					audioMu.Lock()
+					if !stateManager.CaptureAllowed() || stateManager.PushToTalkEnabled() {
+						audioMu.Unlock()
+						continue
+					}
 					audioCapture.Stop()
 					time.Sleep(500 * time.Millisecond)
 					newCapture, err := audio.NewCapture(audioChunks, nil)
@@ -621,6 +655,10 @@ func registerHotkeys() {
 	time.Sleep(500 * time.Millisecond)
 
 	hkMgr := hk.NewManager()
+	if err := hkMgr.RegisterHold(ctx, hk.MOD_CONTROL|hk.MOD_ALT, 0x20, "Ctrl+Alt+Space push-to-talk", stateManager.Hold); err != nil {
+		logger.Error("[Hotkey] Push-to-talk registration failed: %v", err)
+		notify.ShowBalloon("Push-to-talk shortcut unavailable", "Ctrl+Alt+Space is used by another app. Free the shortcut and restart Go Dictate.", 8*time.Second)
+	}
 
 	// Pause/Resume: Ctrl+Alt+X
 	logger.Info("[Hotkey] Registering Ctrl+Alt+X for pause/resume...")
@@ -701,12 +739,31 @@ func vadAndSTTManager(
 		}
 	}()
 
+	effectiveZeroLatency := func() bool {
+		return cfg.Audio.ZeroLatency && !cfg.Audio.BatteryBudgetSaver
+	}
+	effectiveKeyterms := func() []string {
+		if cfg.Audio.BatteryBudgetSaver {
+			return nil
+		}
+		return cfg.Deepgram.Keyterms
+	}
+	effectiveNoTextTimeout := func() time.Duration {
+		if cfg.Audio.BatteryBudgetSaver {
+			return 8 * time.Second
+		}
+		return 15 * time.Second
+	}
 	effectiveSilenceMs := func() uint64 {
 		silenceMs := cfg.Audio.SilenceThresholdMs
 		if silenceMs == 0 {
 			silenceMs = 3000
 		}
-		if cfg.Audio.ZeroLatency && silenceMs < 2500 {
+		if cfg.Audio.BatteryBudgetSaver && silenceMs > 1500 {
+			// Reduce trailing audio billed after the user stops speaking. A shorter
+			// cutoff can split long pauses into separate Deepgram requests.
+			silenceMs = 1500
+		} else if effectiveZeroLatency() && silenceMs < 2500 {
 			// Ultra Fast should stream interim text quickly, not chop utterances after
 			// tiny pauses. Short 700ms cutoffs caused missing sentence endings.
 			silenceMs = 2500
@@ -714,18 +771,34 @@ func vadAndSTTManager(
 		return silenceMs
 	}
 	newConfiguredVAD := func(silenceMs uint64) *audio.VoiceActivityDetector {
-		return audio.NewVADWithOptions(cfg.VAD.EnergyThreshold, silenceMs, audio.VADOptions{
-			AdaptiveNoise:     cfg.VAD.AdaptiveNoise,
-			NoiseMultiplier:   cfg.VAD.NoiseMultiplier,
-			MinStartThreshold: cfg.VAD.MinStartThreshold,
-			SpeechStartChunks: cfg.VAD.SpeechStartChunks,
+		settings := cfg.VAD.Effective()
+		return audio.NewVADWithOptions(settings.EnergyThreshold, silenceMs, audio.VADOptions{
+			AdaptiveNoise:     settings.AdaptiveNoise,
+			NoiseMultiplier:   settings.NoiseMultiplier,
+			MinStartThreshold: settings.MinStartThreshold,
+			SpeechStartChunks: settings.SpeechStartChunks,
 		})
 	}
+	newRumbleFilter := func() *audio.HighPassFilter {
+		if config.NormalizeNoiseMode(cfg.VAD.NoiseMode) != config.NoiseModeTrain {
+			return nil
+		}
+		return audio.NewHighPassFilter(16000, 120)
+	}
 	silenceMs := effectiveSilenceMs()
-	if cfg.Audio.ZeroLatency {
+	if effectiveZeroLatency() {
 		logger.Info("[VAD] Zero-latency mode: using reliable silence threshold %dms", silenceMs)
+	} else if cfg.Audio.BatteryBudgetSaver {
+		logger.Info("[Saver] Battery & Budget Saver enabled: silence=%dms, ghost_timeout=%s, keyterms=off, persistent_connection=off",
+			silenceMs, effectiveNoTextTimeout())
 	}
 	vad := newConfiguredVAD(silenceMs)
+	rumbleFilter := newRumbleFilter()
+	if rumbleFilter != nil {
+		settings := cfg.VAD.Effective()
+		logger.Info("[VAD] Train mode enabled: 120Hz rumble filter, threshold=%.4f, noise_multiplier=%.1f, start_chunks=%d",
+			settings.MinStartThreshold, settings.NoiseMultiplier, settings.SpeechStartChunks)
+	}
 
 	// Pre-roll ring buffer: keeps last ~500ms of audio so first words aren't lost.
 	// VAD needs audio to detect speech - by the time it fires SpeechStarted,
@@ -742,9 +815,7 @@ func vadAndSTTManager(
 	// Ghost speech detection: if VAD says "speaking" but Deepgram returns no
 	// actual text for this long, background noise is triggering the VAD.
 	// Force-close the STT connection so the icon goes back to standby.
-	// This is Deepgram-only: Vosk emits text only after silence/finalization,
-	// so applying this to Vosk kills legitimate offline dictation.
-	const noTextTimeout = 15 * time.Second
+	noTextTimeout := effectiveNoTextTimeout()
 	var lastTextNano atomic.Int64 // tracks when real text was last received
 
 	// After ghost speech is detected, suppress VAD for a cooldown period
@@ -754,11 +825,14 @@ func vadAndSTTManager(
 
 	var sttCtx context.Context
 	var sttCancel context.CancelFunc
+	defer func() {
+		if sttCancel != nil {
+			sttCancel()
+		}
+	}()
 	var sttAudioTx chan []int16
 	var sttDoneCh chan struct{} // closed when STT goroutine exits (connection dead)
 	var textBridge chan string  // intermediary channel to track text timing
-	var voskEngine *vosk.Engine
-	var voskEngineKey string
 	var connectionStarted time.Time
 	var currentUtteranceHasText atomic.Bool
 	var emptyUtteranceCount atomic.Int64
@@ -766,13 +840,6 @@ func vadAndSTTManager(
 
 	diagTracker := diagnostics.NewTracker()
 	var activeUtterance *diagnostics.Utterance
-
-	currentProviderModel := func() (string, string) {
-		if cfg.Offline.Enabled {
-			return "Vosk", vosk.ModelKeyForLanguage(cfg.Deepgram.Language, cfg.Offline.ModelSize == "large")
-		}
-		return "Deepgram", cfg.Deepgram.Model
-	}
 
 	currentMicName := func() string {
 		if cfg.Audio.DeviceName != "" {
@@ -782,18 +849,19 @@ func vadAndSTTManager(
 	}
 
 	beginUtterance := func(reuseConnection bool) *diagnostics.Utterance {
-		provider, model := currentProviderModel()
 		recentReset, resetReason, resetAge := recentSTTReset(30 * time.Second)
 		connAge := time.Duration(0)
 		if reuseConnection && !connectionStarted.IsZero() {
 			connAge = time.Since(connectionStarted)
 		}
 		return diagTracker.Begin(diagnostics.UtteranceConfig{
-			Provider:          provider,
-			Model:             model,
+			Provider:          "Deepgram",
+			Model:             "nova-3",
 			Language:          cfg.Deepgram.Language,
 			MicName:           currentMicName(),
-			ZeroLatency:       cfg.Audio.ZeroLatency,
+			ZeroLatency:       effectiveZeroLatency(),
+			SaverMode:         cfg.Audio.BatteryBudgetSaver,
+			NoiseMode:         config.NormalizeNoiseMode(cfg.VAD.NoiseMode),
 			ReusedConnection:  reuseConnection,
 			ConnectionAge:     connAge,
 			VADThreshold:      float32(vad.LastThreshold()),
@@ -838,62 +906,6 @@ func vadAndSTTManager(
 		}
 	}
 
-	closeVoskEngine := func() {
-		if voskEngine != nil {
-			voskEngine.Close()
-			voskEngine = nil
-			voskEngineKey = ""
-		}
-	}
-
-	preloadVoskEngine := func(reason string) {
-		if !cfg.Offline.Enabled {
-			closeVoskEngine()
-			return
-		}
-
-		modelKey := vosk.ModelKeyForLanguage(cfg.Deepgram.Language, cfg.Offline.ModelSize == "large")
-		if voskEngine != nil && voskEngineKey == modelKey {
-			return
-		}
-		closeVoskEngine()
-
-		if !vosk.IsAvailable() {
-			logger.Info("[Vosk] Library not ready; cannot preload offline model %s", modelKey)
-			return
-		}
-		if !vosk.IsModelDownloaded(modelKey) {
-			logger.Info("[Vosk] Model %s not downloaded yet; cannot preload", modelKey)
-			return
-		}
-
-		modelPath, err := vosk.GetModelPath(modelKey)
-		if err != nil {
-			logger.Error("[Vosk] Failed to resolve model %s: %v", modelKey, err)
-			return
-		}
-
-		start := time.Now()
-		logger.Info("[Vosk] Preloading offline model %s (%s)", modelKey, reason)
-		fmt.Printf("[Vosk] Loading offline model %s...\n", modelKey)
-		engine, err := vosk.NewEngine(modelPath)
-		if err != nil {
-			logger.Error("[Vosk] Failed to preload model %s: %v", modelKey, err)
-			fmt.Printf("[Vosk] Failed to load offline model: %v\n", err)
-			return
-		}
-		voskEngine = engine
-		voskEngineKey = modelKey
-		logger.Info("[Vosk] Offline model %s ready in %v", modelKey, time.Since(start).Round(time.Millisecond))
-	}
-
-	defer closeVoskEngine()
-
-	// Load Vosk while idle, not after speech starts. Large Vosk models can take
-	// many seconds to map into memory; doing that in SpeechStarted leaves the tray
-	// stuck in speaking/green and loses the user's audio.
-	preloadVoskEngine("startup")
-
 	// Independent meeting/recording detection ticker.
 	// Runs every 1s regardless of audio flow so auto-pause works even when
 	// the mic is dead, in monitor mode, or the audio channel is nil.
@@ -905,10 +917,30 @@ func vadAndSTTManager(
 	vadChangeCh := stateManager.Changed()
 
 	for {
+		if ctx.Err() != nil {
+			return
+		}
+		if stateManager.PushToTalkEnabled() {
+			if sttCancel != nil {
+				sttCancel()
+				sttCancel = nil
+			}
+			if sttAudioTx != nil {
+				close(sttAudioTx)
+				sttAudioTx = nil
+			}
+			sttDoneCh = nil
+			endCurrentUtterance("push_to_talk")
+			_ = ducker.Restore()
+			vad.Reset()
+			preRoll = preRoll[:0]
+			runPushToTalk(ctx, audioRx, textTx, stateManager, vadChangeCh, releaseCapture)
+			continue
+		}
 		// When paused, disable ALL processing (zero CPU)
 		var activeAudioRx <-chan []int16
 		var activeMeetingTick <-chan time.Time
-		if s := stateManager.Get(); s != state.Paused && s != state.MicConflict {
+		if s := stateManager.Get(); !stateManager.PushToTalkEnabled() && s != state.Paused && s != state.MicConflict {
 			activeAudioRx = audioRx
 			activeMeetingTick = meetingTicker.C
 		}
@@ -944,12 +976,21 @@ func vadAndSTTManager(
 			endCurrentUtterance("settings_changed")
 			// Recreate VAD with potentially changed silence/noise settings.
 			silenceMs = effectiveSilenceMs()
-			if cfg.Audio.ZeroLatency {
+			noTextTimeout = effectiveNoTextTimeout()
+			if effectiveZeroLatency() {
 				logger.Info("[VAD] Zero-latency mode: using reliable silence threshold %dms", silenceMs)
+			} else if cfg.Audio.BatteryBudgetSaver {
+				logger.Info("[Saver] Battery & Budget Saver enabled: silence=%dms, ghost_timeout=%s, keyterms=off, persistent_connection=off",
+					silenceMs, noTextTimeout)
 			}
 			vad = newConfiguredVAD(silenceMs)
+			rumbleFilter = newRumbleFilter()
+			if rumbleFilter != nil {
+				settings := cfg.VAD.Effective()
+				logger.Info("[VAD] Train mode enabled: 120Hz rumble filter, threshold=%.4f, noise_multiplier=%.1f, start_chunks=%d",
+					settings.MinStartThreshold, settings.NoiseMultiplier, settings.SpeechStartChunks)
+			}
 			stateManager.Set(state.AutoPaused)
-			preloadVoskEngine("settings changed")
 
 		case <-activeMeetingTick:
 			// Independent meeting/recording check - fires even when mic is dead
@@ -1000,6 +1041,9 @@ func vadAndSTTManager(
 			if !ok {
 				return
 			}
+			if rumbleFilter != nil {
+				rumbleFilter.ProcessInPlace(audioChunk)
+			}
 
 			currentState := stateManager.Get()
 
@@ -1047,7 +1091,7 @@ func vadAndSTTManager(
 				// In Ultra Fast mode, reset keyboard context if silence was long enough
 				// that we've likely switched contexts (>3s). Short gaps (<3s) keep context
 				// so late Deepgram results still get proper spacing.
-				if cfg.Audio.ZeroLatency && !silenceStartTime.IsZero() && time.Since(silenceStartTime) > 3*time.Second {
+				if effectiveZeroLatency() && !silenceStartTime.IsZero() && time.Since(silenceStartTime) > 3*time.Second {
 					sim.ResetContext()
 					logger.Debug("[VAD] Reset keyboard context after %.1fs silence", time.Since(silenceStartTime).Seconds())
 				}
@@ -1069,7 +1113,7 @@ func vadAndSTTManager(
 				// but recycle it periodically. Recent failures showed old Deepgram
 				// sessions staying open while returning only empty transcripts.
 				reuseConnection := false
-				if cfg.Audio.ZeroLatency && sttAudioTx != nil && sttDoneCh != nil {
+				if effectiveZeroLatency() && sttAudioTx != nil && sttDoneCh != nil {
 					if !connectionStarted.IsZero() && time.Since(connectionStarted) > maxPersistentConnectionAge {
 						logger.Info("[VAD] Persistent connection age %s exceeded %s; reconnecting", time.Since(connectionStarted).Round(time.Millisecond), maxPersistentConnectionAge)
 						if sttCancel != nil {
@@ -1106,57 +1150,29 @@ func vadAndSTTManager(
 				activeUtterance = beginUtterance(reuseConnection)
 
 				if !reuseConnection {
-					// Choose STT engine
-					var engine stt.Engine
-					if cfg.Offline.Enabled {
-						modelKey := vosk.ModelKeyForLanguage(cfg.Deepgram.Language, cfg.Offline.ModelSize == "large")
-						if voskEngine == nil || voskEngineKey != modelKey {
-							preloadVoskEngine("speech start")
-						}
-						if voskEngine != nil && voskEngineKey == modelKey {
-							engine = voskEngine
-						} else {
-							logger.Info("[Vosk] Selected offline model is not ready; not falling back to Deepgram")
-							fmt.Println("[Vosk] Offline model not ready; wait for it to load/download or switch to Deepgram")
-							if cfg.Audio.DuckEnabled {
-								if err := ducker.Restore(); err != nil {
-									logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
-								}
-							}
-							endCurrentUtterance("offline_model_not_ready")
-							vad.Reset()
-							preRoll = preRoll[:0]
-							stateManager.Set(state.AutoPaused)
-							continue
-						}
-					}
-					if engine == nil {
-						engine = deepgram.NewClient(
-							cfg.Deepgram.APIKey,
-							cfg.Deepgram.Language,
-							cfg.Deepgram.Model,
-							cfg.Deepgram.Punctuate,
-							cfg.Deepgram.SmartFormat,
-							cfg.Deepgram.FillerWords,
-							cfg.Deepgram.Holdback,
-							cfg.Deepgram.Keywords,
-							cfg.Deepgram.Keyterms,
-							cfg.Audio.ZeroLatency,
-						)
-					}
+					var engine stt.Engine = deepgram.NewClient(
+						cfg.Deepgram.APIKey,
+						cfg.Deepgram.Language,
+						"nova-3",
+						cfg.Deepgram.Punctuate,
+						cfg.Deepgram.SmartFormat,
+						cfg.Deepgram.FillerWords,
+						cfg.Deepgram.Holdback,
+						effectiveKeyterms(),
+						effectiveZeroLatency(),
+					)
 
 					sttAudioTx = make(chan []int16, 100)
-					sttCtx, sttCancel = context.WithCancel(ctx)
+					streamCtx, streamCancel := context.WithCancel(ctx)
+					sttCtx, sttCancel = streamCtx, streamCancel
 					sttDoneCh = make(chan struct{})
 					connectionStarted = time.Now()
 
 					// Text bridge: forwards text to keyboard simulator while tracking
 					// the last time real text was received (for ghost speech detection).
-					// It intentionally does NOT exit on sttCtx cancellation: offline Vosk
-					// produces its final transcript while handling that cancellation. The
-					// STT goroutine owns and closes textBridge after StartStreaming returns.
+					// The STT goroutine owns and closes textBridge after StartStreaming returns.
 					bridgeUtterance := activeUtterance
-					bridgeTracksCurrentUtterance := cfg.Audio.ZeroLatency && !cfg.Offline.Enabled
+					bridgeTracksCurrentUtterance := effectiveZeroLatency()
 					textBridge = make(chan string, 10)
 					go func(bridge <-chan string, utterance *diagnostics.Utterance, tracksCurrent bool) {
 						for {
@@ -1184,7 +1200,8 @@ func vadAndSTTManager(
 						}
 					}(textBridge, bridgeUtterance, bridgeTracksCurrentUtterance)
 
-					go func(e stt.Engine, eCtx context.Context, eAudioRx <-chan []int16, eTx chan string, doneCh chan struct{}, utterance *diagnostics.Utterance, tracksCurrent bool) {
+					go func(e stt.Engine, eCtx context.Context, cancelFn context.CancelFunc, eAudioRx <-chan []int16, eTx chan string, doneCh chan struct{}, utterance *diagnostics.Utterance, tracksCurrent bool) {
+						defer cancelFn()
 						defer close(doneCh)
 						defer close(eTx)
 						defer func() {
@@ -1202,7 +1219,7 @@ func vadAndSTTManager(
 							logger.Error("[STT] Error: %v", err)
 							fmt.Printf("[STT] Error: %v\n", err)
 						}
-					}(engine, sttCtx, sttAudioTx, textBridge, sttDoneCh, bridgeUtterance, bridgeTracksCurrentUtterance)
+					}(engine, sttCtx, streamCancel, sttAudioTx, textBridge, sttDoneCh, bridgeUtterance, bridgeTracksCurrentUtterance)
 				}
 
 				// Flush pre-roll buffer (captures audio BEFORE VAD fired)
@@ -1220,35 +1237,31 @@ func vadAndSTTManager(
 			case audio.Speaking:
 				if sttAudioTx != nil {
 					// Ghost speech check: no real text for too long = background noise.
-					// Deepgram streams interim text while speaking; Vosk does not, so this
-					// must stay disabled for offline mode.
-					if !cfg.Offline.Enabled {
-						lastText := time.Unix(0, lastTextNano.Load())
-						if time.Since(lastText) > noTextTimeout {
-							ghostCooldownUntil = time.Now().Add(ghostCooldown)
-							logger.Info("[VAD] Ghost speech detected - no text for %v, closing STT (cooldown %v)", noTextTimeout, ghostCooldown)
-							fmt.Println("[VAD] Ghost speech detected - background noise, cooling down 30s")
+					lastText := time.Unix(0, lastTextNano.Load())
+					if time.Since(lastText) > noTextTimeout {
+						ghostCooldownUntil = time.Now().Add(ghostCooldown)
+						logger.Info("[VAD] Ghost speech detected - no text for %v, closing STT (cooldown %v)", noTextTimeout, ghostCooldown)
+						fmt.Println("[VAD] Ghost speech detected - background noise, cooling down 30s")
 
-							if cfg.Audio.DuckEnabled {
-								if err := ducker.Restore(); err != nil {
-									logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
-								}
+						if cfg.Audio.DuckEnabled {
+							if err := ducker.Restore(); err != nil {
+								logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
 							}
-							if sttCancel != nil {
-								sttCancel()
-								sttCancel = nil
-							}
-							close(sttAudioTx)
-							sttAudioTx = nil
-							sttDoneCh = nil
-							textBridge = nil // don't close - bridge goroutine exits via sttCtx
-							connectionStarted = time.Time{}
-							endCurrentUtterance("ghost_speech_timeout")
-							vad.Reset()
-							preRoll = preRoll[:0]
-							stateManager.Set(state.AutoPaused)
-							continue
 						}
+						if sttCancel != nil {
+							sttCancel()
+							sttCancel = nil
+						}
+						close(sttAudioTx)
+						sttAudioTx = nil
+						sttDoneCh = nil
+						textBridge = nil // don't close - bridge goroutine exits via sttCtx
+						connectionStarted = time.Time{}
+						endCurrentUtterance("ghost_speech_timeout")
+						vad.Reset()
+						preRoll = preRoll[:0]
+						stateManager.Set(state.AutoPaused)
+						continue
 					}
 
 					sendSTTAudio(audioChunk)
@@ -1264,7 +1277,7 @@ func vadAndSTTManager(
 					}
 				}
 
-				if cfg.Audio.ZeroLatency && !cfg.Offline.Enabled {
+				if effectiveZeroLatency() {
 					// Zero-latency mode: keep connection alive, let Deepgram's
 					// endpointing handle finalization naturally. Don't send Finalize
 					// as it cuts off words prematurely (e.g., "outstanding" → "out").
@@ -1292,36 +1305,15 @@ func vadAndSTTManager(
 					silenceStartTime = time.Now()
 					scheduleUtteranceEnd(activeUtterance, "silence_detected", 5*time.Second)
 				} else {
-					// Normal mode: close STT connection. For Vosk, close the audio
-					// channel first and let the recognizer drain buffered audio before
-					// FinalResult(); canceling the context first can discard the utterance.
+					// Normal/Saver mode: close the Deepgram request after the utterance.
 					logger.Info("[VAD] Silence detected - closing STT connection")
-					if cfg.Offline.Enabled {
-						if sttAudioTx != nil {
-							close(sttAudioTx)
-							sttAudioTx = nil
-						}
-						if sttCancel != nil && sttDoneCh != nil {
-							cancelFn := sttCancel
-							doneCh := sttDoneCh
-							go func() {
-								select {
-								case <-doneCh:
-								case <-ctx.Done():
-								}
-								cancelFn()
-							}()
-						}
+					if sttCancel != nil {
+						sttCancel()
 						sttCancel = nil
-					} else {
-						if sttCancel != nil {
-							sttCancel()
-							sttCancel = nil
-						}
-						if sttAudioTx != nil {
-							close(sttAudioTx)
-							sttAudioTx = nil
-						}
+					}
+					if sttAudioTx != nil {
+						close(sttAudioTx)
+						sttAudioTx = nil
 					}
 					sttDoneCh = nil
 					textBridge = nil // don't close - bridge goroutine exits via sttCtx/STT goroutine
@@ -1330,7 +1322,7 @@ func vadAndSTTManager(
 				}
 
 				vad.Reset()
-				if !(cfg.Audio.ZeroLatency && !cfg.Offline.Enabled) {
+				if !effectiveZeroLatency() {
 					// Normal mode: reset keyboard context so next session starts fresh.
 					// In Ultra Fast mode, Deepgram sends late results after VAD silence
 					// that still need proper spacing — don't reset lastChar.

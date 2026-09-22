@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.121"
-	BuildDate      = "2026-06-09"
-	VersionName    = "Reliable Dictation"
-	VersionSummary = "Fix console window opening with the app (Zig-linked builds)"
+	Version        = "1.8.124"
+	BuildDate      = "2026-09-22"
+	VersionName    = "Push to Talk"
+	VersionSummary = "Release the microphone between push-to-talk recordings"
 )

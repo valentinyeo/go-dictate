@@ -27,6 +27,8 @@ type UtteranceConfig struct {
 	Language          string
 	MicName           string
 	ZeroLatency       bool
+	SaverMode         bool
+	NoiseMode         string
 	ReusedConnection  bool
 	ConnectionAge     time.Duration
 	VADThreshold      float32
@@ -101,8 +103,8 @@ func (t *Tracker) Begin(cfg UtteranceConfig) *Utterance {
 	if cfg.RecentReset {
 		reset = fmt.Sprintf("%q age=%s", cfg.RecentResetReason, cfg.RecentResetAge.Round(time.Millisecond))
 	}
-	logger.Info("[UTT %d] start provider=%s model=%s lang=%s mic=%q zero_latency=%v conn=%s vad_rms=%.4f threshold=%.4f preroll=%d recent_reset=%s",
-		u.ID, cfg.Provider, cfg.Model, cfg.Language, cfg.MicName, cfg.ZeroLatency, conn, cfg.StartRMS, cfg.VADThreshold, cfg.PreRollChunks, reset)
+	logger.Info("[UTT %d] start provider=%s model=%s lang=%s mic=%q zero_latency=%v saver=%v noise_mode=%s conn=%s vad_rms=%.4f threshold=%.4f preroll=%d recent_reset=%s",
+		u.ID, cfg.Provider, cfg.Model, cfg.Language, cfg.MicName, cfg.ZeroLatency, cfg.SaverMode, cfg.NoiseMode, conn, cfg.StartRMS, cfg.VADThreshold, cfg.PreRollChunks, reset)
 
 	return u
 }

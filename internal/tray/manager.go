@@ -13,7 +13,6 @@ import (
 	"github.com/valen/go-dictate/internal/config"
 	"github.com/valen/go-dictate/internal/logger"
 	"github.com/valen/go-dictate/internal/state"
-	"github.com/valen/go-dictate/internal/vosk"
 	"golang.org/x/sys/windows/registry"
 )
 
@@ -43,6 +42,9 @@ type Manager struct {
 	profileTerminalItem *systray.MenuItem
 	profileEmailItem    *systray.MenuItem
 	profileCustomItem   *systray.MenuItem
+	noiseModeParent     *systray.MenuItem
+	noiseNormalItem     *systray.MenuItem
+	noiseTrainItem      *systray.MenuItem
 
 	// Feature toggles
 	speechOptionsParent *systray.MenuItem
@@ -53,26 +55,13 @@ type Manager struct {
 	fillerWordsItem     *systray.MenuItem
 	holdbackItem        *systray.MenuItem
 	zeroLatencyItem     *systray.MenuItem
+	saverModeItem       *systray.MenuItem
+	pushToTalkItem      *systray.MenuItem
 	failedAudioItem     *systray.MenuItem
 	keytermsItem        *systray.MenuItem
 
-	// STT provider selection
-	onlineItem  *systray.MenuItem
-	offlineItem *systray.MenuItem
-
-	// Deepgram provider/menu selection
+	// Deepgram settings
 	deepgramModelParent *systray.MenuItem
-	modelNovaItem       *systray.MenuItem
-	modelFluxItem       *systray.MenuItem
-
-	// Vosk provider/menu selection
-	modelParent    *systray.MenuItem
-	modelSmallItem *systray.MenuItem
-	modelLargeItem *systray.MenuItem
-
-	offlinePrepareMu        sync.Mutex
-	offlinePrepareKey       string // model currently being prepared/downloaded
-	offlinePrepareWantedKey string // model user still wants activated when preparation finishes
 
 	// Microphone selection
 	micNames     []string // device names from enumeration
@@ -123,17 +112,14 @@ func (m *Manager) onReady() {
 	summaryItem.Disable()
 	systray.AddSeparator()
 
-	// Profile and STT mode selection
+	// Profile and Deepgram settings
 	m.configMu.RLock()
 	profile := m.config.DisplayProfile()
-	offlineEnabled := m.config.Offline.Enabled
-	isLargeModel := m.config.Offline.ModelSize == "large"
-	isFluxModel := m.config.Deepgram.Model == "flux-general-en"
-	language := m.config.Deepgram.Language
 	punctuate := m.config.Deepgram.Punctuate
 	smartFormat := m.config.Deepgram.SmartFormat
 	fillerWords := m.config.Deepgram.FillerWords
 	holdback := m.config.Deepgram.Holdback
+	noiseMode := config.NormalizeNoiseMode(m.config.VAD.NoiseMode)
 	m.configMu.RUnlock()
 
 	m.profileParent = systray.AddMenuItem("Profile", "Choose a dictation preset")
@@ -142,20 +128,12 @@ func (m *Manager) onReady() {
 	m.profileCustomItem = m.profileParent.AddSubMenuItemCheckbox("Custom", "Current settings do not match a preset", profile == config.ProfileCustom)
 	m.profileCustomItem.Disable()
 
-	m.deepgramModelParent = systray.AddMenuItem("Deepgram", "Cloud speech recognition")
-	m.onlineItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Use Deepgram (Online)", "Use Deepgram cloud API", !offlineEnabled)
-	m.modelNovaItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Model: Nova-3", "Stable dictation quality", !isFluxModel)
-	m.modelFluxItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Model: Flux (Experimental)", "Lower latency, worse dictation accuracy in testing", isFluxModel)
+	m.deepgramModelParent = systray.AddMenuItem("Deepgram: Nova-3", "Cloud speech recognition")
 	m.punctuateItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Punctuation", "Deepgram only: auto punctuation and capitalization", punctuate)
 	m.smartFormatItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Smart Format", "Deepgram only: format numbers, dates, currency, etc.", smartFormat)
 	m.fillerWordsItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Include Filler Words", "Deepgram only: include um, uh, etc. instead of stripping common fillers", fillerWords)
 	m.holdbackItem = m.deepgramModelParent.AddSubMenuItemCheckbox("Hold Back Last Word (Experimental)", "Deepgram Ultra Fast only: delay the newest interim word", holdback)
 	m.keytermsItem = m.deepgramModelParent.AddSubMenuItem("Edit Keyterms", "Deepgram only: open config.toml to edit keyterms")
-
-	m.modelParent = systray.AddMenuItem("Vosk", "Offline local speech recognition")
-	m.offlineItem = m.modelParent.AddSubMenuItemCheckbox("Use Vosk (Offline)", "Use local Vosk model (no internet needed)", offlineEnabled)
-	m.modelSmallItem = m.modelParent.AddSubMenuItemCheckbox("Model: Small (~50 MB)", "Fast, lower accuracy", !isLargeModel)
-	m.modelLargeItem = m.modelParent.AddSubMenuItemCheckbox("Model: Large (~1.8 GB)", "Slower, higher accuracy", isLargeModel)
 
 	systray.AddSeparator()
 	m.languageItem = systray.AddMenuItem("Language: English", "Ctrl+Alt+L: Toggle language (EN ↔ DE)")
@@ -175,13 +153,19 @@ func (m *Manager) onReady() {
 		m.micItems = append(m.micItems, item)
 	}
 
+	m.noiseModeParent = systray.AddMenuItem("Noise Mode: "+noiseModeDisplayName(noiseMode), "Tune speech detection for the current environment")
+	m.noiseNormalItem = m.noiseModeParent.AddSubMenuItemCheckbox("Normal", "Use the configured VAD settings without audio filtering", noiseMode == config.NoiseModeNormal)
+	m.noiseTrainItem = m.noiseModeParent.AddSubMenuItemCheckbox("Train / Noisy Travel", "Filter low-frequency rumble and require sustained speech", noiseMode == config.NoiseModeTrain)
+
 	m.autostartItem = systray.AddMenuItemCheckbox("Start on Boot", "Start application on boot", isAutostartEnabled())
 	systray.AddSeparator()
 
 	// General options that are not tied to a specific STT provider.
 	m.configMu.RLock()
 	m.speechOptionsParent = systray.AddMenuItem("General Options", "Dictation behavior outside the STT provider")
-	m.zeroLatencyItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Ultra Fast / Fast Finalize", "Deepgram: persistent connection. Vosk: shorter silence cutoff before final text.", m.config.Audio.ZeroLatency)
+	m.pushToTalkItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Push to Talk (hold Ctrl+Alt+Space)", "Release the microphone when idle; release the shortcut to finish the transcript", m.config.Audio.PushToTalk)
+	m.zeroLatencyItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Ultra Fast / Fast Finalize", "Keep a persistent Deepgram connection and type interim results", m.config.Audio.ZeroLatency)
+	m.saverModeItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Battery & Budget Saver", "Close each request quickly, shorten trailing audio, and skip paid keyterms", m.config.Audio.BatteryBudgetSaver)
 	m.duckingItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Audio Ducking", "Lower other apps' volume while speaking", m.config.Audio.DuckEnabled)
 	m.autoPauseItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Auto-pause in Meetings", "Pause dictation during calls", m.config.Audio.AutoPauseOnMedia)
 	m.failedAudioItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Save Failed Utterance WAVs", "Privacy-sensitive: save audio only when VAD detects speech but no transcript is produced", m.config.Diagnostics.SaveFailedAudio)
@@ -203,10 +187,8 @@ func (m *Manager) onReady() {
 
 	// Start event handlers
 	go m.handleProfileClicks()
-	go m.handleModeClicks()
-	go m.handleDeepgramModelClicks()
-	go m.handleModelClicks()
 	go m.handleMicClicks()
+	go m.handleNoiseModeClicks()
 	go m.handlePauseClick()
 	go m.handleLanguageClick()
 	go m.handleAutostartClick()
@@ -225,21 +207,12 @@ func (m *Manager) onReady() {
 	// Subclass systray window for left-click toggle + right-click menu fix
 	m.EnableLeftClick()
 
-	// Set first-level provider titles (e.g. ✓ Deepgram: Nova-3 / Vosk: Small).
+	// Synchronize checkboxes and effective option availability.
 	m.syncMenuChecks()
 
 	// Signal that tray menu is fully constructed
 	close(m.readyCh)
 
-	// If config starts in offline mode but the selected Vosk model is missing
-	// (for example after choosing Large previously), prepare it automatically
-	// instead of leaving the app to fall back to Deepgram unexpectedly.
-	if offlineEnabled {
-		modelKey := vosk.ModelKeyForLanguage(language, isLargeModel)
-		if !vosk.IsAvailable() || !vosk.IsModelDownloaded(modelKey) {
-			m.startOfflinePreparation(modelKey)
-		}
-	}
 }
 
 func (m *Manager) ReadyCh() <-chan struct{} {
@@ -299,19 +272,6 @@ func setMenuItemChecked(item *systray.MenuItem, checked bool) {
 	}
 }
 
-func voskModelReady(modelKey string) bool {
-	return vosk.IsAvailable() && vosk.IsModelDownloaded(modelKey)
-}
-
-func voskModelSizeFromKey(modelKey string) string {
-	switch modelKey {
-	case "en-large", "de-large":
-		return "large"
-	default:
-		return "small"
-	}
-}
-
 func profileDisplayName(profile string) string {
 	switch config.NormalizeProfile(profile) {
 	case config.ProfileTerminalAgent:
@@ -323,30 +283,11 @@ func profileDisplayName(profile string) string {
 	}
 }
 
-func (m *Manager) updateProviderMenuTitles(offlineEnabled, isFluxModel, isLargeModel bool) {
-	deepgramModel := "Nova-3"
-	if isFluxModel {
-		deepgramModel = "Flux"
+func noiseModeDisplayName(mode string) string {
+	if config.NormalizeNoiseMode(mode) == config.NoiseModeTrain {
+		return "Train"
 	}
-	voskModel := "Small"
-	if isLargeModel {
-		voskModel = "Large"
-	}
-
-	deepgramPrefix := ""
-	voskPrefix := ""
-	if offlineEnabled {
-		voskPrefix = "✓ "
-	} else {
-		deepgramPrefix = "✓ "
-	}
-
-	if m.deepgramModelParent != nil {
-		m.deepgramModelParent.SetTitle(fmt.Sprintf("%sDeepgram: %s", deepgramPrefix, deepgramModel))
-	}
-	if m.modelParent != nil {
-		m.modelParent.SetTitle(fmt.Sprintf("%sVosk: %s", voskPrefix, voskModel))
-	}
+	return "Normal"
 }
 
 func (m *Manager) baseTooltip() string {
@@ -356,74 +297,12 @@ func (m *Manager) baseTooltip() string {
 	return fmt.Sprintf("Dictation App v%s", m.appVersion)
 }
 
-func (m *Manager) updateProviderTooltip(offlineEnabled bool) {
-	if offlineEnabled {
-		systray.SetTooltip(m.baseTooltip() + " - Offline (Vosk)")
-	} else {
-		systray.SetTooltip(m.baseTooltip() + " - Online (Deepgram)")
-	}
-}
-
-func (m *Manager) startOfflinePreparation(modelKey string) {
-	m.offlinePrepareMu.Lock()
-	m.offlinePrepareWantedKey = modelKey
-	if m.offlinePrepareKey != "" {
-		logger.Info("[Offline] Vosk preparation already running for %s; queued wanted model %s", m.offlinePrepareKey, modelKey)
-		m.offlinePrepareMu.Unlock()
-		return
-	}
-	m.offlinePrepareKey = modelKey
-	m.offlinePrepareMu.Unlock()
-	go m.prepareOffline(modelKey)
-}
-
-func (m *Manager) cancelOfflinePreparation() {
-	m.offlinePrepareMu.Lock()
-	m.offlinePrepareWantedKey = ""
-	m.offlinePrepareMu.Unlock()
-	if m.offlineItem != nil {
-		m.offlineItem.SetTitle("Use Vosk (Offline)")
-	}
-}
-
-func (m *Manager) isOfflinePreparationWanted(modelKey string) bool {
-	m.offlinePrepareMu.Lock()
-	defer m.offlinePrepareMu.Unlock()
-	return m.offlinePrepareWantedKey == modelKey
-}
-
-func (m *Manager) finishOfflinePreparation(modelKey string, success bool) (activate bool, nextKey string) {
-	m.offlinePrepareMu.Lock()
-	activate = success && m.offlinePrepareWantedKey == modelKey
-	if m.offlinePrepareKey == modelKey {
-		m.offlinePrepareKey = ""
-	}
-	if activate || (!success && m.offlinePrepareWantedKey == modelKey) {
-		m.offlinePrepareWantedKey = ""
-	}
-	if m.offlinePrepareWantedKey != "" && m.offlinePrepareWantedKey != modelKey && m.offlinePrepareKey == "" {
-		nextKey = m.offlinePrepareWantedKey
-		m.offlinePrepareKey = nextKey
-	}
-	m.offlinePrepareMu.Unlock()
-	return activate, nextKey
-}
-
-func (m *Manager) completeOfflinePreparation(modelKey string, success bool) bool {
-	activate, nextKey := m.finishOfflinePreparation(modelKey, success)
-	if nextKey != "" {
-		go m.prepareOffline(nextKey)
-	}
-	return activate
-}
-
 func (m *Manager) syncMenuChecks() {
 	m.configMu.RLock()
 	profile := m.config.DisplayProfile()
-	offlineEnabled := m.config.Offline.Enabled
-	isFluxModel := m.config.Deepgram.Model == "flux-general-en"
-	isLargeModel := m.config.Offline.ModelSize == "large"
 	zeroLatency := m.config.Audio.ZeroLatency
+	saverMode := m.config.Audio.BatteryBudgetSaver
+	pushToTalk := m.config.Audio.PushToTalk
 	ducking := m.config.Audio.DuckEnabled
 	autoPause := m.config.Audio.AutoPauseOnMedia
 	saveFailedAudio := m.config.Diagnostics.SaveFailedAudio
@@ -431,18 +310,27 @@ func (m *Manager) syncMenuChecks() {
 	smartFormat := m.config.Deepgram.SmartFormat
 	fillerWords := m.config.Deepgram.FillerWords
 	holdback := m.config.Deepgram.Holdback
+	noiseMode := config.NormalizeNoiseMode(m.config.VAD.NoiseMode)
 	m.configMu.RUnlock()
 
 	setMenuItemChecked(m.profileTerminalItem, profile == config.ProfileTerminalAgent)
 	setMenuItemChecked(m.profileEmailItem, profile == config.ProfileEmailWriting)
 	setMenuItemChecked(m.profileCustomItem, profile == config.ProfileCustom)
-	setMenuItemChecked(m.onlineItem, !offlineEnabled)
-	setMenuItemChecked(m.offlineItem, offlineEnabled)
-	setMenuItemChecked(m.modelNovaItem, !isFluxModel)
-	setMenuItemChecked(m.modelFluxItem, isFluxModel)
-	setMenuItemChecked(m.modelSmallItem, !isLargeModel)
-	setMenuItemChecked(m.modelLargeItem, isLargeModel)
+	setMenuItemChecked(m.noiseNormalItem, noiseMode == config.NoiseModeNormal)
+	setMenuItemChecked(m.noiseTrainItem, noiseMode == config.NoiseModeTrain)
+	if m.noiseModeParent != nil {
+		m.noiseModeParent.SetTitle("Noise Mode: " + noiseModeDisplayName(noiseMode))
+	}
 	setMenuItemChecked(m.zeroLatencyItem, zeroLatency)
+	setMenuItemChecked(m.saverModeItem, saverMode)
+	setMenuItemChecked(m.pushToTalkItem, pushToTalk)
+	if m.zeroLatencyItem != nil {
+		if saverMode || pushToTalk {
+			m.zeroLatencyItem.Disable()
+		} else {
+			m.zeroLatencyItem.Enable()
+		}
+	}
 	setMenuItemChecked(m.duckingItem, ducking)
 	setMenuItemChecked(m.autoPauseItem, autoPause)
 	setMenuItemChecked(m.failedAudioItem, saveFailedAudio)
@@ -450,8 +338,7 @@ func (m *Manager) syncMenuChecks() {
 	setMenuItemChecked(m.smartFormatItem, smartFormat)
 	setMenuItemChecked(m.fillerWordsItem, fillerWords)
 	setMenuItemChecked(m.holdbackItem, holdback)
-	m.updateProviderMenuTitles(offlineEnabled, isFluxModel, isLargeModel)
-	m.updateProviderTooltip(offlineEnabled)
+	systray.SetTooltip(m.baseTooltip() + " - " + m.stateManager.Get().String())
 }
 
 func (m *Manager) markProfileCustomLocked() {
@@ -460,7 +347,6 @@ func (m *Manager) markProfileCustomLocked() {
 
 func (m *Manager) applySpeechProfile(profile string) {
 	normalized := config.NormalizeProfile(profile)
-	m.cancelOfflinePreparation()
 	m.configMu.Lock()
 	m.config.ApplyProfile(normalized)
 	if err := m.config.Save(); err != nil {
@@ -471,6 +357,21 @@ func (m *Manager) applySpeechProfile(profile string) {
 	m.syncMenuChecks()
 	logger.Info("[Tray] Profile: %s", profileDisplayName(normalized))
 	fmt.Printf("[Tray] Profile: %s\n", profileDisplayName(normalized))
+	m.notifySettingsChanged()
+}
+
+func (m *Manager) applyNoiseMode(mode string) {
+	normalized := config.NormalizeNoiseMode(mode)
+	m.configMu.Lock()
+	m.config.VAD.NoiseMode = normalized
+	if err := m.config.Save(); err != nil {
+		fmt.Printf("[Tray] Failed to save config: %v\n", err)
+	}
+	m.configMu.Unlock()
+
+	m.syncMenuChecks()
+	logger.Info("[Tray] Noise mode: %s", noiseModeDisplayName(normalized))
+	fmt.Printf("[Tray] Noise mode: %s\n", noiseModeDisplayName(normalized))
 	m.notifySettingsChanged()
 }
 
@@ -723,6 +624,19 @@ func (m *Manager) handleFeatureToggles() {
 		select {
 		case <-m.ctx.Done():
 			return
+
+		case <-m.pushToTalkItem.ClickedCh:
+			m.configMu.Lock()
+			m.config.Audio.PushToTalk = !m.config.Audio.PushToTalk
+			enabled := m.config.Audio.PushToTalk
+			if err := m.config.Save(); err != nil {
+				logger.Error("[Tray] Failed to save push-to-talk setting: %v", err)
+			}
+			m.configMu.Unlock()
+			m.stateManager.SetPushToTalk(enabled)
+			m.syncMenuChecks()
+			m.notifySettingsChanged()
+
 		case <-m.zeroLatencyItem.ClickedCh:
 			m.configMu.Lock()
 			m.config.Audio.ZeroLatency = !m.config.Audio.ZeroLatency
@@ -736,6 +650,18 @@ func (m *Manager) handleFeatureToggles() {
 				fmt.Printf("[Tray] Failed to save config: %v\n", err)
 			}
 			fmt.Printf("[Tray] Ultra Fast mode: %v\n", m.config.Audio.ZeroLatency)
+			m.configMu.Unlock()
+			m.syncMenuChecks()
+			m.notifySettingsChanged()
+
+		case <-m.saverModeItem.ClickedCh:
+			m.configMu.Lock()
+			m.config.Audio.BatteryBudgetSaver = !m.config.Audio.BatteryBudgetSaver
+			enabled := m.config.Audio.BatteryBudgetSaver
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save config: %v\n", err)
+			}
+			logger.Info("[Tray] Battery & Budget Saver: %v", enabled)
 			m.configMu.Unlock()
 			m.syncMenuChecks()
 			m.notifySettingsChanged()
@@ -1021,242 +947,15 @@ func (m *Manager) handleProfileClicks() {
 	}
 }
 
-func (m *Manager) handleModeClicks() {
+func (m *Manager) handleNoiseModeClicks() {
 	for {
 		select {
 		case <-m.ctx.Done():
 			return
-		case <-m.onlineItem.ClickedCh:
-			logger.Info("[Tray] User clicked Use Deepgram (Online)")
-			m.cancelOfflinePreparation()
-			m.onlineItem.Check()
-			m.offlineItem.Uncheck()
-			m.configMu.Lock()
-			m.config.Offline.Enabled = false
-			m.markProfileCustomLocked()
-			if err := m.config.Save(); err != nil {
-				logger.Error("[Tray] Failed to save config: %v", err)
-			}
-			m.configMu.Unlock()
-			logger.Info("[Tray] Switched to Online (Deepgram)")
-			m.syncMenuChecks()
-			m.notifySettingsChanged()
-
-		case <-m.offlineItem.ClickedCh:
-			logger.Info("[Tray] User clicked Use Vosk (Offline)")
-			m.configMu.RLock()
-			lang := m.config.Deepgram.Language
-			isLarge := m.config.Offline.ModelSize == "large"
-			m.configMu.RUnlock()
-
-			modelKey := vosk.ModelKeyForLanguage(lang, isLarge)
-			logger.Info("[Tray] Vosk model key: %s (DLL available: %v, model downloaded: %v)",
-				modelKey, vosk.IsAvailable(), vosk.IsModelDownloaded(modelKey))
-
-			if voskModelReady(modelKey) {
-				m.cancelOfflinePreparation()
-				m.offlineItem.Check()
-				m.onlineItem.Uncheck()
-				m.configMu.Lock()
-				m.config.Offline.Enabled = true
-				m.markProfileCustomLocked()
-				m.config.Save()
-				m.configMu.Unlock()
-				logger.Info("[Tray] Switched to Offline (Vosk) - already ready")
-				m.syncMenuChecks()
-				m.notifySettingsChanged()
-			} else {
-				logger.Info("[Tray] Starting Vosk preparation (download DLL/model if needed)...")
-				m.startOfflinePreparation(modelKey)
-			}
-		}
-	}
-}
-
-func (m *Manager) prepareOffline(modelKey string) {
-	modelSize := voskModelSizeFromKey(modelKey)
-	info, ok := vosk.Models[modelKey]
-	if !ok {
-		logger.Error("[Offline] Unknown Vosk model key: %s", modelKey)
-		if m.isOfflinePreparationWanted(modelKey) {
-			m.offlineItem.SetTitle("Use Vosk (Offline) - model error")
-		}
-		m.completeOfflinePreparation(modelKey, false)
-		m.syncMenuChecks()
-		return
-	}
-
-	if m.isOfflinePreparationWanted(modelKey) {
-		m.offlineItem.SetTitle("Use Vosk (preparing...)")
-	}
-
-	// Download DLL if needed. Downloads cannot be cancelled mid-flight, but the
-	// final activation is guarded by offlinePrepareWantedKey so completing a
-	// background download cannot switch the app back to Vosk after the user chose
-	// Deepgram.
-	if !vosk.IsAvailable() {
-		logger.Info("[Offline] Downloading Vosk library...")
-		if m.isOfflinePreparationWanted(modelKey) {
-			m.offlineItem.SetTitle("Use Vosk (downloading library...)")
-			systray.SetTooltip("Downloading Vosk library...")
-		}
-		if err := vosk.EnsureVoskLibrary(func(downloaded, total int64) {
-			if total > 0 && m.isOfflinePreparationWanted(modelKey) {
-				pct := float64(downloaded) / float64(total) * 100
-				msg := fmt.Sprintf("Use Vosk (library %.0f%%)", pct)
-				m.offlineItem.SetTitle(msg)
-				systray.SetTooltip(fmt.Sprintf("Downloading Vosk library... %.0f%%", pct))
-			}
-		}); err != nil {
-			logger.Error("[Offline] Failed to download Vosk library: %v", err)
-			if m.isOfflinePreparationWanted(modelKey) {
-				m.offlineItem.SetTitle("Use Vosk (Offline) - download failed")
-			}
-			m.completeOfflinePreparation(modelKey, false)
-			m.syncMenuChecks()
-			return
-		}
-		logger.Info("[Offline] Vosk library downloaded successfully")
-	}
-
-	// Download selected Vosk model if needed.
-	if !vosk.IsModelDownloaded(modelKey) {
-		logger.Info("[Offline] Downloading Vosk model: %s (%s)...", info.Name, info.Size)
-		if m.isOfflinePreparationWanted(modelKey) {
-			m.offlineItem.SetTitle(fmt.Sprintf("Use Vosk (downloading %s...)", info.Name))
-			systray.SetTooltip(fmt.Sprintf("Downloading %s model...", info.Name))
-		}
-		if err := vosk.DownloadModel(modelKey, func(downloaded, total int64) {
-			if total > 0 && m.isOfflinePreparationWanted(modelKey) {
-				pct := float64(downloaded) / float64(total) * 100
-				m.offlineItem.SetTitle(fmt.Sprintf("Use Vosk (model %.0f%%)", pct))
-				systray.SetTooltip(fmt.Sprintf("Downloading %s... %.0f%%", info.Name, pct))
-			}
-		}); err != nil {
-			logger.Error("[Offline] Failed to download Vosk model %s: %v", modelKey, err)
-			if m.isOfflinePreparationWanted(modelKey) {
-				m.offlineItem.SetTitle("Use Vosk (Offline) - download failed")
-			}
-			m.completeOfflinePreparation(modelKey, false)
-			m.syncMenuChecks()
-			return
-		}
-		logger.Info("[Offline] Vosk model %s downloaded successfully", modelKey)
-	}
-
-	if !m.completeOfflinePreparation(modelKey, true) {
-		logger.Info("[Offline] Vosk model %s prepared but no longer requested; keeping current provider", modelKey)
-		m.syncMenuChecks()
-		return
-	}
-
-	// All ready and still requested: switch to Vosk and persist the model.
-	m.offlineItem.SetTitle("Use Vosk (Offline)")
-	m.offlineItem.Check()
-	m.onlineItem.Uncheck()
-	m.configMu.Lock()
-	m.config.Offline.Enabled = true
-	m.config.Offline.ModelSize = modelSize
-	m.markProfileCustomLocked()
-	if err := m.config.Save(); err != nil {
-		logger.Error("[Offline] Failed to save config: %v", err)
-	}
-	m.configMu.Unlock()
-	logger.Info("[Offline] Vosk offline mode ready with %s", info.Name)
-	m.syncMenuChecks()
-	m.notifySettingsChanged()
-}
-
-func (m *Manager) handleDeepgramModelClicks() {
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		case <-m.modelNovaItem.ClickedCh:
-			m.modelNovaItem.Check()
-			m.modelFluxItem.Uncheck()
-			m.configMu.Lock()
-			m.config.Deepgram.Model = "nova-3"
-			m.markProfileCustomLocked()
-			online := !m.config.Offline.Enabled
-			if err := m.config.Save(); err != nil {
-				fmt.Printf("[Tray] Failed to save: %v\n", err)
-			}
-			m.configMu.Unlock()
-			logger.Info("[Tray] Deepgram model: nova-3")
-			fmt.Println("[Tray] Deepgram model: nova-3")
-			m.syncMenuChecks()
-			if online {
-				m.notifySettingsChanged()
-			}
-
-		case <-m.modelFluxItem.ClickedCh:
-			m.modelFluxItem.Check()
-			m.modelNovaItem.Uncheck()
-			m.configMu.Lock()
-			m.config.Deepgram.Model = "flux-general-en"
-			m.markProfileCustomLocked()
-			online := !m.config.Offline.Enabled
-			if err := m.config.Save(); err != nil {
-				fmt.Printf("[Tray] Failed to save: %v\n", err)
-			}
-			m.configMu.Unlock()
-			logger.Info("[Tray] Deepgram model: flux-general-en")
-			fmt.Println("[Tray] Deepgram model: flux-general-en")
-			m.syncMenuChecks()
-			if online {
-				m.notifySettingsChanged()
-			}
-		}
-	}
-}
-
-func (m *Manager) selectVoskModel(size string) {
-	isLarge := size == "large"
-	setMenuItemChecked(m.modelSmallItem, !isLarge)
-	setMenuItemChecked(m.modelLargeItem, isLarge)
-
-	m.configMu.RLock()
-	lang := m.config.Deepgram.Language
-	offline := m.config.Offline.Enabled
-	m.configMu.RUnlock()
-
-	modelKey := vosk.ModelKeyForLanguage(lang, isLarge)
-	if offline && !voskModelReady(modelKey) {
-		logger.Info("[Tray] Vosk model %s is not ready; downloading before switching model", modelKey)
-		fmt.Printf("[Tray] Vosk model %s not ready, downloading...\n", modelKey)
-		m.startOfflinePreparation(modelKey)
-		return
-	}
-
-	m.configMu.Lock()
-	m.config.Offline.ModelSize = size
-	if err := m.config.Save(); err != nil {
-		fmt.Printf("[Tray] Failed to save: %v\n", err)
-	}
-	m.configMu.Unlock()
-
-	label := "Small"
-	if isLarge {
-		label = "Large"
-	}
-	logger.Info("[Tray] Vosk model: %s", label)
-	fmt.Printf("[Tray] Vosk model: %s\n", label)
-	m.syncMenuChecks()
-	if offline {
-		m.notifySettingsChanged()
-	}
-}
-
-func (m *Manager) handleModelClicks() {
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		case <-m.modelSmallItem.ClickedCh:
-			m.selectVoskModel("small")
-		case <-m.modelLargeItem.ClickedCh:
-			m.selectVoskModel("large")
+		case <-m.noiseNormalItem.ClickedCh:
+			m.applyNoiseMode(config.NoiseModeNormal)
+		case <-m.noiseTrainItem.ClickedCh:
+			m.applyNoiseMode(config.NoiseModeTrain)
 		}
 	}
 }
@@ -1309,6 +1008,7 @@ func (m *Manager) handleIconUpdates() {
 func (m *Manager) updateIcon(appState state.AppState) {
 	iconData := getIconData(appState.IconColor())
 	systray.SetIcon(iconData)
+	systray.SetTooltip(m.baseTooltip() + " - " + appState.String())
 }
 
 // Removed - using icons.go instead
@@ -1347,4 +1047,13 @@ func setAutostart(enable bool) error {
 	}
 
 	return nil
+}
+
+// ConfigSnapshot gives a recording a stable copy of the selected settings.
+func (m *Manager) ConfigSnapshot() config.Config {
+	m.configMu.RLock()
+	defer m.configMu.RUnlock()
+	snapshot := *m.config
+	snapshot.Deepgram.Keyterms = append([]string(nil), m.config.Deepgram.Keyterms...)
+	return snapshot
 }
