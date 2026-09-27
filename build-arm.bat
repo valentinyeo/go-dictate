@@ -1,31 +1,38 @@
 @echo off
 echo Building go-dictate for Windows ARM64...
 
-REM Add LLVM MinGW ARM64 to PATH if present (winget: MartinStorsjo.LLVM-MinGW.UCRT)
-set "MINGW_ARM64=%LOCALAPPDATA%\Microsoft\WinGet\Packages\MartinStorsjo.LLVM-MinGW.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe\llvm-mingw-20251216-ucrt-aarch64\bin"
-if exist "%MINGW_ARM64%\gcc.exe" set "PATH=%MINGW_ARM64%;%PATH%"
+REM Zig is the C toolchain for CGO (malgo), same as build.bat. On ARM64 laptops it is
+REM installed with winget (zig.zig), so use whatever zig is on PATH, else C:\Users\valen\zig.
+where zig >nul 2>nul || set PATH=C:\Users\valen\zig;%PATH%
 
 set GOOS=windows
 set GOARCH=arm64
 set CGO_ENABLED=1
+set CC=zig cc -target aarch64-windows-gnu
+set CXX=zig c++ -target aarch64-windows-gnu
 
-REM Requires ARM64 C compiler on PATH (LLVM MinGW above, or MSYS2 ARM64)
+REM With CGO the external linker produces the final exe and -H windowsgui is
+REM silently lost (binary becomes a console app). Force the GUI subsystem.
+set CGO_LDFLAGS=-Wl,--subsystem,windows
+
+REM rsrc_windows_arm64.syso carries the icon; regenerate with:
+REM   go run github.com/tc-hib/go-winres@latest make --arch arm64 --in winres/winres.json
 go build -ldflags="-s -w -H windowsgui" -trimpath -o go-dictate.exe .
+if errorlevel 1 goto failed
 
-if %errorlevel% == 0 (
-    echo.
-    echo Build successful! (ARM64)
-    echo Output: go-dictate.exe
-    echo.
-    for /f "tokens=*" %%a in ('powershell -NoProfile -Command "(Get-Content version.go) -match 'Version\s*=\s*\"([^\"]+)\"'; $Matches[1]"') do set VERSION=%%a
-    if defined VERSION (
-        copy /Y go-dictate.exe "dictation-v%VERSION%-arm64.exe" >nul
-        echo Versioned copy: dictation-v%VERSION%-arm64.exe
-    )
-    echo.
-    echo To run: go-dictate.exe
-) else (
-    echo.
-    echo Build failed! Ensure ARM64 GCC is on PATH (e.g. MSYS2 UCRT aarch64).
-    exit /b 1
-)
+echo.
+echo Build successful! ARM64
+echo Output: go-dictate.exe
+for /f "tokens=*" %%a in ('powershell -NoProfile -Command "[regex]::Match((Get-Content '%~dp0version.go' -Raw), 'Version\s*=\s*.([0-9.]+)').Groups[1].Value"') do set VERSION=%%a
+if not defined VERSION goto done
+copy /Y go-dictate.exe "dictation-v%VERSION%-arm64.exe" >nul
+echo Versioned copy: dictation-v%VERSION%-arm64.exe
+:done
+echo.
+echo To run: go-dictate.exe
+exit /b 0
+
+:failed
+echo.
+echo Build failed! Ensure zig is on PATH: winget install zig.zig
+exit /b 1
