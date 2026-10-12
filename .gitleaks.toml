@@ -1,0 +1,23 @@
+# Base gitleaks rules for every repo agents push to (YPER4-324). Copied to each repo as
+# .gitleaks.toml; add that repo's known false positives to its [allowlist] with a comment why.
+[extend]
+useDefault = true
+
+# The default rules missed a Cloudflare token written as `value <token>` in a markdown table
+# (agent-fleet 6ac2c153), so a 40-character token near a Cloudflare word counts as a key.
+[[rules]]
+id = "cloudflare-token-named-nearby"
+description = "Cloudflare API token with Cloudflare named on the same line"
+regex = '''(?i)(?:cloudflare|\bcf\b|\bcf_|wrangler)[^\n]{0,120}?[`'"= ]([A-Za-z0-9_-]{40})(?:[`'"\s]|$)'''
+secretGroup = 1
+entropy = 3.5
+keywords = ["cloudflare", "cf", "wrangler"]
+
+# A long random value in quotes or backticks next to token, secret, key or password.
+[[rules]]
+id = "quoted-token-named-nearby"
+description = "Quoted long random value next to the word token, secret, key or password"
+regex = '''(?i)(?:token|secret|api[ _-]?key|password)[^\n]{0,60}?[`'"]([A-Za-z0-9_-]{32,})[`'"]'''
+secretGroup = 1
+entropy = 4.0
+keywords = ["token", "secret", "key", "password"]
