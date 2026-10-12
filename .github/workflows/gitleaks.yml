@@ -1,5 +1,6 @@
 # Copied into every repo agents push to by scripts/secret-scan in hypertask-ai/hypertask (YPER4-324).
-# gitleaks finds key-shaped strings; trufflehog also checks whether a found key still works.
+# gitleaks finds key-shaped strings; trufflehog finds known key types. Any hit fails the check,
+# because trufflehog's live check can call a working key dead. A false hit: `trufflehog:ignore` on its line.
 name: Gitleaks
 
 on: [push, pull_request]
@@ -47,20 +48,20 @@ jobs:
         run: |
           curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.3/gitleaks_8.24.3_linux_x64.tar.gz | tar -xz gitleaks
           ./gitleaks detect --no-banner --source . --redact --log-opts "${SCAN_BASE:+$SCAN_BASE..}$SCAN_HEAD"
-      - name: Run trufflehog (keys that still work)
+      - name: Run trufflehog
         run: |
           curl -sSfL https://github.com/trufflesecurity/trufflehog/releases/download/v3.97.0/trufflehog_3.97.0_linux_amd64.tar.gz | tar -xz trufflehog
           # --json keeps values out of the plain log; only the key type and place are printed.
           set +e
           ./trufflehog git "file://$PWD" --branch "$SCAN_HEAD" ${SCAN_BASE:+--since-commit "$SCAN_BASE"} \
-            --results=verified --fail --no-update --json > found.json 2> trufflehog.err
+            --fail --no-update --json > found.json 2> trufflehog.err
           code=$?
           set -e
           grep -o '"DetectorName":"[^"]*"\|"file":"[^"]*"\|"commit":"[^"]*"' found.json || true
-          grep -o '"chunks":[0-9]*\|"bytes":[0-9]*\|"verified_secrets":[0-9]*' trufflehog.err | tr '\n' ' ' || true
+          grep -o '"chunks":[0-9]*\|"bytes":[0-9]*\|"verified_secrets":[0-9]*\|"unverified_secrets":[0-9]*' trufflehog.err | tr '\n' ' ' || true
           rm -f found.json
           if [ "$code" = 183 ]; then
-            echo "::error::trufflehog found a key that still works. Roll it, then remove it."
+            echo "::error::trufflehog found a key. Remove it, and roll it if it was ever real."
             exit 1
           fi
           if [ "$code" != 0 ]; then tail -5 trufflehog.err; exit "$code"; fi
