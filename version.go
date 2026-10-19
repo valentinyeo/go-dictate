@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.128"
-	BuildDate      = "2026-09-27"
-	VersionName    = "ARM64 Zig"
-	VersionSummary = "Native ARM64 build with Zig, app icon on ARM64"
+	Version        = "1.8.129"
+	BuildDate      = "2026-10-03"
+	VersionName    = "Duck & Echo Gate"
+	VersionSummary = "Hangover ducking and system-audio rejection for hands-free dictation"
 )

@@ -240,3 +240,18 @@ func (v *VoiceActivityDetector) Reset() {
 	v.lastSpeechTime = nil
 	v.speechStartCount = 0
 }
+
+// ChunkRMS returns the normalized RMS energy (0.0-1.0) of an int16 audio chunk.
+// It is exported so the dictation loop can reason about ambient energy (echo
+// gating and ducking hangover) without a second VAD instance.
+func ChunkRMS(audioChunk []int16) float64 {
+	if len(audioChunk) == 0 {
+		return 0
+	}
+	var sumSquares float64
+	for _, sample := range audioChunk {
+		normalized := float64(sample) / float64(math.MaxInt16)
+		sumSquares += normalized * normalized
+	}
+	return math.Sqrt(sumSquares / float64(len(audioChunk)))
+}

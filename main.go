@@ -808,11 +808,32 @@ func vadAndSTTManager(
 	const audioChunkMs = 80 // capture.go uses 1280 frames at 16kHz
 	const preRollSize = 6   // ~480ms at ~80ms/chunk
 	preRoll := make([][]int16, 0, preRollSize)
+	// pushPreRoll appends the newest chunk to the fixed-size pre-roll ring buffer.
+	pushPreRoll := func(chunk []int16) {
+		if len(preRoll) >= preRollSize {
+			copy(preRoll, preRoll[1:])
+			preRoll[len(preRoll)-1] = chunk
+		} else {
+			preRoll = append(preRoll, chunk)
+		}
+	}
 	var silenceStartTime time.Time // when VAD last detected silence (for delayed context reset)
 
 	// Per-app volume ducking for Chrome/Edge
 	logger.Info("[AppVolumeDucker] Initializing with duck volume: %.0f%%", cfg.Audio.DuckVolume*100)
 	ducker := audio.NewAppVolumeDucker(cfg.Audio.DuckVolume)
+
+	// Media ducking / acoustic-echo-gate tuning.
+	const (
+		duckHangover     = 700 * time.Millisecond // keep media ducked this long after the last voiced chunk
+		duckVoiceFloor   = 0.018                  // min RMS counted as voice energy (above YouTube bleed)
+		systemAudioFloor = 0.01                   // render peak above this == something is playing
+		echoGateRatio    = 0.12                   // mic must exceed this fraction of the render peak to be speech
+		minEchoGate      = 0.02                   // never gate below this absolute RMS
+	)
+	// Tracks the last chunk that carried voice energy so ducking can be restored
+	// on a short hangover instead of waiting for the STT silence threshold.
+	var lastVoiceActivity time.Time
 
 	// Ghost speech detection: if VAD says "speaking" but Deepgram returns no
 	// actual text for this long, background noise is triggering the VAD.
@@ -1073,14 +1094,53 @@ func vadAndSTTManager(
 
 			// Skip VAD during ghost speech cooldown
 			if time.Now().Before(ghostCooldownUntil) {
-				// Still collect pre-roll so first words aren't lost when cooldown ends
-				if len(preRoll) >= preRollSize {
-					copy(preRoll, preRoll[1:])
-					preRoll[len(preRoll)-1] = audioChunk
-				} else {
-					preRoll = append(preRoll, audioChunk)
-				}
+				pushPreRoll(audioChunk)
 				continue
+			}
+
+			chunkRMS := audio.ChunkRMS(audioChunk)
+
+			// Acoustic echo gate: while something is playing through the speakers,
+			// the bleed the microphone picks up is much quieter than the render
+			// level. Treat those chunks as system audio (not speech) so background
+			// YouTube/music cannot start a false utterance. Only gates the start of
+			// speech - it never cuts an utterance that is already in progress.
+			if cfg.Audio.IgnoreSystemAudio && currentState != state.Speaking && currentState != state.PushToTalkRecording {
+				if peak := audio.SystemOutputPeak(); peak > systemAudioFloor {
+					gate := float64(peak) * echoGateRatio
+					if gate < minEchoGate {
+						gate = minEchoGate
+					}
+					if chunkRMS < gate {
+						pushPreRoll(audioChunk)
+						continue
+					}
+				}
+			}
+
+			// Energy-driven ducking with a short hangover. Ducking follows voiced
+			// microphone energy rather than the STT silence threshold, so media
+			// volume comes back up promptly after the last word instead of waiting
+			// for the (potentially multi-second) silence timeout.
+			if cfg.Audio.DuckEnabled {
+				voiceThreshold := vad.LastThreshold()
+				if voiceThreshold < duckVoiceFloor {
+					voiceThreshold = duckVoiceFloor
+				}
+				if chunkRMS > voiceThreshold {
+					lastVoiceActivity = time.Now()
+				}
+				if !ducker.IsDucked() {
+					if !lastVoiceActivity.IsZero() && time.Since(lastVoiceActivity) < duckHangover {
+						if err := ducker.Duck(); err != nil {
+							logger.Error("[AppVolumeDucker] Failed to duck: %v", err)
+						}
+					}
+				} else if time.Since(lastVoiceActivity) > duckHangover {
+					if err := ducker.Restore(); err != nil {
+						logger.Error("[AppVolumeDucker] Failed to restore (hangover): %v", err)
+					}
+				}
 			}
 
 			vadEvent := vad.Process(audioChunk)

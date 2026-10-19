@@ -40,6 +40,13 @@ func NewAppVolumeDucker(duckVolume float32) *AppVolumeDucker {
 	}
 }
 
+// IsDucked reports whether media app volumes are currently lowered.
+func (d *AppVolumeDucker) IsDucked() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.isDucked
+}
+
 // Duck reduces volume for browser/media applications
 func (d *AppVolumeDucker) Duck() error {
 	d.mu.Lock()

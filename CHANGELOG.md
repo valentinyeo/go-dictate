@@ -5,6 +5,15 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.129] - 2026-10-03 "Duck & Echo Gate"
+
+### Added
+- **Ignore System Audio** (tray > General Options, default on): rejects speaker bleed so background YouTube/music cannot start a false utterance. When the render endpoint's peak level indicates audio is playing, microphone chunks that are quiet relative to that level are treated as system audio and never reach the VAD or Deepgram.
+
+### Changed
+- **Audio ducking now restores on a 700ms hangover** instead of waiting for the STT silence threshold (`silence_threshold_ms`, often several seconds). Media volume drops the moment voice energy is present and returns promptly after the last word.
+- Ducking is now driven by voiced microphone energy rather than VAD utterance events, so it works reliably in hands-free/always-on mode with background media.
+
 ## [1.8.128] - 2026-09-27 "ARM64 Zig"
 
 ### Changed

@@ -18,10 +18,10 @@ var (
 )
 
 var (
-	ole32               = syscall.NewLazyDLL("ole32.dll")
-	coInitializeEx      = ole32.NewProc("CoInitializeEx")
-	coUninitialize      = ole32.NewProc("CoUninitialize")
-	coCreateInstance    = ole32.NewProc("CoCreateInstance")
+	ole32            = syscall.NewLazyDLL("ole32.dll")
+	coInitializeEx   = ole32.NewProc("CoInitializeEx")
+	coUninitialize   = ole32.NewProc("CoUninitialize")
+	coCreateInstance = ole32.NewProc("CoCreateInstance")
 
 	// MMDeviceEnumerator CLSID: {BCDE0395-E52F-467C-8E3D-C4579291692E}
 	CLSID_MMDeviceEnumerator = syscall.GUID{
@@ -46,13 +46,27 @@ var (
 		Data3: 0x484F,
 		Data4: [8]byte{0x8B, 0xC7, 0x2C, 0x65, 0x4C, 0x9A, 0x9B, 0x6F},
 	}
+
+	// IAudioMeterInformation IID: {C02216F6-8C67-4B5B-9D00-D008E73E0064}
+	IID_IAudioMeterInformation = syscall.GUID{
+		Data1: 0xC02216F6,
+		Data2: 0x8C67,
+		Data3: 0x4B5B,
+		Data4: [8]byte{0x9D, 0x00, 0xD0, 0x08, 0xE7, 0x3E, 0x00, 0x64},
+	}
+
+	sysPeakCache struct {
+		sync.Mutex
+		peak      float32
+		lastCheck time.Time
+	}
 )
 
 const (
-	CLSCTX_INPROC_SERVER = 0x1
-	eRender              = 0 // Audio rendering (speakers)
-	eCapture             = 1 // Audio capture (microphone)
-	eConsole             = 0 // Console audio device
+	CLSCTX_INPROC_SERVER    = 0x1
+	eRender                 = 0 // Audio rendering (speakers)
+	eCapture                = 1 // Audio capture (microphone)
+	eConsole                = 0 // Console audio device
 	AudioSessionStateActive = 1 // Active audio session
 )
 
@@ -89,7 +103,7 @@ func checkMediaPlayback() bool {
 
 	// Initialize COM
 	ret, _, _ := coInitializeEx.Call(0, 0x0) // COINIT_MULTITHREADED
-	if ret != 0 && ret != 0x00000001 { // S_OK or S_FALSE (already initialized)
+	if ret != 0 && ret != 0x00000001 {       // S_OK or S_FALSE (already initialized)
 		return false
 	}
 	defer coUninitialize.Call()
@@ -172,13 +186,8 @@ func checkMediaPlayback() bool {
 	// Get our own process ID to exclude it
 	ourPID := getCurrentProcessID()
 
-	// IAudioMeterInformation IID: {C02216F6-8C67-4B5B-9D00-D008E73E0064}
-	IID_IAudioMeterInformation := syscall.GUID{
-		Data1: 0xC02216F6,
-		Data2: 0x8C67,
-		Data3: 0x4B5B,
-		Data4: [8]byte{0x9D, 0x00, 0xD0, 0x08, 0xE7, 0x3E, 0x00, 0x64},
-	}
+	// IAudioMeterInformation is declared at package scope so the echo gate
+	// (SystemOutputPeak) can query the render endpoint with the same IID.
 
 	// Check each session
 	for i := int32(0); i < sessionCount; i++ {
@@ -240,7 +249,7 @@ func checkMediaPlayback() bool {
 
 				if peakValue > 0.0001 { // Audible threshold
 					syscall.Syscall(getVTable(session, 2), 1, session, 0, 0) // Release session
-					return true // Found actually-audible audio from another process
+					return true                                              // Found actually-audible audio from another process
 				}
 			}
 		}
@@ -249,6 +258,86 @@ func checkMediaPlayback() bool {
 	}
 
 	return false
+}
+
+// SystemOutputPeak returns the current peak level (0.0-1.0) of the default
+// render (speaker) endpoint. It is used as an acoustic-echo reference: when
+// something is playing, mic chunks that are quiet relative to this level are
+// treated as speaker bleed rather than speech. Cached briefly (200ms) so the
+// COM call stays cheap on the audio hot path.
+func SystemOutputPeak() float32 {
+	sysPeakCache.Lock()
+	defer sysPeakCache.Unlock()
+
+	if time.Since(sysPeakCache.lastCheck) < 200*time.Millisecond {
+		return sysPeakCache.peak
+	}
+	sysPeakCache.peak = checkSystemOutputPeak()
+	sysPeakCache.lastCheck = time.Now()
+	return sysPeakCache.peak
+}
+
+func checkSystemOutputPeak() float32 {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ret, _, _ := coInitializeEx.Call(0, 0x0) // COINIT_MULTITHREADED
+	if ret != 0 && ret != 0x00000001 {
+		return 0
+	}
+	defer coUninitialize.Call()
+
+	var deviceEnumerator uintptr
+	ret, _, _ = coCreateInstance.Call(
+		uintptr(unsafe.Pointer(&CLSID_MMDeviceEnumerator)),
+		0,
+		CLSCTX_INPROC_SERVER,
+		uintptr(unsafe.Pointer(&IID_IMMDeviceEnumerator)),
+		uintptr(unsafe.Pointer(&deviceEnumerator)),
+	)
+	if ret != 0 || deviceEnumerator == 0 {
+		return 0
+	}
+	defer syscall.Syscall(getVTable(deviceEnumerator, 2), 1, deviceEnumerator, 0, 0)
+
+	var device uintptr
+	ret, _, _ = syscall.Syscall6(
+		getVTable(deviceEnumerator, 4), // GetDefaultAudioEndpoint
+		4,
+		deviceEnumerator,
+		uintptr(eRender),
+		uintptr(eConsole),
+		uintptr(unsafe.Pointer(&device)),
+		0, 0,
+	)
+	if ret != 0 || device == 0 {
+		return 0
+	}
+	defer syscall.Syscall(getVTable(device, 2), 1, device, 0, 0)
+
+	var meter uintptr
+	ret, _, _ = syscall.Syscall6(
+		getVTable(device, 0), // QueryInterface
+		3,
+		device,
+		uintptr(unsafe.Pointer(&IID_IAudioMeterInformation)),
+		uintptr(unsafe.Pointer(&meter)),
+		0, 0, 0,
+	)
+	if ret != 0 || meter == 0 {
+		return 0
+	}
+	defer syscall.Syscall(getVTable(meter, 2), 1, meter, 0, 0)
+
+	var peak float32
+	syscall.Syscall(
+		getVTable(meter, 3), // GetPeakValue
+		2,
+		meter,
+		uintptr(unsafe.Pointer(&peak)),
+		0,
+	)
+	return peak
 }
 
 // getVTable gets a function pointer from COM vtable
