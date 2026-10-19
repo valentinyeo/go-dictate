@@ -44,6 +44,8 @@ type VADOptions struct {
 }
 
 type VoiceActivityDetector struct {
+	now               func() time.Time
+	lastChunkVoiced   bool
 	energyThreshold   float32
 	silenceThreshold  time.Duration
 	lastSpeechTime    *time.Time
@@ -79,6 +81,7 @@ func NewVADWithOptions(energyThreshold float32, silenceThresholdMs uint64, opts 
 	}
 
 	return &VoiceActivityDetector{
+		now:               time.Now,
 		energyThreshold:   energyThreshold,
 		silenceThreshold:  time.Duration(silenceThresholdMs) * time.Millisecond,
 		lastSpeechTime:    nil,
@@ -97,6 +100,7 @@ func (v *VoiceActivityDetector) Process(audioChunk []int16) VADEvent {
 	threshold := v.effectiveThreshold(v.isSpeaking)
 	storeFloat64(&v.lastThreshold, threshold)
 	isSpeech := rms > threshold
+	v.lastChunkVoiced = isSpeech
 
 	if isSpeech {
 		if !v.isSpeaking {
@@ -109,7 +113,7 @@ func (v *VoiceActivityDetector) Process(audioChunk []int16) VADEvent {
 			}
 		}
 
-		now := time.Now()
+		now := v.now()
 		v.lastSpeechTime = &now
 
 		if !v.isSpeaking {
@@ -126,7 +130,7 @@ func (v *VoiceActivityDetector) Process(audioChunk []int16) VADEvent {
 
 	// Silence detected
 	if v.lastSpeechTime != nil {
-		silenceDuration := time.Since(*v.lastSpeechTime)
+		silenceDuration := v.now().Sub(*v.lastSpeechTime)
 
 		if v.isSpeaking && silenceDuration > v.silenceThreshold {
 			v.isSpeaking = false
@@ -235,8 +239,27 @@ func (v *VoiceActivityDetector) NoiseFloor() float64 {
 	return loadFloat64(&v.lastNoiseFloor)
 }
 
+func (v *VoiceActivityDetector) LastChunkVoiced() bool {
+	return v.lastChunkVoiced
+}
+
 func (v *VoiceActivityDetector) Reset() {
 	v.isSpeaking = false
 	v.lastSpeechTime = nil
 	v.speechStartCount = 0
+}
+
+// ChunkRMS returns the normalized RMS energy (0.0-1.0) of an int16 audio chunk.
+// It is exported so the dictation loop can reason about ambient energy (echo
+// gating and ducking hangover) without a second VAD instance.
+func ChunkRMS(audioChunk []int16) float64 {
+	if len(audioChunk) == 0 {
+		return 0
+	}
+	var sumSquares float64
+	for _, sample := range audioChunk {
+		normalized := float64(sample) / float64(math.MaxInt16)
+		sumSquares += normalized * normalized
+	}
+	return math.Sqrt(sumSquares / float64(len(audioChunk)))
 }

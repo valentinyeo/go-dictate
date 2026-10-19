@@ -56,7 +56,7 @@ func (l *Logger) write(msg string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	timestamp := time.Now().Format("15:04:05.000")
+	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
 	fmt.Fprintf(l.file, "[%s] %s\n", timestamp, msg)
 	l.file.Sync() // Flush immediately
 }

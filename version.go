@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.128"
-	BuildDate      = "2026-09-27"
-	VersionName    = "ARM64 Zig"
-	VersionSummary = "Native ARM64 build with Zig, app icon on ARM64"
+	Version        = "1.8.130"
+	BuildDate      = "2026-10-19"
+	VersionName    = "Silence Not Billed"
+	VersionSummary = "Sends Deepgram only speech plus 1.5 s, tags requests go-dictate"
 )

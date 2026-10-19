@@ -51,17 +51,18 @@ type Manager struct {
 	alwaysOnItem   *systray.MenuItem
 
 	// Feature toggles
-	speechOptionsParent *systray.MenuItem
-	duckingItem         *systray.MenuItem
-	autoPauseItem       *systray.MenuItem
-	punctuateItem       *systray.MenuItem
-	smartFormatItem     *systray.MenuItem
-	fillerWordsItem     *systray.MenuItem
-	holdbackItem        *systray.MenuItem
-	zeroLatencyItem     *systray.MenuItem
-	saverModeItem       *systray.MenuItem
-	failedAudioItem     *systray.MenuItem
-	keytermsItem        *systray.MenuItem
+	speechOptionsParent   *systray.MenuItem
+	duckingItem           *systray.MenuItem
+	ignoreSystemAudioItem *systray.MenuItem
+	autoPauseItem         *systray.MenuItem
+	punctuateItem         *systray.MenuItem
+	smartFormatItem       *systray.MenuItem
+	fillerWordsItem       *systray.MenuItem
+	holdbackItem          *systray.MenuItem
+	zeroLatencyItem       *systray.MenuItem
+	saverModeItem         *systray.MenuItem
+	failedAudioItem       *systray.MenuItem
+	keytermsItem          *systray.MenuItem
 
 	// Deepgram settings
 	deepgramModelParent *systray.MenuItem
@@ -174,6 +175,7 @@ func (m *Manager) onReady() {
 	m.zeroLatencyItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Ultra Fast / Fast Finalize", "Keep a persistent Deepgram connection and type interim results", m.config.Audio.ZeroLatency)
 	m.saverModeItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Battery & Budget Saver", "Close each request quickly, shorten trailing audio, and skip paid keyterms", m.config.Audio.BatteryBudgetSaver)
 	m.duckingItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Audio Ducking", "Lower other apps' volume while speaking", m.config.Audio.DuckEnabled)
+	m.ignoreSystemAudioItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Ignore System Audio", "Reject speaker bleed so background media cannot trigger dictation", m.config.Audio.IgnoreSystemAudio)
 	m.autoPauseItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Auto-pause in Meetings", "Pause dictation during calls", m.config.Audio.AutoPauseOnMedia)
 	m.failedAudioItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Save Failed Utterance WAVs", "Privacy-sensitive: save audio only when VAD detects speech but no transcript is produced", m.config.Diagnostics.SaveFailedAudio)
 	m.configMu.RUnlock()
@@ -311,6 +313,7 @@ func (m *Manager) syncMenuChecks() {
 	saverMode := m.config.Audio.BatteryBudgetSaver
 	pushToTalk := m.config.Audio.PushToTalk
 	ducking := m.config.Audio.DuckEnabled
+	ignoreSystemAudio := m.config.Audio.IgnoreSystemAudio
 	autoPause := m.config.Audio.AutoPauseOnMedia
 	saveFailedAudio := m.config.Diagnostics.SaveFailedAudio
 	punctuate := m.config.Deepgram.Punctuate
@@ -340,6 +343,7 @@ func (m *Manager) syncMenuChecks() {
 		}
 	}
 	setMenuItemChecked(m.duckingItem, ducking)
+	setMenuItemChecked(m.ignoreSystemAudioItem, ignoreSystemAudio)
 	setMenuItemChecked(m.autoPauseItem, autoPause)
 	setMenuItemChecked(m.failedAudioItem, saveFailedAudio)
 	setMenuItemChecked(m.punctuateItem, punctuate)
@@ -698,6 +702,20 @@ func (m *Manager) handleFeatureToggles() {
 				fmt.Printf("[Tray] Failed to save config: %v\n", err)
 			}
 			fmt.Printf("[Tray] Audio ducking: %v\n", m.config.Audio.DuckEnabled)
+			m.configMu.Unlock()
+
+		case <-m.ignoreSystemAudioItem.ClickedCh:
+			m.configMu.Lock()
+			m.config.Audio.IgnoreSystemAudio = !m.config.Audio.IgnoreSystemAudio
+			if m.config.Audio.IgnoreSystemAudio {
+				m.ignoreSystemAudioItem.Check()
+			} else {
+				m.ignoreSystemAudioItem.Uncheck()
+			}
+			if err := m.config.Save(); err != nil {
+				fmt.Printf("[Tray] Failed to save config: %v\n", err)
+			}
+			fmt.Printf("[Tray] Ignore system audio: %v\n", m.config.Audio.IgnoreSystemAudio)
 			m.configMu.Unlock()
 
 		case <-m.autoPauseItem.ClickedCh:

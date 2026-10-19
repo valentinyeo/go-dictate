@@ -128,6 +128,15 @@ func (c *Client) startNovaStreaming(ctx context.Context, audioRx <-chan []int16,
 
 // streamNova accepts an endpoint so the stream lifecycle can be tested locally.
 func (c *Client) streamNova(ctx context.Context, audioRx <-chan []int16, textTx chan<- string, wsURL string, headers http.Header) error {
+	endpoint, err := url.Parse(wsURL)
+	if err != nil {
+		return fmt.Errorf("invalid streaming URL: %w", err)
+	}
+	query := endpoint.Query()
+	query.Set("tag", "go-dictate")
+	endpoint.RawQuery = query.Encode()
+	wsURL = endpoint.String()
+
 	dialCtx, cancelDial := context.WithCancel(ctx)
 	defer cancelDial()
 	logger.Info("[Deepgram] Connecting to %s", wsURL)
@@ -226,7 +235,7 @@ waitLoop:
 
 	// Goroutine to send audio (with KeepAlive for persistent connections)
 	go func() {
-		keepAliveTicker := time.NewTicker(8 * time.Second)
+		keepAliveTicker := time.NewTicker(3 * time.Second)
 		defer keepAliveTicker.Stop()
 		lastAudioSend := time.Now()
 
@@ -276,7 +285,7 @@ waitLoop:
 				lastAudioSendNano.Store(lastAudioSend.UnixNano())
 
 			case <-keepAliveTicker.C:
-				if time.Since(lastAudioSend) >= 5*time.Second {
+				if time.Since(lastAudioSend) >= 3*time.Second {
 					wsMu.Lock()
 					conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 					err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"KeepAlive"}`))

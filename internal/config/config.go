@@ -44,6 +44,7 @@ type AudioConfig struct {
 	SilenceThresholdMs uint64  `toml:"silence_threshold_ms"`
 	DuckVolume         float32 `toml:"duck_volume"`
 	DuckEnabled        bool    `toml:"duck_enabled"`
+	IgnoreSystemAudio  bool    `toml:"ignore_system_audio"`
 	AutoPauseOnMedia   bool    `toml:"auto_pause_on_media"`
 	DeviceName         string  `toml:"device_name"`
 	ZeroLatency        bool    `toml:"zero_latency"`
@@ -93,6 +94,7 @@ func Default() Config {
 			SilenceThresholdMs: 3000,
 			DuckVolume:         0.05,
 			DuckEnabled:        false,
+			IgnoreSystemAudio:  true,
 			AutoPauseOnMedia:   true,
 			ZeroLatency:        true,
 			BatteryBudgetSaver: false,
@@ -172,6 +174,12 @@ func LoadOrCreate() (*Config, error) {
 	}
 	if !hasTOMLKey(data, "battery_budget_saver") {
 		cfg.Audio.BatteryBudgetSaver = false
+		migrated = true
+	}
+	if !hasTOMLKey(data, "ignore_system_audio") {
+		// Default new installs and old configs to rejecting speaker bleed so
+		// background media (YouTube, music) cannot trigger dictation.
+		cfg.Audio.IgnoreSystemAudio = true
 		migrated = true
 	}
 	if !hasTOMLKey(data, "adaptive_noise") {
@@ -274,6 +282,7 @@ func (c *Config) Save() error {
 # silence_threshold_ms: Auto-pause after this many milliseconds of silence
 # duck_volume: Volume level (0.0-1.0) for other apps during dictation
 # duck_enabled: Enable/disable audio ducking (true/false)
+# ignore_system_audio: Reject speaker bleed (YouTube/music) so it cannot trigger dictation (true/false)
 # device_name: Microphone to use (empty = system default, or exact device name)
 # zero_latency: Ultra-fast mode - keeps Deepgram connection open while still using the configured silence threshold
 # push_to_talk: Hold Ctrl+Space to record; release to finish. Microphone is closed while idle.
