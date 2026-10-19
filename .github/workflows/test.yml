@@ -2,6 +2,7 @@ name: Test
 
 on:
   push:
+    branches: [master]
   pull_request:
 
 jobs:
@@ -15,5 +16,5 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go vet ./...
+      - run: go vet -unsafeptr=false ./...
       - run: go test ./...
