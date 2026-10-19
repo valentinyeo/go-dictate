@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.130] - 2026-10-19 "Silence Not Billed"
+
+### Changed
+- Send Deepgram speech plus about 1.5 seconds of trailing silence instead of streaming the entire pause. Long pauses cost less without changing when an utterance ends, and a short audio lead-in preserves words when speech resumes.
+- Tag requests `go-dictate` for usage tracking, log daily streamed and voiced time, and keep idle connections alive without sending billed audio.
+- Include the date in each log line.
+
 ## [1.8.129] - 2026-10-03 "Duck & Echo Gate"
 
 ### Added

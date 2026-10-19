@@ -808,6 +808,20 @@ func vadAndSTTManager(
 	const audioChunkMs = 80 // capture.go uses 1280 frames at 16kHz
 	const preRollSize = 6   // ~480ms at ~80ms/chunk
 	preRoll := make([][]int16, 0, preRollSize)
+	streamGate := audio.NewStreamGate((1500+audioChunkMs-1)/audioChunkMs, 3)
+	var dailyUsage audio.DailyUsage
+	usageActive := false
+	logUsage := func() {
+		if !usageActive {
+			return
+		}
+		usageActive = false
+		streamed := time.Duration(streamGate.Sent()*audioChunkMs) * time.Millisecond
+		voiced := time.Duration(streamGate.Voiced()*audioChunkMs) * time.Millisecond
+		day, streamedToday, voicedToday := dailyUsage.Add(time.Now(), streamed, voiced)
+		logger.Info("[Usage] day=%s utterance_streamed=%.1fs utterance_voiced=%.1fs streamed_today=%.1fs voiced_today=%.1fs",
+			day, streamed.Seconds(), voiced.Seconds(), streamedToday.Seconds(), voicedToday.Seconds())
+	}
 	// pushPreRoll appends the newest chunk to the fixed-size pre-roll ring buffer.
 	pushPreRoll := func(chunk []int16) {
 		if len(preRoll) >= preRollSize {
@@ -1147,6 +1161,8 @@ func vadAndSTTManager(
 
 			switch vadEvent {
 			case audio.SpeechStarted:
+				streamGate.Start(len(preRoll) + 1)
+				usageActive = true
 				logger.Info("[VAD] Speech started (RMS %.4f, threshold %.4f, noise %.4f)", vad.LastRMS(), vad.LastThreshold(), vad.NoiseFloor())
 				fmt.Println("[VAD] Speech started")
 
@@ -1319,6 +1335,7 @@ func vadAndSTTManager(
 						sttDoneCh = nil
 						textBridge = nil // don't close - bridge goroutine exits via sttCtx
 						connectionStarted = time.Time{}
+						logUsage()
 						endCurrentUtterance("ghost_speech_timeout")
 						vad.Reset()
 						preRoll = preRoll[:0]
@@ -1326,10 +1343,13 @@ func vadAndSTTManager(
 						continue
 					}
 
-					sendSTTAudio(audioChunk)
+					for _, chunk := range streamGate.Next(audioChunk, vad.LastChunkVoiced()) {
+						sendSTTAudio(chunk)
+					}
 				}
 
 			case audio.SilenceDetected:
+				logUsage()
 				fmt.Println("[VAD] Silence detected")
 
 				// Restore Chrome/Edge volume

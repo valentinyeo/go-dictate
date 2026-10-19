@@ -30,7 +30,7 @@ Start-Process 'C:\Users\valen\Documents\GitHub\go-dictate\go-dictate.exe'
 Stop-Process -Name 'go-dictate' -Force -ErrorAction SilentlyContinue
 ```
 
-There are no tests in this project. `-H windowsgui` hides the console window; omit it for debug builds with console output.
+On Windows, run `go test ./...` with the Go/CGO and C toolchain environment set by `build.bat`. CI runs `go vet ./...` and `go test ./...` on `windows-latest`. `-H windowsgui` hides the console window; omit it for debug builds with console output.
 
 ## Version Tracking Workflow
 
