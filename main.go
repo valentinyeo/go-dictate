@@ -242,7 +242,8 @@ func run() {
 
 	// Start VAD processor and STT engine manager (settingsChangedCh wired after tray creation)
 	settingsChangedCh = make(chan struct{}, 1)
-	go vadAndSTTManager(ctx, audioChunks, transcriptText, stateManager, cfg, settingsChangedCh, sim)
+	micReleasedCh := make(chan struct{}, 1)
+	go vadAndSTTManager(ctx, audioChunks, transcriptText, stateManager, cfg, settingsChangedCh, micReleasedCh, sim)
 
 	// Create and run system tray
 	fmt.Println("[Main] Creating system tray...")
@@ -551,6 +552,10 @@ func run() {
 					audioCapture.Stop()
 					audioPaused.Store(true)
 					logger.Info("[Capture] Microphone released")
+					select {
+					case micReleasedCh <- struct{}{}:
+					default:
+					}
 				} else if allowed && audioPaused.Load() {
 					// The previous recording has finished before another hold is accepted.
 					drainAudio(audioChunks)
@@ -732,6 +737,7 @@ func vadAndSTTManager(
 	stateManager *state.Manager,
 	cfg *config.Config,
 	settingsChangedCh <-chan struct{},
+	micReleasedCh <-chan struct{},
 	sim *keyboard.Simulator,
 ) {
 	defer func() {
@@ -871,9 +877,30 @@ func vadAndSTTManager(
 	var sttDoneCh chan struct{} // closed when STT goroutine exits (connection dead)
 	var textBridge chan string  // intermediary channel to track text timing
 	var connectionStarted time.Time
+	var lastSpeechActivity time.Time
+	var lastAudioSent time.Time
+	var vadSpeaking bool
 	var currentUtteranceHasText atomic.Bool
 	var emptyUtteranceCount atomic.Int64
 	const maxPersistentConnectionAge = 90 * time.Second
+
+	closePersistentConnection := func(now time.Time, micReleased bool) {
+		if !effectiveZeroLatency() || sttAudioTx == nil {
+			return
+		}
+		reason := persistentCloseReason(now, connectionStarted, lastSpeechActivity, lastAudioSent, vadSpeaking, micReleased, maxPersistentConnectionAge)
+		if reason == "" {
+			return
+		}
+		age := now.Sub(connectionStarted).Round(time.Millisecond)
+		close(sttAudioTx)
+		sttAudioTx = nil
+		sttDoneCh = nil
+		sttCancel = nil
+		textBridge = nil
+		connectionStarted = time.Time{}
+		logger.Info("[STT] Closed persistent connection reason=%s age=%s", reason, age)
+	}
 
 	diagTracker := diagnostics.NewTracker()
 	var activeUtterance *diagnostics.Utterance
@@ -918,6 +945,7 @@ func vadAndSTTManager(
 		}
 		select {
 		case sttAudioTx <- chunk:
+			lastAudioSent = time.Now()
 			diagTracker.RecordAudio(activeUtterance, chunk)
 		default:
 			diagTracker.RecordDropped(activeUtterance)
@@ -950,6 +978,8 @@ func vadAndSTTManager(
 	// so the actual syscalls are throttled despite the fast ticker.
 	meetingTicker := time.NewTicker(1 * time.Second)
 	defer meetingTicker.Stop()
+	persistentTicker := time.NewTicker(time.Second)
+	defer persistentTicker.Stop()
 
 	vadChangeCh := stateManager.Changed()
 
@@ -970,6 +1000,7 @@ func vadAndSTTManager(
 			endCurrentUtterance("push_to_talk")
 			_ = ducker.Restore()
 			vad.Reset()
+			vadSpeaking = false
 			preRoll = preRoll[:0]
 			runPushToTalk(ctx, audioRx, textTx, stateManager, vadChangeCh, releaseCapture)
 			continue
@@ -977,6 +1008,10 @@ func vadAndSTTManager(
 		// When paused, disable ALL processing (zero CPU)
 		var activeAudioRx <-chan []int16
 		var activeMeetingTick <-chan time.Time
+		var activePersistentTick <-chan time.Time
+		if effectiveZeroLatency() && sttAudioTx != nil {
+			activePersistentTick = persistentTicker.C
+		}
 		if s := stateManager.Get(); !stateManager.PushToTalkEnabled() && s != state.Paused && s != state.MicConflict {
 			activeAudioRx = audioRx
 			activeMeetingTick = meetingTicker.C
@@ -989,6 +1024,19 @@ func vadAndSTTManager(
 				sttCancel()
 			}
 			return
+
+		case <-micReleasedCh:
+			if effectiveZeroLatency() {
+				logUsage()
+				vad.Reset()
+				vadSpeaking = false
+				preRoll = preRoll[:0]
+				closePersistentConnection(time.Now(), true)
+				scheduleUtteranceEnd(activeUtterance, "mic_released", 5*time.Second)
+			}
+
+		case <-activePersistentTick:
+			closePersistentConnection(time.Now(), false)
 
 		case <-vadChangeCh:
 			// Clear stale pre-roll on any state change (e.g., unpause after hours)
@@ -1021,6 +1069,7 @@ func vadAndSTTManager(
 					silenceMs, noTextTimeout)
 			}
 			vad = newConfiguredVAD(silenceMs)
+			vadSpeaking = false
 			rumbleFilter = newRumbleFilter()
 			if rumbleFilter != nil {
 				settings := cfg.VAD.Effective()
@@ -1065,6 +1114,7 @@ func vadAndSTTManager(
 					connectionStarted = time.Time{}
 					endCurrentUtterance("media_auto_pause")
 					vad.Reset()
+					vadSpeaking = false
 					preRoll = preRoll[:0]
 					stateManager.Set(state.MediaPaused)
 				}
@@ -1158,6 +1208,13 @@ func vadAndSTTManager(
 			}
 
 			vadEvent := vad.Process(audioChunk)
+			if vadEvent == audio.SpeechStarted || vadEvent == audio.Speaking {
+				vadSpeaking = true
+				lastSpeechActivity = time.Now()
+			} else if vadEvent == audio.SilenceDetected {
+				vadSpeaking = false
+				lastSpeechActivity = time.Now()
+			}
 
 			switch vadEvent {
 			case audio.SpeechStarted:
@@ -1187,41 +1244,23 @@ func vadAndSTTManager(
 				lastTextNano.Store(time.Now().UnixNano())
 				currentUtteranceHasText.Store(false)
 
-				// In zero-latency mode, try to reuse the existing persistent connection,
-				// but recycle it periodically. Recent failures showed old Deepgram
-				// sessions staying open while returning only empty transcripts.
 				reuseConnection := false
 				if effectiveZeroLatency() && sttAudioTx != nil && sttDoneCh != nil {
-					if !connectionStarted.IsZero() && time.Since(connectionStarted) > maxPersistentConnectionAge {
-						logger.Info("[VAD] Persistent connection age %s exceeded %s; reconnecting", time.Since(connectionStarted).Round(time.Millisecond), maxPersistentConnectionAge)
-						if sttCancel != nil {
-							sttCancel()
-							sttCancel = nil
-						}
-						close(sttAudioTx)
+					select {
+					case <-sttDoneCh:
+						logger.Info("[VAD] Persistent connection dead, reconnecting")
 						sttAudioTx = nil
 						sttDoneCh = nil
 						textBridge = nil
 						connectionStarted = time.Time{}
-					} else {
-						select {
-						case <-sttDoneCh:
-							// Connection died, need a fresh one
-							logger.Info("[VAD] Persistent connection dead, reconnecting")
-							sttAudioTx = nil
-							sttDoneCh = nil
-							textBridge = nil
-							connectionStarted = time.Time{}
-							if sttCancel != nil {
-								sttCancel()
-								sttCancel = nil
-							}
-						default:
-							// Connection still alive, reuse it
-							reuseConnection = true
-							logger.Info("[VAD] Reusing persistent Deepgram connection (zero-latency)")
-							fmt.Println("[VAD] Reusing persistent connection")
+						if sttCancel != nil {
+							sttCancel()
+							sttCancel = nil
 						}
+					default:
+						reuseConnection = true
+						logger.Info("[VAD] Reusing persistent Deepgram connection (zero-latency)")
+						fmt.Println("[VAD] Reusing persistent connection")
 					}
 				}
 
@@ -1245,6 +1284,7 @@ func vadAndSTTManager(
 					sttCtx, sttCancel = streamCtx, streamCancel
 					sttDoneCh = make(chan struct{})
 					connectionStarted = time.Now()
+					lastAudioSent = time.Time{}
 
 					// Text bridge: forwards text to keyboard simulator while tracking
 					// the last time real text was received (for ghost speech detection).
@@ -1338,6 +1378,7 @@ func vadAndSTTManager(
 						logUsage()
 						endCurrentUtterance("ghost_speech_timeout")
 						vad.Reset()
+						vadSpeaking = false
 						preRoll = preRoll[:0]
 						stateManager.Set(state.AutoPaused)
 						continue
@@ -1363,7 +1404,10 @@ func vadAndSTTManager(
 					// Zero-latency mode: keep connection alive, let Deepgram's
 					// endpointing handle finalization naturally. Don't send Finalize
 					// as it cuts off words prematurely (e.g., "outstanding" → "out").
-					logger.Info("[VAD] Silence detected (RMS %.4f) - keeping persistent connection (zero-latency)", vad.LastRMS())
+					closePersistentConnection(time.Now(), false)
+					if sttAudioTx != nil {
+						logger.Info("[VAD] Silence detected (RMS %.4f) - keeping persistent connection (zero-latency)", vad.LastRMS())
+					}
 					if !currentUtteranceHasText.Load() {
 						emptyCount := emptyUtteranceCount.Add(1)
 						if emptyCount >= 3 {
@@ -1404,6 +1448,7 @@ func vadAndSTTManager(
 				}
 
 				vad.Reset()
+				vadSpeaking = false
 				if !effectiveZeroLatency() {
 					// Normal mode: reset keyboard context so next session starts fresh.
 					// In Ultra Fast mode, Deepgram sends late results after VAD silence

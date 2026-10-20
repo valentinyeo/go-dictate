@@ -5,6 +5,12 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.131] - 2026-10-20 "Idle Connections Closed"
+
+### Fixed
+- Close Ultra Fast persistent Deepgram connections when the microphone is released or after 30 seconds without speech or sent audio. Enforce the connection age cap during idle time, deferring closure until silence if speech is in progress; preserve final words and reconnect with pre-roll on the next speech start.
+- The [Usage] voiced meter now counts the real speech span instead of only loud chunks.
+
 ## [1.8.130] - 2026-10-19 "Silence Not Billed"
 
 ### Changed
