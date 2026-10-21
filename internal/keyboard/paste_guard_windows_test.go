@@ -66,7 +66,7 @@ func newIGSH524Edit(t *testing.T) *igsh524Edit {
 				if event.flags&0x10 != 0 {
 					down := message == 0x0100 || message == 0x0104
 					switch event.vk {
-					case vkControl:
+					case vkControl, 0xa2, 0xa3:
 						control = down
 					case vkV:
 						if down && control {
