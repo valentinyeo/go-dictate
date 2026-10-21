@@ -5,6 +5,16 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.132] - 2026-10-21 "Verified Paste"
+
+### Fixed
+- Check clipboard sequence and exact dictated text after writing and again just before paste. If another clipboard tool changes it, skip paste and type the dictated text with Unicode input instead (IGSH-524).
+- Delay clipboard restoration for two seconds after the last insertion and restore only while both the text and clipboard sequence are still ours.
+
+### Added
+- Windows regression coverage with a hidden EDIT control and fifty clipboard-history races.
+- Tagged GitHub releases with the Windows executable and SHA-256 checksum.
+
 ## [1.8.131] - 2026-10-21 "Clipboard Privacy"
 
 ### Fixed
