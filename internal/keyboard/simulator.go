@@ -2,7 +2,6 @@ package keyboard
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/valen/go-dictate/internal/hotkey"
 	"github.com/valen/go-dictate/internal/logger"
 	"golang.org/x/sys/windows"
 )
@@ -66,6 +66,7 @@ type Simulator struct {
 	lastChar       rune
 	skipPeriodOnce bool // suppress the auto-period for the next emit (set by ResetContext)
 	typeMode       bool // config escape hatch: per-character key events instead of paste
+	inputSink      func([]input) (int, error)
 
 	// Clipboard save/restore state for paste injection. The user's clipboard
 	// is captured before the first paste of a burst and restored after a
@@ -131,6 +132,9 @@ func (s *Simulator) Run(ctx context.Context, textRx <-chan string) {
 				default:
 					break drain
 				}
+			}
+			if !hotkey.WaitForModifiersReleased(ctx) {
+				return
 			}
 			s.deliver(payload)
 		}
@@ -343,37 +347,45 @@ func pasteKeyEvents() []input {
 	}
 }
 
-// sendInputs injects every event via SendInput. SendInput returns the number of
-// events it actually inserted and stops at the first one blocked by another
-// thread injecting input — the remainder are silently lost unless we resume
-// from the offset. We loop until all events are injected, backing off briefly
-// only when fully blocked (ret == 0). The normal path sends everything in one
-// call, so there is no added latency when injection is not contended.
+func modifierReleaseEvents() []input {
+	keys := [...]uint16{0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0x5b, 0x5c}
+	inputs := make([]input, 0, len(keys))
+	for _, key := range keys {
+		inputs = append(inputs, input{inputType: inputKeyboard, ki: keyboardInput{wVk: key, dwFlags: keyeventfKeyUp}})
+	}
+	return inputs
+}
+
 func (s *Simulator) sendInputs(inputs []input) {
 	if len(inputs) == 0 {
 		return
 	}
-	const maxBlockedRetries = 10
-	blocked := 0
-	for off := 0; off < len(inputs); {
-		remaining := inputs[off:]
-		ret, _, err := sendInputProc.Call(
-			uintptr(len(remaining)),
-			uintptr(unsafe.Pointer(&remaining[0])),
-			uintptr(unsafe.Sizeof(remaining[0])),
-		)
-		n := int(ret)
-		if n <= 0 {
-			blocked++
-			if blocked >= maxBlockedRetries {
-				fmt.Printf("[Keyboard] SendInput blocked, lost %d of %d events: %v\n", len(remaining), len(inputs), err)
-				return
-			}
-			time.Sleep(2 * time.Millisecond)
-			continue
+	sink := s.inputSink
+	if sink == nil {
+		sink = func(events []input) (int, error) {
+			ret, _, err := sendInputProc.Call(
+				uintptr(len(events)),
+				uintptr(unsafe.Pointer(&events[0])),
+				uintptr(unsafe.Sizeof(events[0])),
+			)
+			return int(ret), err
 		}
-		off += n
-		blocked = 0
+	}
+	batch := append(modifierReleaseEvents(), inputs...)
+	n, err := sink(batch)
+	if n == len(batch) {
+		return
+	}
+	logger.Error("[Keyboard] SendInput incomplete (%d/%d events): %v", n, len(batch), err)
+	cleanup := modifierReleaseEvents()
+	for _, event := range inputs {
+		if event.ki.dwFlags&keyeventfKeyUp == 0 {
+			event.ki.dwFlags |= keyeventfKeyUp
+			cleanup = append(cleanup, event)
+		}
+	}
+	if n, err := sink(cleanup); n != len(cleanup) {
+		logger.Error("[Keyboard] SendInput key release incomplete (%d/%d events): %v", n, len(cleanup), err)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 const (
 	cfUnicodeText = 13
 	gmemMoveable  = 0x0002
+	hwndMessage   = ^uintptr(2)
 )
 
 var (
@@ -23,6 +24,8 @@ var (
 	getClipboardDataProc        = user32.NewProc("GetClipboardData")
 	setClipboardDataProc        = user32.NewProc("SetClipboardData")
 	registerClipboardFormatProc = user32.NewProc("RegisterClipboardFormatW")
+	createWindowExProc          = user32.NewProc("CreateWindowExW")
+	destroyWindowProc           = user32.NewProc("DestroyWindow")
 	globalAllocProc             = kernel32.NewProc("GlobalAlloc")
 	globalFreeProc              = kernel32.NewProc("GlobalFree")
 	globalLockProc              = kernel32.NewProc("GlobalLock")
@@ -31,15 +34,31 @@ var (
 
 // openClipboardRetry opens the clipboard, retrying briefly — another process
 // (clipboard managers, the target app reading our paste) may hold it.
-func openClipboardRetry() error {
+func openClipboardRetry(owner uintptr) error {
 	for i := 0; i < 10; i++ {
-		ret, _, _ := openClipboardProc.Call(0)
+		ret, _, _ := openClipboardProc.Call(owner)
 		if ret != 0 {
 			return nil
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
 	return fmt.Errorf("clipboard busy")
+}
+
+func openClipboardForWrite() (func(), error) {
+	class, _ := windows.UTF16PtrFromString("STATIC")
+	owner, _, err := createWindowExProc.Call(0, uintptr(unsafe.Pointer(class)), 0, 0, 0, 0, 0, 0, hwndMessage, 0, 0, 0)
+	if owner == 0 {
+		return nil, fmt.Errorf("create clipboard owner: %w", err)
+	}
+	if err := openClipboardRetry(owner); err != nil {
+		destroyWindowProc.Call(owner)
+		return nil, err
+	}
+	return func() {
+		closeClipboardProc.Call()
+		destroyWindowProc.Call(owner)
+	}, nil
 }
 
 type windowsClipboard struct{}
@@ -52,7 +71,7 @@ func (windowsClipboard) sequence() uint32 {
 func (c windowsClipboard) read() (clipboardSnapshot, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	if err := openClipboardRetry(); err != nil {
+	if err := openClipboardRetry(0); err != nil {
 		return clipboardSnapshot{}, err
 	}
 	text, err := c.readOpen()
@@ -85,11 +104,12 @@ func (c windowsClipboard) readOpen() (string, error) {
 func (c windowsClipboard) write(text string) (clipboardSnapshot, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	if err := openClipboardRetry(); err != nil {
+	closeWrite, err := openClipboardForWrite()
+	if err != nil {
 		return clipboardSnapshot{}, err
 	}
-	err := writeClipboardTextOpen(text)
-	closeClipboardProc.Call()
+	err = writeClipboardTextOpen(text)
+	closeWrite()
 	if err != nil {
 		return clipboardSnapshot{}, err
 	}
@@ -107,10 +127,11 @@ func (c windowsClipboard) write(text string) (clipboardSnapshot, error) {
 func (c windowsClipboard) restore(expected clipboardSnapshot, text string) (bool, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
-	if err := openClipboardRetry(); err != nil {
+	closeWrite, err := openClipboardForWrite()
+	if err != nil {
 		return false, err
 	}
-	defer closeClipboardProc.Call()
+	defer closeWrite()
 	current, err := c.readOpen()
 	if err != nil || !matchesClipboard(clipboardSnapshot{text: current, sequence: c.sequence()}, expected) {
 		return false, nil
