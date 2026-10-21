@@ -55,22 +55,31 @@ func (c windowsClipboard) read() (clipboardSnapshot, error) {
 	if err := openClipboardRetry(); err != nil {
 		return clipboardSnapshot{}, err
 	}
-	defer closeClipboardProc.Call()
-	return c.readOpen()
+	text, err := c.readOpen()
+	sequence := c.sequence()
+	closeClipboardProc.Call()
+	if err != nil {
+		return clipboardSnapshot{}, err
+	}
+	closedSequence := c.sequence()
+	if closedSequence != sequence {
+		return clipboardSnapshot{}, fmt.Errorf("clipboard changed during read")
+	}
+	return clipboardSnapshot{text: text, sequence: closedSequence}, nil
 }
 
-func (c windowsClipboard) readOpen() (clipboardSnapshot, error) {
+func (c windowsClipboard) readOpen() (string, error) {
 	h, _, _ := getClipboardDataProc.Call(cfUnicodeText)
 	if h == 0 {
-		return clipboardSnapshot{}, fmt.Errorf("clipboard text unavailable")
+		return "", fmt.Errorf("clipboard text unavailable")
 	}
 	ptr, _, _ := globalLockProc.Call(h)
 	if ptr == 0 {
-		return clipboardSnapshot{}, fmt.Errorf("clipboard text lock failed")
+		return "", fmt.Errorf("clipboard text lock failed")
 	}
 	text := windows.UTF16PtrToString((*uint16)(unsafe.Pointer(ptr)))
 	globalUnlockProc.Call(h)
-	return clipboardSnapshot{text: text, sequence: c.sequence()}, nil
+	return text, nil
 }
 
 func (c windowsClipboard) write(text string) (clipboardSnapshot, error) {
@@ -79,11 +88,20 @@ func (c windowsClipboard) write(text string) (clipboardSnapshot, error) {
 	if err := openClipboardRetry(); err != nil {
 		return clipboardSnapshot{}, err
 	}
-	defer closeClipboardProc.Call()
-	if err := writeClipboardTextOpen(text); err != nil {
+	err := writeClipboardTextOpen(text)
+	closeClipboardProc.Call()
+	if err != nil {
 		return clipboardSnapshot{}, err
 	}
-	return c.readOpen()
+	sequence := c.sequence()
+	written, err := c.read()
+	if err != nil {
+		return clipboardSnapshot{}, err
+	}
+	if written.sequence != sequence {
+		return clipboardSnapshot{}, fmt.Errorf("clipboard changed after write")
+	}
+	return written, nil
 }
 
 func (c windowsClipboard) restore(expected clipboardSnapshot, text string) (bool, error) {
@@ -94,7 +112,7 @@ func (c windowsClipboard) restore(expected clipboardSnapshot, text string) (bool
 	}
 	defer closeClipboardProc.Call()
 	current, err := c.readOpen()
-	if err != nil || !matchesClipboard(current, expected) {
+	if err != nil || !matchesClipboard(clipboardSnapshot{text: current, sequence: c.sequence()}, expected) {
 		return false, nil
 	}
 	if err := writeClipboardTextOpen(text); err != nil {
