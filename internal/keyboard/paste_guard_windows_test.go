@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -156,10 +157,13 @@ func (e *igsh524Edit) waitText(t *testing.T, want string) {
 type igsh524HistoryClipboard struct {
 	windowsClipboard
 	changed chan chan error
+	mu      *sync.Mutex
 }
 
 func (c igsh524HistoryClipboard) write(text string) (clipboardSnapshot, error) {
+	c.mu.Lock()
 	written, err := c.windowsClipboard.write(text)
+	c.mu.Unlock()
 	if err != nil {
 		return written, err
 	}
@@ -205,9 +209,9 @@ func TestIGSH524HiddenEditClipboardHistory50Pastes(t *testing.T) {
 	if e.pastes.Load() != 1 || e.packets.Load() != 0 {
 		t.Fatal("positive control did not use real Ctrl+V SendInput")
 	}
-	t.Log("real Ctrl+V positive control passed")
 	user32.NewProc("SendMessageW").Call(e.hwnd, 0x000c, 0, 0)
 	changed := make(chan chan error)
+	var historyMu sync.Mutex
 	stop, done, started := make(chan struct{}), make(chan struct{}), make(chan struct{})
 	var replacements atomic.Int32
 	go func() {
@@ -217,6 +221,8 @@ func TestIGSH524HiddenEditClipboardHistory50Pastes(t *testing.T) {
 		lastSequence := clipboard.sequence()
 		close(started)
 		replace := func() error {
+			historyMu.Lock()
+			defer historyMu.Unlock()
 			sequence := clipboard.sequence()
 			if sequence == lastSequence {
 				return nil
@@ -258,14 +264,13 @@ func TestIGSH524HiddenEditClipboardHistory50Pastes(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("clipboard history writer did not start")
 	}
-	s.clipboard = igsh524HistoryClipboard{changed: changed}
+	s.clipboard = igsh524HistoryClipboard{changed: changed, mu: &historyMu}
 	want := ""
 	for i := 0; i < 50; i++ {
 		text := fmt.Sprintf("dictated %02d café 😀; ", i)
 		want += text
 		s.insertText(text)
 		e.waitText(t, want)
-		t.Logf("ordered insertion %d complete", i+1)
 	}
 	if replacements.Load() != 50 || e.pastes.Load() != 1 || e.packets.Load() == 0 {
 		t.Fatalf("replacements=%d Ctrl+V=%d Unicode=%d", replacements.Load(), e.pastes.Load(), e.packets.Load())
