@@ -205,6 +205,7 @@ func TestIGSH524HiddenEditClipboardHistory50Pastes(t *testing.T) {
 	if e.pastes.Load() != 1 || e.packets.Load() != 0 {
 		t.Fatal("positive control did not use real Ctrl+V SendInput")
 	}
+	t.Log("real Ctrl+V positive control passed")
 	user32.NewProc("SendMessageW").Call(e.hwnd, 0x000c, 0, 0)
 	changed := make(chan chan error)
 	stop, done, started := make(chan struct{}), make(chan struct{}), make(chan struct{})
@@ -264,6 +265,7 @@ func TestIGSH524HiddenEditClipboardHistory50Pastes(t *testing.T) {
 		want += text
 		s.insertText(text)
 		e.waitText(t, want)
+		t.Logf("ordered insertion %d complete", i+1)
 	}
 	if replacements.Load() != 50 || e.pastes.Load() != 1 || e.packets.Load() == 0 {
 		t.Fatalf("replacements=%d Ctrl+V=%d Unicode=%d", replacements.Load(), e.pastes.Load(), e.packets.Load())
