@@ -8,12 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.8.133] - 2026-10-22 "Modifier-Safe Input"
 
 ### Fixed
-- Wait for shortcut modifiers at text delivery and release sided Ctrl, Alt, Shift, and Windows keys in the same input batch before typing, corrections, or paste. Clipboard-failure typing cannot inherit a held shortcut (IGSH-524).
-- Release keys after incomplete input without retrying an unverified paste or leaving Ctrl held.
+- Preserve held shortcut and push-to-talk modifiers instead of injecting synthetic modifier releases. Hold payloads through bounded release waits; if a modifier remains down after the initial wait, use typing only after release, never Ctrl+V (IGSH-524).
+- Resume partially inserted input at the remaining offset with bounded blocked retries; release only unmatched injected key-downs after retry exhaustion.
 - Give clipboard writes and restores a real owner window so text remains available for verification after closing the clipboard. Keep clipboard history exclusions and exact-text checks.
 
 ### Added
-- Fake-input regression coverage for failed clipboard writes, held modifiers, corrections, and partial input; Windows coverage for clipboard ownership and post-close text availability.
+- Delivery diagnostics record paste/type selection, clipboard readback match, and logical modifier names without payload text.
+- Fake-input and modifier-reader regression coverage for failed clipboard writes, held modifiers, corrections, partial-input retries, and exhaustion cleanup; Windows coverage for clipboard ownership and post-close text availability.
 
 ## [1.8.132] - 2026-10-21 "Verified Paste"
 
