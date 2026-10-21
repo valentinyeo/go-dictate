@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf16"
 	"unicode/utf8"
 	"unsafe"
 
@@ -74,7 +75,9 @@ type Simulator struct {
 	clipSaved       bool
 	savedClip       string
 	savedClipIsText bool
-	lastPasted      string
+	lastPasted      clipboardSnapshot
+	clipboard       pasteClipboard
+	pasteWindow     func() (uintptr, string)
 	restoreTimer    *time.Timer
 }
 
@@ -219,83 +222,82 @@ func (s *Simulator) insertText(text string) {
 		s.sendInputs(typingEvents(text))
 		return
 	}
-	if err := s.pasteText(text); err != nil {
-		logger.Error("[Keyboard] Paste failed (%v) - falling back to typing", err)
-		s.sendInputs(typingEvents(text))
-	}
+	s.pasteText(text)
 }
 
-const clipboardRestoreDelay = 1500 * time.Millisecond
+const clipboardRestoreDelay = 2 * time.Second
 
-// pasteText puts text on the clipboard and sends Ctrl+V. The user's previous
-// clipboard text is captured before the first paste of a burst and restored
-// after clipboardRestoreDelay with no further pastes (debounced), and only if
-// the clipboard still holds our pasted text — never clobbering something the
-// user copied in the meantime. Non-text clipboard content (images, files)
-// cannot be saved/restored and is lost; that limitation is logged.
-func (s *Simulator) pasteText(text string) error {
+func (s *Simulator) pasteText(text string) {
 	s.clipMu.Lock()
 	defer s.clipMu.Unlock()
-
+	if s.clipboard == nil {
+		s.clipboard = windowsClipboard{}
+	}
 	if !s.clipSaved {
-		if prev, ok := readClipboardText(); ok {
-			s.savedClip = prev
-			s.savedClipIsText = true
-		} else {
-			s.savedClipIsText = false
-			logger.Debug("[Keyboard] Previous clipboard not plain text - will not restore")
+		prev, err := s.clipboard.read()
+		s.savedClipIsText = err == nil
+		s.savedClip = prev.text
+		if err != nil {
+			logger.Debug("[Keyboard] Previous clipboard unavailable or not plain text - will not restore")
 		}
 		s.clipSaved = true
 	}
-
-	if err := writeClipboardText(text); err != nil {
-		// Best effort: put the user's text back before falling back to typing.
-		if s.savedClipIsText {
-			_ = writeClipboardText(s.savedClip)
+	window := s.pasteWindow
+	if window == nil {
+		window = foregroundWindowClass
+	}
+	hwnd, class := window()
+	written, _ := guardedPaste(s.clipboard, text, func() {
+		time.Sleep(15 * time.Millisecond)
+	}, func() {
+		if class == "ConsoleWindowClass" {
+			postMessageProc.Call(hwnd, wmSysCommand, scConsolePaste, 0)
+		} else {
+			s.sendInputs(pasteKeyEvents())
 		}
-		s.clipSaved = false
-		return err
+	}, func(err error) {
+		logger.Error("[Keyboard] Paste skipped (%v) - falling back to Unicode typing", err)
+		s.sendInputs(unicodeTypingEvents(text))
+	})
+	if written.sequence != 0 {
+		s.lastPasted = written
 	}
-	s.lastPasted = text
-
-	// Small settle so slow clipboard listeners see the new content before
-	// the paste keystroke arrives.
-	time.Sleep(15 * time.Millisecond)
-
-	// Classic conhost (class "ConsoleWindowClass") passes Ctrl+V THROUGH to
-	// raw-mode apps (Claude Code, ssh) instead of pasting — Claude Code
-	// receives a bare Ctrl+V keypress and nothing appears. Conhost's
-	// system-menu "Edit > Paste" command makes conhost itself inject the
-	// clipboard into the console input, app- and input-mode-agnostic.
-	// Windows Terminal (CASCADIA_HOSTING_WINDOW_CLASS) and GUI apps keep the
-	// regular Ctrl+V keystroke.
-	if hwnd, class := foregroundWindowClass(); class == "ConsoleWindowClass" {
-		logger.Debug("[Keyboard] Paste via conhost SC_PASTE")
-		postMessageProc.Call(hwnd, wmSysCommand, scConsolePaste, 0)
-	} else {
-		s.sendInputs(pasteKeyEvents())
-	}
-
 	if s.restoreTimer != nil {
 		s.restoreTimer.Stop()
 	}
 	s.restoreTimer = time.AfterFunc(clipboardRestoreDelay, s.restoreClipboard)
-	return nil
 }
 
-// restoreClipboard runs on the debounce timer after a paste burst ends.
 func (s *Simulator) restoreClipboard() {
 	s.clipMu.Lock()
 	defer s.clipMu.Unlock()
 	if !s.clipSaved {
 		return
 	}
-	if cur, ok := readClipboardText(); ok && cur == s.lastPasted && s.savedClipIsText {
-		if err := writeClipboardText(s.savedClip); err != nil {
+	if s.savedClipIsText {
+		restored, err := s.clipboard.restore(s.lastPasted, s.savedClip)
+		if err != nil {
 			logger.Error("[Keyboard] Failed to restore clipboard: %v", err)
+		} else if !restored {
+			logger.Debug("[Keyboard] Restore skipped - clipboard no longer ours")
 		}
+	} else {
+		logger.Debug("[Keyboard] Restore skipped - no saved clipboard text")
 	}
 	s.clipSaved = false
+	s.lastPasted = clipboardSnapshot{}
+}
+
+func unicodeTypingEvents(text string) []input {
+	units := utf16.Encode([]rune(text))
+	inputs := make([]input, 0, len(units)*2)
+	for _, unit := range units {
+		inputs = append(inputs,
+			input{inputType: inputKeyboard, ki: keyboardInput{wScan: unit, dwFlags: keyeventfUnicode}},
+			input{inputType: inputKeyboard, ki: keyboardInput{wScan: unit, dwFlags: keyeventfUnicode | keyeventfKeyUp}},
+		)
+	}
+	return inputs
 }
 
 // typingEvents converts text to per-character SendInput key events
