@@ -15,17 +15,18 @@ const (
 )
 
 var (
-	kernel32                   = windows.NewLazySystemDLL("kernel32.dll")
-	openClipboardProc          = user32.NewProc("OpenClipboard")
-	closeClipboardProc         = user32.NewProc("CloseClipboard")
-	emptyClipboardProc         = user32.NewProc("EmptyClipboard")
-	getClipboardDataProc       = user32.NewProc("GetClipboardData")
-	setClipboardDataProc       = user32.NewProc("SetClipboardData")
-	isClipboardFormatAvailProc = user32.NewProc("IsClipboardFormatAvailable")
-	globalAllocProc            = kernel32.NewProc("GlobalAlloc")
-	globalFreeProc             = kernel32.NewProc("GlobalFree")
-	globalLockProc             = kernel32.NewProc("GlobalLock")
-	globalUnlockProc           = kernel32.NewProc("GlobalUnlock")
+	kernel32                    = windows.NewLazySystemDLL("kernel32.dll")
+	openClipboardProc           = user32.NewProc("OpenClipboard")
+	closeClipboardProc          = user32.NewProc("CloseClipboard")
+	emptyClipboardProc          = user32.NewProc("EmptyClipboard")
+	getClipboardDataProc        = user32.NewProc("GetClipboardData")
+	setClipboardDataProc        = user32.NewProc("SetClipboardData")
+	registerClipboardFormatProc = user32.NewProc("RegisterClipboardFormatW")
+	isClipboardFormatAvailProc  = user32.NewProc("IsClipboardFormatAvailable")
+	globalAllocProc             = kernel32.NewProc("GlobalAlloc")
+	globalFreeProc              = kernel32.NewProc("GlobalFree")
+	globalLockProc              = kernel32.NewProc("GlobalLock")
+	globalUnlockProc            = kernel32.NewProc("GlobalUnlock")
 )
 
 // openClipboardRetry opens the clipboard, retrying briefly — another process
@@ -69,7 +70,8 @@ func readClipboardText() (text string, ok bool) {
 	return text, true
 }
 
-// writeClipboardText replaces the clipboard content with the given text.
+// writeClipboardText replaces the clipboard text, excluding both injection and
+// restore writes from clipboard monitors, Windows history, and cloud sync.
 func writeClipboardText(text string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -84,9 +86,13 @@ func writeClipboardText(text string) error {
 	if h == 0 {
 		return fmt.Errorf("GlobalAlloc failed")
 	}
+	defer func() {
+		if h != 0 {
+			globalFreeProc.Call(h)
+		}
+	}()
 	ptr, _, _ := globalLockProc.Call(h)
 	if ptr == 0 {
-		globalFreeProc.Call(h)
 		return fmt.Errorf("GlobalLock failed")
 	}
 	dst := unsafe.Slice((*uint16)(unsafe.Pointer(ptr)), len(u16))
@@ -94,16 +100,41 @@ func writeClipboardText(text string) error {
 	globalUnlockProc.Call(h)
 
 	if err := openClipboardRetry(); err != nil {
-		globalFreeProc.Call(h)
 		return err
 	}
 	defer closeClipboardProc.Call()
 
-	emptyClipboardProc.Call()
+	if ret, _, _ := emptyClipboardProc.Call(); ret == 0 {
+		return fmt.Errorf("EmptyClipboard failed")
+	}
+	// Publish privacy metadata before text so a failed metadata write never
+	// exposes untagged dictation to clipboard listeners on CloseClipboard.
+	for _, format := range clipboardPrivacyFormats() {
+		name, _ := windows.UTF16PtrFromString(format.name)
+		id, _, _ := registerClipboardFormatProc.Call(uintptr(unsafe.Pointer(name)))
+		if id == 0 {
+			return fmt.Errorf("RegisterClipboardFormat failed: %s", format.name)
+		}
+		mem, _, _ := globalAllocProc.Call(gmemMoveable, unsafe.Sizeof(format.value))
+		if mem == 0 {
+			return fmt.Errorf("GlobalAlloc failed: %s", format.name)
+		}
+		raw, _, _ := globalLockProc.Call(mem)
+		if raw == 0 {
+			globalFreeProc.Call(mem)
+			return fmt.Errorf("GlobalLock failed: %s", format.name)
+		}
+		*(*uint32)(unsafe.Pointer(raw)) = format.value
+		globalUnlockProc.Call(mem)
+		if ret, _, _ := setClipboardDataProc.Call(id, mem); ret == 0 {
+			globalFreeProc.Call(mem)
+			return fmt.Errorf("SetClipboardData failed: %s", format.name)
+		}
+	}
 	if ret, _, _ := setClipboardDataProc.Call(cfUnicodeText, h); ret == 0 {
-		globalFreeProc.Call(h)
 		return fmt.Errorf("SetClipboardData failed")
 	}
 	// On success the system owns the memory — do not free.
+	h = 0
 	return nil
 }
