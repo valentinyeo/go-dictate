@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.123"
-	BuildDate      = "2026-07-22"
-	VersionName    = "Battery & Budget Saver"
-	VersionSummary = "Nova-3 only, battery and budget saver, remove Vosk"
+	Version        = "1.8.137"
+	BuildDate      = "2026-10-23"
+	VersionName    = "Clipboard Paste Protection"
+	VersionSummary = "Exclude dictation from clipboard history and verify paste ownership"
 )
