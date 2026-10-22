@@ -5,6 +5,12 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.137] - 2026-10-23
+
+Built on 1.8.123. Dictation pastes are marked so clipboard history tools (Lightboard, Win+V) skip them. GoDictate only pastes text it just put on the clipboard. Deepgram, VAD and audio code unchanged from 1.8.123.
+
+---
+
 ## [1.8.123] - 2026-07-22
 
 ### Added
