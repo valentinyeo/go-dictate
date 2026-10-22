@@ -18,6 +18,7 @@ import (
 )
 
 type Client struct {
+	session     *streamSession
 	apiKey      string
 	language    string
 	model       string
@@ -41,6 +42,10 @@ func NewClient(apiKey, language, model string, punctuate, smartFormat, fillerWor
 		useInterim:  useInterim,
 		holdback:    holdback,
 	}
+}
+
+func (c *Client) SetStreamLifetime(ctx context.Context, lifetime *StreamLifetime) {
+	c.session = lifetime.begin(ctx)
 }
 
 func (c *Client) StartStreaming(ctx context.Context, audioRx <-chan []int16, textTx chan<- string) error {
@@ -128,6 +133,13 @@ func (c *Client) startNovaStreaming(ctx context.Context, audioRx <-chan []int16,
 
 // streamNova accepts an endpoint so the stream lifecycle can be tested locally.
 func (c *Client) streamNova(ctx context.Context, audioRx <-chan []int16, textTx chan<- string, wsURL string, headers http.Header) error {
+	if c.session != nil {
+		ctx = c.session.ctx
+		defer c.session.close("stream_ended")
+	}
+	if ctx.Err() != nil {
+		return nil
+	}
 	endpoint, err := url.Parse(wsURL)
 	if err != nil {
 		return fmt.Errorf("invalid streaming URL: %w", err)
@@ -172,6 +184,12 @@ waitLoop:
 	for {
 		select {
 		case result := <-dialCh:
+			if ctx.Err() != nil {
+				if result.conn != nil {
+					result.conn.Close()
+				}
+				return nil
+			}
 			if result.err != nil {
 				logger.Error("[Deepgram] Connection failed: %v", result.err)
 				return fmt.Errorf("failed to connect: %w", result.err)
@@ -197,13 +215,20 @@ waitLoop:
 
 	conn := connected
 	defer conn.Close()
+	writeMessage := conn.WriteMessage
+	if c.session != nil {
+		if !c.session.attach(conn) {
+			return nil
+		}
+		writeMessage = c.session.writeMessage
+	}
 	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 
 	// Flush pre-buffered audio
 	logger.Info("[Deepgram] Connected successfully, flushing %d buffered chunks", len(preBuffer))
 	var lastAudioSendNano atomic.Int64
 	for _, b := range preBuffer {
-		if err := conn.WriteMessage(websocket.BinaryMessage, b); err != nil {
+		if err := writeMessage(websocket.BinaryMessage, b); err != nil {
 			return fmt.Errorf("failed to send buffered audio: %w", err)
 		}
 		lastAudioSendNano.Store(time.Now().UnixNano())
@@ -223,12 +248,8 @@ waitLoop:
 	go func() {
 		select {
 		case <-ctx.Done():
-			closeDone() // signal send goroutine to stop before touching conn
-			wsMu.Lock()
-			conn.WriteMessage(websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
-			conn.Close() // must be inside lock to prevent race with send goroutine
-			wsMu.Unlock()
+			closeDone()
+			conn.Close()
 		case <-done:
 		}
 	}()
@@ -248,7 +269,7 @@ waitLoop:
 					// CloseStream asks Deepgram to flush final words before closing.
 					wsMu.Lock()
 					conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-					err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"CloseStream"}`))
+					err := writeMessage(websocket.TextMessage, []byte(`{"type":"CloseStream"}`))
 					wsMu.Unlock()
 					if err != nil {
 						conn.Close()
@@ -275,7 +296,7 @@ waitLoop:
 
 				wsMu.Lock()
 				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-				err := conn.WriteMessage(websocket.BinaryMessage, bytes)
+				err := writeMessage(websocket.BinaryMessage, bytes)
 				wsMu.Unlock()
 				if err != nil {
 					logger.Debug("[Deepgram] Send error: %v", err)
@@ -288,7 +309,7 @@ waitLoop:
 				if time.Since(lastAudioSend) >= 3*time.Second {
 					wsMu.Lock()
 					conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-					err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"KeepAlive"}`))
+					err := writeMessage(websocket.TextMessage, []byte(`{"type":"KeepAlive"}`))
 					wsMu.Unlock()
 					if err != nil {
 						logger.Debug("[Deepgram] KeepAlive send error: %v", err)

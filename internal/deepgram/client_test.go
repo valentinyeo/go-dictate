@@ -166,3 +166,63 @@ func TestKeepAliveDuringSilentGap(t *testing.T) {
 		t.Fatal("silent stream did not receive three KeepAlives")
 	}
 }
+
+func TestPersistentMicReleaseClosesWebsocket(t *testing.T) {
+	connected := make(chan struct{})
+	readDone := make(chan int, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		close(connected)
+		keepAlives := 0
+		for {
+			kind, data, err := conn.ReadMessage()
+			if err != nil {
+				readDone <- keepAlives
+				return
+			}
+			if kind == websocket.TextMessage && string(data) == `{"type":"KeepAlive"}` {
+				keepAlives++
+			}
+		}
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	lifetime := NewStreamLifetime(true)
+	defer lifetime.Close("test_cleanup")
+	client := NewClient("test", "en", "nova-3", false, false, false, false, nil, true)
+	client.SetStreamLifetime(ctx, lifetime)
+	streamDone := make(chan error, 1)
+	go func() {
+		streamDone <- client.streamNova(ctx, make(chan []int16), make(chan string), "ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	}()
+	select {
+	case <-connected:
+	case <-ctx.Done():
+		t.Fatal("websocket did not connect")
+	}
+	lifetime.SetMicrophone(false)
+	select {
+	case err := <-streamDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("release did not stop the real streaming client immediately")
+	}
+	select {
+	case keepAlives := <-readDone:
+		if keepAlives != 0 {
+			t.Fatalf("released socket sent %d KeepAlives", keepAlives)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("server socket remained open after microphone release")
+	}
+}
