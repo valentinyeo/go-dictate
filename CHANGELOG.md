@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.8.134] - 2026-10-22 "Bounded Streams"
 
 ### Fixed
+- Count voiced usage across the speech span, including quiet gaps between voiced chunks, without counting pre-roll or trailing silence (IGSH-478).
 - Close the Ultra Fast Deepgram socket immediately when the microphone is released, after 30 seconds without voiced speech, and at a 90-second hard cap even during continuous speech (IGSH-478).
 - Keep watchdog resets, trailing audio, and KeepAlive messages from renewing the speech-idle deadline or reopening a closed socket. Resuming capture waits for speech before connecting.
 - Preserve manual pause across capture/STT resets and log each persistent connection close reason.
