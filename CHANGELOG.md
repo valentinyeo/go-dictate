@@ -5,6 +5,14 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.135] - 2026-10-22 "Clean Paste Restore"
+
+### Fixed
+- A late clipboard restore can no longer paste your old clipboard into dictation when the next chunk arrives. Restore your original clipboard only after the latest paste has had time to finish (IGSH-562).
+
+### Added
+- Regression coverage for a late restore during a new paste and restoring the original clipboard after a burst.
+
 ## [1.8.134] - 2026-10-22 "Bounded Streams"
 
 ### Fixed
