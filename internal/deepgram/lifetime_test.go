@@ -9,7 +9,12 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/valen/go-dictate/internal/audio"
 )
+
+type streamTimer interface {
+	Stop() bool
+}
 
 type lifetimeClock struct {
 	now    time.Time
@@ -84,7 +89,6 @@ func newLifetimeFixture(t *testing.T) (*StreamLifetime, *lifetimeClock, *streamS
 	clock := &lifetimeClock{now: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)}
 	lifetime := NewStreamLifetime(true)
 	lifetime.now = func() time.Time { return clock.now }
-	lifetime.afterFunc = clock.afterFunc
 	client := NewClient("test", "en", "nova-3", false, false, false, false, nil, true)
 	client.SetStreamLifetime(context.Background(), lifetime)
 	session := client.session
@@ -96,7 +100,7 @@ func newLifetimeFixture(t *testing.T) (*StreamLifetime, *lifetimeClock, *streamS
 	return lifetime, clock, session, socket
 }
 
-func TestPersistentMicReleaseThenWatchdogRestarts(t *testing.T) {
+func TestIGSH570MicReleaseThenWatchdogRestarts(t *testing.T) {
 	lifetime, clock, session, socket := newLifetimeFixture(t)
 	lifetime.Speech()
 	lifetime.SetMicrophone(false)
@@ -126,63 +130,97 @@ func TestPersistentMicReleaseThenWatchdogRestarts(t *testing.T) {
 	}
 }
 
-func TestPersistentSilenceClosesAt30Seconds(t *testing.T) {
-	_, clock, session, socket := newLifetimeFixture(t)
-	for second := 1; second <= 29; second++ {
-		clock.advance(time.Second)
-		if second%3 == 0 {
-			if err := session.writeMessage(websocket.TextMessage, []byte(`{"type":"KeepAlive"}`)); err != nil {
-				t.Fatal(err)
-			}
-		}
-		if second%9 == 0 {
+func TestIGSH570LongSilenceKeepsSocketWithoutAudio(t *testing.T) {
+	lifetime, clock, session, socket := newLifetimeFixture(t)
+	const chunkMs = 80
+	gate := audio.NewStreamGate((1500+chunkMs-1)/chunkMs, 3)
+	gate.Start(1)
+	for i := 0; i < (1500+chunkMs-1)/chunkMs; i++ {
+		for range gate.Next([]int16{0}, false) {
 			if err := session.writeMessage(websocket.BinaryMessage, []byte{0, 0}); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
-	if socket.closed || socket.keepAlives != 9 || socket.audio != 3 {
-		t.Fatal("connection did not stay alive through the short silent gap")
-	}
-	clock.advance(time.Second)
-	if !socket.closed || socket.closes != 1 || session.reason != "idle" || session.ctx.Err() == nil {
-		t.Fatal("30s silence did not close automatically despite KeepAlive and trailing audio")
-	}
-}
-
-func TestPersistentCapClosesDuringContinuousSpeech(t *testing.T) {
-	lifetime, clock, session, socket := newLifetimeFixture(t)
-	for second := 1; second <= 89; second++ {
-		clock.advance(time.Second)
-		lifetime.Speech()
-		if err := session.writeMessage(websocket.BinaryMessage, []byte{1, 0}); err != nil {
-			t.Fatalf("speech at %ds: %v", second, err)
+	audioBefore := socket.audio
+	for i := 1; i <= 10*60*1000/chunkMs; i++ {
+		clock.advance(chunkMs * time.Millisecond)
+		for range gate.Next([]int16{0}, false) {
+			if err := session.writeMessage(websocket.BinaryMessage, []byte{0, 0}); err != nil {
+				t.Fatalf("silence at chunk %d: %v", i, err)
+			}
+		}
+		if i%(3000/chunkMs) == 0 {
+			if err := session.writeMessage(websocket.TextMessage, []byte(`{"type":"KeepAlive"}`)); err != nil {
+				t.Fatalf("KeepAlive at chunk %d: %v", i, err)
+			}
+		}
+		if !lifetime.Active() || socket.closed || session.reason != "" {
+			t.Fatalf("silence closed the session at chunk %d: %s", i, session.reason)
 		}
 	}
-	if socket.closed {
-		t.Fatal("connection closed before the cap")
-	}
-	clock.advance(time.Second)
-	if !socket.closed || socket.closes != 1 || session.reason != "max_age" || session.ctx.Err() == nil {
-		t.Fatal("90s cap did not automatically close during active speech")
-	}
-	lifetime.Speech()
-	if lifetime.Active() {
-		t.Fatal("ongoing speech revived the capped session")
+	if socket.audio != audioBefore || socket.keepAlives == 0 || socket.closes != 0 {
+		t.Fatalf("silent gap: audio=%d want=%d KeepAlives=%d closes=%d", socket.audio, audioBefore, socket.keepAlives, socket.closes)
 	}
 }
 
-func TestPersistentOnlySpeechRefreshesIdleDeadline(t *testing.T) {
+func TestIGSH570TenMinutesContinuousSpeech(t *testing.T) {
 	lifetime, clock, session, socket := newLifetimeFixture(t)
-	clock.advance(20 * time.Second)
-	lifetime.Speech()
-	clock.advance(29 * time.Second)
-	if socket.closed {
-		t.Fatal("idle deadline was not renewed by real speech")
+	for tick := 1; tick <= 10*60*10; tick++ {
+		clock.afterFunc(100*time.Millisecond, func() {
+			lifetime.Speech()
+			if err := session.writeMessage(websocket.BinaryMessage, []byte{1, 0}); err != nil {
+				t.Fatalf("speech at tick %d: %v", tick, err)
+			}
+		})
+		clock.advance(100 * time.Millisecond)
+		if !lifetime.Active() || socket.closed || session.reason != "" || lifetime.current != session {
+			t.Fatalf("continuous speech interrupted at tick %d: %s", tick, session.reason)
+		}
 	}
-	clock.advance(time.Second)
-	if !socket.closed || session.reason != "idle" {
-		t.Fatal("socket survived 30 seconds after the last real speech")
+	if socket.audio != 6000 || socket.closes != 0 {
+		t.Fatalf("continuous speech: audio=%d closes=%d", socket.audio, socket.closes)
+	}
+}
+
+func TestIGSH570MaxAgeOnlyAtNewUtterance(t *testing.T) {
+	lifetime, clock, session, socket := newLifetimeFixture(t)
+	for tick := 1; tick <= 900; tick++ {
+		clock.advance(100 * time.Millisecond)
+		lifetime.Speech()
+		if err := session.writeMessage(websocket.BinaryMessage, []byte{1, 0}); err != nil {
+			t.Fatalf("speech before new utterance at tick %d: %v", tick, err)
+		}
+	}
+	if !lifetime.BeginUtterance() {
+		t.Fatal("exactly 90 seconds should still allow reuse, as in v1.8.116")
+	}
+	clock.advance(time.Millisecond)
+	lifetime.Speech()
+	if err := session.writeMessage(websocket.BinaryMessage, []byte{1, 0}); err != nil {
+		t.Fatalf("ongoing speech past 90 seconds: %v", err)
+	}
+	if socket.closed || session.reason != "" || !lifetime.Active() {
+		t.Fatal("age was enforced before a new utterance")
+	}
+	if lifetime.BeginUtterance() || !socket.closed || socket.closes != 1 || session.reason != "max_age" || session.ctx.Err() == nil {
+		t.Fatal("new utterance did not close the old connection with reason=max_age")
+	}
+	if err := session.writeMessage(websocket.BinaryMessage, []byte{1, 0}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("retired session write: %v", err)
+	}
+	client := NewClient("test", "en", "nova-3", false, false, false, false, nil, true)
+	client.SetStreamLifetime(context.Background(), lifetime)
+	fresh := &lifetimeSocket{}
+	if client.session == session || !client.session.attach(fresh) || !lifetime.BeginUtterance() {
+		t.Fatal("new utterance could not reconnect")
+	}
+	if err := client.session.writeMessage(websocket.BinaryMessage, []byte{1, 0}); err != nil {
+		t.Fatalf("fresh session write: %v", err)
+	}
+	session.close("stream_ended")
+	if fresh.closed || socket.closes != 1 {
+		t.Fatal("old session completion closed the replacement")
 	}
 }
 
@@ -293,16 +331,19 @@ func TestPersistentReleaseUnblocksSocketWrite(t *testing.T) {
 	}
 }
 
-func TestPersistentDialDoesNotRenewIdleDeadline(t *testing.T) {
+func TestIGSH570SlowDialHasNoIdleDeadline(t *testing.T) {
 	lifetime, clock, _, _ := newLifetimeFixture(t)
 	session := lifetime.begin(context.Background())
-	clock.advance(29 * time.Second)
+	clock.advance(time.Minute)
 	socket := &lifetimeSocket{}
 	if !session.attach(socket) || socket.closed {
-		t.Fatal("dial could not attach before the idle deadline")
+		t.Fatal("silence during dial closed the session")
 	}
-	clock.advance(time.Second)
-	if !socket.closed || session.reason != "idle" {
-		t.Fatal("dial completion renewed the speech-idle deadline")
+	clock.advance(time.Minute)
+	if err := session.writeMessage(websocket.BinaryMessage, []byte{1, 0}); err != nil {
+		t.Fatalf("first utterance after slow dial: %v", err)
+	}
+	if socket.closed || session.reason != "" {
+		t.Fatal("dial introduced an idle or mid-utterance age deadline")
 	}
 }
