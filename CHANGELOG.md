@@ -5,6 +5,16 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.136] - 2026-10-22 "Uninterrupted Dictation"
+
+### Fixed
+- Restore the v1.8.116 connection rules: long dictation is never cut by a connection-age limit. Reconnect a persistent connection older than 90 seconds only when the next utterance starts (IGSH-570).
+- Remove the 30-second idle close. Silent gaps keep the connection ready with free KeepAlive messages, not audio; retain the short trailing audio and lead-in that protect word endings and beginnings.
+- Keep the 3000 ms default silence threshold, immediate close on microphone release, other explicit closes, and voiced-usage counting.
+
+### Added
+- Fake-clock and fake-socket coverage for ten minutes of speech, age-based reconnect at the next utterance, long silence without audio, immediate microphone release, and slow connections without idle deadlines.
+
 ## [1.8.135] - 2026-10-22 "Clean Paste Restore"
 
 ### Fixed

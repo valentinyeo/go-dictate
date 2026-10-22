@@ -1224,7 +1224,7 @@ func vadAndSTTManager(
 				currentUtteranceHasText.Store(false)
 
 				reuseConnection := false
-				if effectiveZeroLatency() && sttAudioTx != nil && sttDoneCh != nil && streamLifetime.Active() {
+				if effectiveZeroLatency() && sttAudioTx != nil && sttDoneCh != nil && streamLifetime.BeginUtterance() {
 					select {
 					case <-sttDoneCh:
 					default:
