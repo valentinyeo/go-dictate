@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.134"
+	Version        = "1.8.135"
 	BuildDate      = "2026-10-22"
-	VersionName    = "Modifier-Safe Input"
-	VersionSummary = "Clear shortcut modifiers before input and give clipboard writes an owner"
+	VersionName    = "Clean Paste Restore"
+	VersionSummary = "A late clipboard restore can no longer paste your old clipboard into dictation"
 )

@@ -83,6 +83,8 @@ type Simulator struct {
 	clipboard       pasteClipboard
 	pasteWindow     func() (uintptr, string)
 	restoreTimer    *time.Timer
+	restoreAfter    func(time.Duration, func()) *time.Timer
+	pasteGen        uint64
 }
 
 func NewSimulator() *Simulator {
@@ -261,6 +263,8 @@ func (s *Simulator) pasteText(ctx context.Context, text string, modifiers []stri
 	path, matched, observed = "type", "false", modifiers
 	s.clipMu.Lock()
 	defer s.clipMu.Unlock()
+	s.pasteGen++
+	gen := s.pasteGen
 	if s.clipboard == nil {
 		s.clipboard = windowsClipboard{}
 	}
@@ -315,26 +319,39 @@ func (s *Simulator) pasteText(ctx context.Context, text string, modifiers []stri
 	if s.restoreTimer != nil {
 		s.restoreTimer.Stop()
 	}
-	s.restoreTimer = time.AfterFunc(clipboardRestoreDelay, s.restoreClipboard)
+	after := s.restoreAfter
+	if after == nil {
+		after = time.AfterFunc
+	}
+	s.restoreTimer = after(clipboardRestoreDelay, func() {
+		s.restoreClipboard(gen)
+	})
 	return
 }
 
-func (s *Simulator) restoreClipboard() {
+func (s *Simulator) restoreClipboard(gen uint64) {
 	s.clipMu.Lock()
 	defer s.clipMu.Unlock()
-	if !s.clipSaved {
+	if gen != s.pasteGen {
+		logger.Info("[Keyboard] Clipboard restore result=skipped_stale")
 		return
 	}
+	if !s.clipSaved {
+		logger.Info("[Keyboard] Clipboard restore result=skipped_no_text")
+		return
+	}
+	result := "skipped_no_text"
 	if s.savedClipIsText {
 		restored, err := s.clipboard.restore(s.lastPasted, s.savedClip)
 		if err != nil {
-			logger.Error("[Keyboard] Failed to restore clipboard: %v", err)
+			result = "error"
 		} else if !restored {
-			logger.Debug("[Keyboard] Restore skipped - clipboard no longer ours")
+			result = "skipped_not_ours"
+		} else {
+			result = "restored"
 		}
-	} else {
-		logger.Debug("[Keyboard] Restore skipped - no saved clipboard text")
 	}
+	logger.Info("[Keyboard] Clipboard restore result=%s", result)
 	s.clipSaved = false
 	s.lastPasted = clipboardSnapshot{}
 }

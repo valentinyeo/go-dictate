@@ -87,7 +87,7 @@ func TestIGSH524ClipboardFailureUsesUnicodeWithoutKeyReleases(t *testing.T) {
 	s := &Simulator{clipboard: c, inputSink: f.send, modifierState: f.modifiers, pasteWindow: func() (uintptr, string) { return 0, "Edit" }}
 	s.deliver(context.Background(), "invented vivid text 😀")
 	s.restoreTimer.Stop()
-	s.restoreClipboard()
+	s.restoreClipboard(s.pasteGen)
 	want := unicodeTypingEvents("invented vivid text 😀")
 	if len(f.batches) != 1 || !reflect.DeepEqual(f.batches[0], want) || f.modified != 0 || f.pastes != 0 {
 		t.Fatalf("unsafe fallback: batches=%v modified=%d pastes=%d", f.batches, f.modified, f.pastes)

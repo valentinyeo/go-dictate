@@ -117,7 +117,7 @@ func TestIGSH524RestoreSkippedAfterOwnershipLost(t *testing.T) {
 	for _, text := range []string{"new user text", "dictation"} {
 		c := &fakeIGSH524Clipboard{current: clipboardSnapshot{text: text, sequence: 8}}
 		s := &Simulator{clipboard: c, clipSaved: true, savedClipIsText: true, savedClip: "old", lastPasted: clipboardSnapshot{text: "dictation", sequence: 7}}
-		s.restoreClipboard()
+		s.restoreClipboard(s.pasteGen)
 		if c.writes != 0 || s.clipSaved || c.current.text != text {
 			t.Fatalf("restore clobbered clipboard: %+v", c)
 		}
@@ -130,7 +130,7 @@ func TestIGSH524RestoreAfterConsumptionDelay(t *testing.T) {
 	if clipboardRestoreDelay < 2*time.Second || c.writes != 0 {
 		t.Fatal("restore must allow target consumption before running")
 	}
-	s.restoreClipboard()
+	s.restoreClipboard(s.pasteGen)
 	if c.current.text != "old" || c.writes != 1 || s.clipSaved {
 		t.Fatalf("restore failed: %+v", c)
 	}
