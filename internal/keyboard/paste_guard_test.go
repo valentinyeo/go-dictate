@@ -14,10 +14,14 @@ type fakeIGSH524Clipboard struct {
 	onRead     func(*fakeIGSH524Clipboard)
 	onSequence func(*fakeIGSH524Clipboard)
 	writes     int
+	writeErr   error
 }
 
 func (c *fakeIGSH524Clipboard) write(text string) (clipboardSnapshot, error) {
 	c.writes++
+	if c.writeErr != nil {
+		return clipboardSnapshot{}, c.writeErr
+	}
 	c.current = clipboardSnapshot{text: text, sequence: c.current.sequence + 1}
 	return c.current, nil
 }

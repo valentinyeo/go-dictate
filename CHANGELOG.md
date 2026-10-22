@@ -5,6 +5,17 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.133] - 2026-10-22 "Modifier-Safe Input"
+
+### Fixed
+- Preserve held shortcut and push-to-talk modifiers instead of injecting synthetic modifier releases. Hold payloads through bounded release waits; if a modifier remains down after the initial wait, use typing only after release, never Ctrl+V (IGSH-524).
+- Resume partially inserted input at the remaining offset with bounded blocked retries; release only unmatched injected key-downs after retry exhaustion.
+- Give clipboard writes and restores a real owner window so text remains available for verification after closing the clipboard. Keep clipboard history exclusions and exact-text checks.
+
+### Added
+- Delivery diagnostics record paste/type selection, clipboard readback match, and logical modifier names without payload text.
+- Fake-input and modifier-reader regression coverage for failed clipboard writes, held modifiers, corrections, partial-input retries, and exhaustion cleanup; Windows coverage for clipboard ownership and post-close text availability.
+
 ## [1.8.132] - 2026-10-21 "Verified Paste"
 
 ### Fixed

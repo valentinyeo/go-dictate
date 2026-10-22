@@ -2,7 +2,6 @@ package keyboard
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +10,7 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/valen/go-dictate/internal/hotkey"
 	"github.com/valen/go-dictate/internal/logger"
 	"golang.org/x/sys/windows"
 )
@@ -39,6 +39,7 @@ var (
 	user32                  = windows.NewLazySystemDLL("user32.dll")
 	sendInputProc           = user32.NewProc("SendInput")
 	getForegroundWindowProc = user32.NewProc("GetForegroundWindow")
+	getAsyncKeyStateProc    = user32.NewProc("GetAsyncKeyState")
 	getClassNameProc        = user32.NewProc("GetClassNameW")
 	postMessageProc         = user32.NewProc("PostMessageW")
 )
@@ -66,6 +67,9 @@ type Simulator struct {
 	lastChar       rune
 	skipPeriodOnce bool // suppress the auto-period for the next emit (set by ResetContext)
 	typeMode       bool // config escape hatch: per-character key events instead of paste
+	inputSink      func([]input) (int, error)
+	modifierState  func() []string
+	modifierWait   func(context.Context) bool
 
 	// Clipboard save/restore state for paste injection. The user's clipboard
 	// is captured before the first paste of a burst and restored after a
@@ -132,7 +136,13 @@ func (s *Simulator) Run(ctx context.Context, textRx <-chan string) {
 					break drain
 				}
 			}
-			s.deliver(payload)
+			waitCtx, cancel := context.WithTimeout(ctx, modifierWaitLimit)
+			hotkey.WaitForModifiersReleased(waitCtx)
+			cancel()
+			if ctx.Err() != nil {
+				return
+			}
+			s.deliver(ctx, payload)
 		}
 	}
 }
@@ -183,14 +193,24 @@ func (s *Simulator) preparePayload(text string) string {
 
 // deliver sends the payload to the focused window. Backspace runs become
 // VK_BACK key events; text segments are pasted (or typed in typeMode).
-func (s *Simulator) deliver(payload string) {
+func (s *Simulator) deliver(ctx context.Context, payload string) {
+	var observed []string
 	for len(payload) > 0 {
+		modifiers, ready := s.waitForInput(ctx)
+		if len(modifiers) > 0 {
+			observed = modifiers
+		}
+		if !ready {
+			logger.Info("[Keyboard] Delivery path=type clipboard_match=not_checked modifiers=%s cancelled=true", strings.Join(observed, ","))
+			return
+		}
 		if payload[0] == '\b' {
 			n := 0
 			for n < len(payload) && payload[n] == '\b' {
 				n++
 			}
-			s.sendInputs(backspaceEvents(n))
+			s.sendInputs(ctx, backspaceEvents(n))
+			logger.Info("[Keyboard] Delivery path=type clipboard_match=not_checked modifiers=%s", strings.Join(observed, ","))
 			payload = payload[n:]
 			continue
 		}
@@ -201,7 +221,7 @@ func (s *Simulator) deliver(payload string) {
 		} else {
 			payload = ""
 		}
-		s.insertText(seg)
+		observed = s.insertText(ctx, seg, observed)
 	}
 }
 
@@ -214,20 +234,31 @@ func (s *Simulator) deliver(payload string) {
 // the clipboard and forwards literal bytes to whatever runs inside, so tmux
 // needs no clipboard support of its own. Falls back to key events if the
 // clipboard is unavailable.
-func (s *Simulator) insertText(text string) {
+func (s *Simulator) insertText(ctx context.Context, text string, modifiers []string) []string {
 	if text == "" {
-		return
+		return modifiers
+	}
+	path, matched := "type", "not_checked"
+	defer func() {
+		logger.Info("[Keyboard] Delivery path=%s clipboard_match=%s modifiers=%s", path, matched, strings.Join(modifiers, ","))
+	}()
+	if len(modifiers) > 0 {
+		s.sendInputs(ctx, unicodeTypingEvents(text))
+		return modifiers
 	}
 	if s.typeMode {
-		s.sendInputs(typingEvents(text))
-		return
+		s.sendInputs(ctx, typingEvents(text))
+		return modifiers
 	}
-	s.pasteText(text)
+	path, matched, modifiers = s.pasteText(ctx, text, modifiers)
+	return modifiers
 }
 
 const clipboardRestoreDelay = 2 * time.Second
+const modifierWaitLimit = time.Second
 
-func (s *Simulator) pasteText(text string) {
+func (s *Simulator) pasteText(ctx context.Context, text string, modifiers []string) (path, matched string, observed []string) {
+	path, matched, observed = "type", "false", modifiers
 	s.clipMu.Lock()
 	defer s.clipMu.Unlock()
 	if s.clipboard == nil {
@@ -250,14 +281,33 @@ func (s *Simulator) pasteText(text string) {
 	written, _ := guardedPaste(s.clipboard, text, func() {
 		time.Sleep(15 * time.Millisecond)
 	}, func() {
+		matched = "true"
+		held, ready := s.waitForInput(ctx)
+		if len(held) > 0 {
+			observed = held
+		}
+		if !ready {
+			return
+		}
+		if len(held) > 0 {
+			s.sendInputs(ctx, unicodeTypingEvents(text))
+			return
+		}
+		path = "paste"
 		if class == "ConsoleWindowClass" {
 			postMessageProc.Call(hwnd, wmSysCommand, scConsolePaste, 0)
 		} else {
-			s.sendInputs(pasteKeyEvents())
+			s.sendInputs(ctx, pasteKeyEvents())
 		}
 	}, func(err error) {
 		logger.Error("[Keyboard] Paste skipped (%v) - falling back to Unicode typing", err)
-		s.sendInputs(unicodeTypingEvents(text))
+		held, ready := s.waitForInput(ctx)
+		if len(held) > 0 {
+			observed = held
+		}
+		if ready {
+			s.sendInputs(ctx, unicodeTypingEvents(text))
+		}
 	})
 	if written.sequence != 0 {
 		s.lastPasted = written
@@ -266,6 +316,7 @@ func (s *Simulator) pasteText(text string) {
 		s.restoreTimer.Stop()
 	}
 	s.restoreTimer = time.AfterFunc(clipboardRestoreDelay, s.restoreClipboard)
+	return
 }
 
 func (s *Simulator) restoreClipboard() {
@@ -343,37 +394,95 @@ func pasteKeyEvents() []input {
 	}
 }
 
-// sendInputs injects every event via SendInput. SendInput returns the number of
-// events it actually inserted and stops at the first one blocked by another
-// thread injecting input — the remainder are silently lost unless we resume
-// from the offset. We loop until all events are injected, backing off briefly
-// only when fully blocked (ret == 0). The normal path sends everything in one
-// call, so there is no added latency when injection is not contended.
-func (s *Simulator) sendInputs(inputs []input) {
+func (s *Simulator) modifiersDown() []string {
+	if s.modifierState != nil {
+		return s.modifierState()
+	}
+	var down []string
+	for _, key := range []struct {
+		vk   uintptr
+		name string
+	}{{0x10, "Shift"}, {0x11, "Ctrl"}, {0x12, "Alt"}, {0x5b, "LWin"}, {0x5c, "RWin"}} {
+		value, _, _ := getAsyncKeyStateProc.Call(key.vk)
+		if value&0x8000 != 0 {
+			down = append(down, key.name)
+		}
+	}
+	return down
+}
+
+func (s *Simulator) waitForInput(ctx context.Context) ([]string, bool) {
+	modifiers := s.modifiersDown()
+	observed := modifiers
+	wait := s.modifierWait
+	if wait == nil {
+		wait = hotkey.WaitForModifiersReleased
+	}
+	for len(modifiers) > 0 && ctx.Err() == nil {
+		logger.Info("[Keyboard] Delivery held modifiers=%s; waiting for release", strings.Join(modifiers, ","))
+		waitCtx, cancel := context.WithTimeout(ctx, modifierWaitLimit)
+		wait(waitCtx)
+		cancel()
+		modifiers = s.modifiersDown()
+	}
+	return observed, ctx.Err() == nil
+}
+
+func (s *Simulator) sendInputs(ctx context.Context, inputs []input) {
 	if len(inputs) == 0 {
 		return
 	}
+	if ctx.Err() != nil {
+		return
+	}
+	sink := s.inputSink
+	if sink == nil {
+		sink = func(events []input) (int, error) {
+			ret, _, err := sendInputProc.Call(
+				uintptr(len(events)),
+				uintptr(unsafe.Pointer(&events[0])),
+				uintptr(unsafe.Sizeof(events[0])),
+			)
+			return int(ret), err
+		}
+	}
 	const maxBlockedRetries = 10
-	blocked := 0
-	for off := 0; off < len(inputs); {
-		remaining := inputs[off:]
-		ret, _, err := sendInputProc.Call(
-			uintptr(len(remaining)),
-			uintptr(unsafe.Pointer(&remaining[0])),
-			uintptr(unsafe.Sizeof(remaining[0])),
-		)
-		n := int(ret)
-		if n <= 0 {
-			blocked++
-			if blocked >= maxBlockedRetries {
-				fmt.Printf("[Keyboard] SendInput blocked, lost %d of %d events: %v\n", len(remaining), len(inputs), err)
-				return
-			}
+	offset, blocked := 0, 0
+	for offset < len(inputs) {
+		n, err := sink(inputs[offset:])
+		if n > 0 && n <= len(inputs)-offset {
+			offset += n
+			blocked = 0
+			continue
+		}
+		blocked++
+		if blocked < maxBlockedRetries {
 			time.Sleep(2 * time.Millisecond)
 			continue
 		}
-		off += n
-		blocked = 0
+		logger.Error("[Keyboard] SendInput incomplete (%d/%d events): %v", offset, len(inputs), err)
+		var cleanup []input
+		for _, event := range inputs[:offset] {
+			if event.ki.dwFlags&keyeventfKeyUp == 0 {
+				cleanup = append(cleanup, event)
+				continue
+			}
+			for i := len(cleanup) - 1; i >= 0; i-- {
+				if cleanup[i].ki.wVk == event.ki.wVk && cleanup[i].ki.wScan == event.ki.wScan {
+					cleanup = append(cleanup[:i], cleanup[i+1:]...)
+					break
+				}
+			}
+		}
+		for i := range cleanup {
+			cleanup[i].ki.dwFlags |= keyeventfKeyUp
+		}
+		if len(cleanup) > 0 {
+			if n, err := sink(cleanup); n != len(cleanup) {
+				logger.Error("[Keyboard] SendInput key release incomplete (%d/%d events): %v", n, len(cleanup), err)
+			}
+		}
+		return
 	}
 }
 

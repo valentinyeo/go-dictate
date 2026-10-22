@@ -3,6 +3,7 @@
 package keyboard
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"strings"
@@ -204,7 +205,7 @@ func TestIGSH524HiddenEditClipboardHistory50Pastes(t *testing.T) {
 			}
 		}
 	})
-	s.insertText("control ")
+	s.deliver(context.Background(), "control ")
 	e.waitText(t, "control ")
 	if e.pastes.Load() != 1 || e.packets.Load() != 0 {
 		t.Fatal("positive control did not use real Ctrl+V SendInput")
@@ -269,7 +270,7 @@ func TestIGSH524HiddenEditClipboardHistory50Pastes(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		text := fmt.Sprintf("dictated %02d café 😀; ", i)
 		want += text
-		s.insertText(text)
+		s.deliver(context.Background(), text)
 		e.waitText(t, want)
 	}
 	if replacements.Load() != 50 || e.pastes.Load() != 1 || e.packets.Load() == 0 {
