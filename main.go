@@ -207,6 +207,7 @@ func run() {
 	fmt.Println("[Main] Starting audio capture...")
 	var audioCapture *audio.Capture
 	audioPaused.Store(!stateManager.CaptureAllowed())
+	streamLifetime := deepgram.NewStreamLifetime(!audioPaused.Load())
 	if stateManager.CaptureAllowed() {
 		audioCapture, err = audio.NewCapture(audioChunks, selectedDevice)
 	}
@@ -218,6 +219,7 @@ func run() {
 
 	defer func() { audioMu.Lock(); audioCapture.Stop(); audioMu.Unlock() }()
 	releaseCapture = func() {
+		streamLifetime.SetMicrophone(false)
 		audioMu.Lock()
 		defer audioMu.Unlock()
 		audioCapture.Stop()
@@ -242,7 +244,7 @@ func run() {
 
 	// Start VAD processor and STT engine manager (settingsChangedCh wired after tray creation)
 	settingsChangedCh = make(chan struct{}, 1)
-	go vadAndSTTManager(ctx, audioChunks, transcriptText, stateManager, cfg, settingsChangedCh, sim)
+	go vadAndSTTManager(ctx, audioChunks, transcriptText, stateManager, cfg, settingsChangedCh, streamLifetime, sim)
 
 	// Create and run system tray
 	fmt.Println("[Main] Creating system tray...")
@@ -548,6 +550,7 @@ func run() {
 				audioMu.Lock()
 				allowed := stateManager.CaptureAllowed()
 				if !allowed && !audioPaused.Load() {
+					streamLifetime.SetMicrophone(false)
 					audioCapture.Stop()
 					audioPaused.Store(true)
 					logger.Info("[Capture] Microphone released")
@@ -567,6 +570,7 @@ func run() {
 					} else {
 						audioCapture = fresh
 						audioPaused.Store(false)
+						streamLifetime.SetMicrophone(true)
 						logger.Info("[Capture] Microphone opened")
 						if !stateManager.PushToTalkEnabled() {
 							requestSTTReset("audio capture resumed")
@@ -732,8 +736,10 @@ func vadAndSTTManager(
 	stateManager *state.Manager,
 	cfg *config.Config,
 	settingsChangedCh <-chan struct{},
+	streamLifetime *deepgram.StreamLifetime,
 	sim *keyboard.Simulator,
 ) {
+	defer streamLifetime.Close("shutdown")
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("[VAD] PANIC recovered: %v", r)
@@ -873,7 +879,6 @@ func vadAndSTTManager(
 	var connectionStarted time.Time
 	var currentUtteranceHasText atomic.Bool
 	var emptyUtteranceCount atomic.Int64
-	const maxPersistentConnectionAge = 90 * time.Second
 
 	diagTracker := diagnostics.NewTracker()
 	var activeUtterance *diagnostics.Utterance
@@ -958,6 +963,7 @@ func vadAndSTTManager(
 			return
 		}
 		if stateManager.PushToTalkEnabled() {
+			streamLifetime.Close("push_to_talk")
 			if sttCancel != nil {
 				sttCancel()
 				sttCancel = nil
@@ -990,12 +996,33 @@ func vadAndSTTManager(
 			}
 			return
 
+		case <-sttDoneCh:
+			if sttCancel != nil {
+				sttCancel()
+				sttCancel = nil
+			}
+			if sttAudioTx != nil {
+				close(sttAudioTx)
+				sttAudioTx = nil
+			}
+			sttDoneCh = nil
+			textBridge = nil
+			connectionStarted = time.Time{}
+
 		case <-vadChangeCh:
+			if !stateManager.CaptureAllowed() {
+				streamLifetime.SetMicrophone(false)
+				vad.Reset()
+				logUsage()
+				endCurrentUtterance("mic_released")
+				_ = ducker.Restore()
+			}
 			// Clear stale pre-roll on any state change (e.g., unpause after hours)
 			preRoll = preRoll[:0]
 			continue
 
 		case <-settingsChangedCh:
+			streamLifetime.Close("settings_changed")
 			// Settings changed - close active STT connection
 			if sttCancel != nil {
 				logger.Info("[VAD] Settings changed - closing active STT connection")
@@ -1027,7 +1054,9 @@ func vadAndSTTManager(
 				logger.Info("[VAD] Train mode enabled: 120Hz rumble filter, threshold=%.4f, noise_multiplier=%.1f, start_chunks=%d",
 					settings.MinStartThreshold, settings.NoiseMultiplier, settings.SpeechStartChunks)
 			}
-			stateManager.Set(state.AutoPaused)
+			if stateManager.CaptureAllowed() {
+				stateManager.Set(state.AutoPaused)
+			}
 
 		case <-activeMeetingTick:
 			// Independent meeting/recording check - fires even when mic is dead
@@ -1051,6 +1080,7 @@ func vadAndSTTManager(
 						logger.Info("[Meeting] Active call detected via ticker - auto-pausing")
 						fmt.Println("[Meeting] In a call - pausing dictation")
 					}
+					streamLifetime.Close("media_auto_pause")
 					// Close any active STT connection
 					if sttCancel != nil {
 						sttCancel()
@@ -1077,6 +1107,9 @@ func vadAndSTTManager(
 		case audioChunk, ok := <-activeAudioRx:
 			if !ok {
 				return
+			}
+			if audioPaused.Load() || !stateManager.CaptureAllowed() {
+				continue
 			}
 			if rumbleFilter != nil {
 				rumbleFilter.ProcessInPlace(audioChunk)
@@ -1158,6 +1191,9 @@ func vadAndSTTManager(
 			}
 
 			vadEvent := vad.Process(audioChunk)
+			if vad.LastChunkVoiced() && (vadEvent == audio.SpeechStarted || vadEvent == audio.Speaking) {
+				streamLifetime.Speech()
+			}
 
 			switch vadEvent {
 			case audio.SpeechStarted:
@@ -1187,48 +1223,26 @@ func vadAndSTTManager(
 				lastTextNano.Store(time.Now().UnixNano())
 				currentUtteranceHasText.Store(false)
 
-				// In zero-latency mode, try to reuse the existing persistent connection,
-				// but recycle it periodically. Recent failures showed old Deepgram
-				// sessions staying open while returning only empty transcripts.
 				reuseConnection := false
-				if effectiveZeroLatency() && sttAudioTx != nil && sttDoneCh != nil {
-					if !connectionStarted.IsZero() && time.Since(connectionStarted) > maxPersistentConnectionAge {
-						logger.Info("[VAD] Persistent connection age %s exceeded %s; reconnecting", time.Since(connectionStarted).Round(time.Millisecond), maxPersistentConnectionAge)
-						if sttCancel != nil {
-							sttCancel()
-							sttCancel = nil
-						}
-						close(sttAudioTx)
-						sttAudioTx = nil
-						sttDoneCh = nil
-						textBridge = nil
-						connectionStarted = time.Time{}
-					} else {
-						select {
-						case <-sttDoneCh:
-							// Connection died, need a fresh one
-							logger.Info("[VAD] Persistent connection dead, reconnecting")
-							sttAudioTx = nil
-							sttDoneCh = nil
-							textBridge = nil
-							connectionStarted = time.Time{}
-							if sttCancel != nil {
-								sttCancel()
-								sttCancel = nil
-							}
-						default:
-							// Connection still alive, reuse it
-							reuseConnection = true
-							logger.Info("[VAD] Reusing persistent Deepgram connection (zero-latency)")
-							fmt.Println("[VAD] Reusing persistent connection")
-						}
+				if effectiveZeroLatency() && sttAudioTx != nil && sttDoneCh != nil && streamLifetime.Active() {
+					select {
+					case <-sttDoneCh:
+					default:
+						reuseConnection = true
+						logger.Info("[VAD] Reusing persistent Deepgram connection (zero-latency)")
 					}
 				}
 
 				activeUtterance = beginUtterance(reuseConnection)
 
 				if !reuseConnection {
-					var engine stt.Engine = deepgram.NewClient(
+					if sttCancel != nil {
+						sttCancel()
+					}
+					if sttAudioTx != nil {
+						close(sttAudioTx)
+					}
+					engine := deepgram.NewClient(
 						cfg.Deepgram.APIKey,
 						cfg.Deepgram.Language,
 						"nova-3",
@@ -1243,6 +1257,9 @@ func vadAndSTTManager(
 					sttAudioTx = make(chan []int16, 100)
 					streamCtx, streamCancel := context.WithCancel(ctx)
 					sttCtx, sttCancel = streamCtx, streamCancel
+					if effectiveZeroLatency() {
+						engine.SetStreamLifetime(streamCtx, streamLifetime)
+					}
 					sttDoneCh = make(chan struct{})
 					connectionStarted = time.Now()
 
@@ -1317,6 +1334,7 @@ func vadAndSTTManager(
 					// Ghost speech check: no real text for too long = background noise.
 					lastText := time.Unix(0, lastTextNano.Load())
 					if time.Since(lastText) > noTextTimeout {
+						streamLifetime.Close("ghost_speech_timeout")
 						ghostCooldownUntil = time.Now().Add(ghostCooldown)
 						logger.Info("[VAD] Ghost speech detected - no text for %v, closing STT (cooldown %v)", noTextTimeout, ghostCooldown)
 						fmt.Println("[VAD] Ghost speech detected - background noise, cooling down 30s")
@@ -1368,6 +1386,7 @@ func vadAndSTTManager(
 						emptyCount := emptyUtteranceCount.Add(1)
 						if emptyCount >= 3 {
 							logger.Info("[VAD] %d consecutive empty utterances - reconnecting Deepgram", emptyCount)
+							streamLifetime.Close("empty_utterances")
 							if sttCancel != nil {
 								sttCancel()
 								sttCancel = nil

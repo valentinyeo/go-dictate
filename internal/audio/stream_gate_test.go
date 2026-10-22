@@ -98,8 +98,9 @@ func TestSixtySecondsMostlySilentStreamsOnlyAroundSpeech(t *testing.T) {
 	if starts != 2 || resumes != 1 {
 		t.Errorf("starts=%d resumes=%d, want 2 and 1", starts, resumes)
 	}
-	if gateSent != sent || gateVoiced != voiced-starts {
-		t.Errorf("gate accounting sent=%d voiced=%d, want %d and %d", gateSent, gateVoiced, sent, voiced-starts)
+	wantGateVoiced := voiced - starts + 10 + 32
+	if gateSent != sent || gateVoiced != wantGateVoiced {
+		t.Errorf("gate accounting sent=%d voiced=%d, want %d and %d", gateSent, gateVoiced, sent, wantGateVoiced)
 	}
 	innerGap := 10
 	budget := voiced + 3*tail + innerGap + 2*preRollSize + resumePreRoll + 1
@@ -111,6 +112,39 @@ func TestSixtySecondsMostlySilentStreamsOnlyAroundSpeech(t *testing.T) {
 	}
 	if float64(oldSent) <= 1.5*float64(sent) {
 		t.Errorf("old=%d must exceed 1.5 * sent=%d", oldSent, sent)
+	}
+}
+
+func TestUsageVoicedCountsQuietSpeech(t *testing.T) {
+	const chunkDuration = 80 * time.Millisecond
+	for _, tt := range []struct {
+		name         string
+		speechChunks int
+		loudEvery    int
+		min          time.Duration
+		max          time.Duration
+	}{
+		{"quiet speech", 51, 10, 3500 * time.Millisecond, 4600 * time.Millisecond},
+		{"continuous loud speech", 25, 1, 1900 * time.Millisecond, 2100 * time.Millisecond},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			gate := NewStreamGate(19, 3)
+			gate.Start(7)
+			for i := 1; i < tt.speechChunks; i++ {
+				gate.Next([]int16{1}, i%tt.loudEvery == 0)
+			}
+			for i := 0; i < 25; i++ {
+				gate.Next([]int16{0}, false)
+			}
+			voiced := time.Duration(gate.Voiced()) * chunkDuration
+			t.Logf("speech=%s, trailing silence=%s, usage voiced=%s", time.Duration(tt.speechChunks)*chunkDuration, 25*chunkDuration, voiced)
+			if voiced < tt.min || voiced > tt.max {
+				t.Fatalf("usage voiced=%s, want %s to %s", voiced, tt.min, tt.max)
+			}
+			if voiced != time.Duration(tt.speechChunks)*chunkDuration {
+				t.Fatalf("usage voiced=%s, want exactly %s without pre-roll or silence tail", voiced, time.Duration(tt.speechChunks)*chunkDuration)
+			}
+		})
 	}
 }
 
@@ -127,12 +161,12 @@ func TestStreamGate(t *testing.T) {
 	}{
 		{"continuous speech", 2, 3, 7, []bool{true, true}, [][]int16{{1}, {2}}, 9, 3},
 		{"tail boundary", 2, 3, 1, []bool{false, false, false}, [][]int16{{1}, {2}, nil}, 3, 1},
-		{"short pause", 2, 3, 1, []bool{false, true, false, false, true}, [][]int16{{1}, {2}, {3}, {4}, {5}}, 6, 3},
-		{"resume ring wraps", 1, 3, 1, []bool{false, false, false, false, false, true}, [][]int16{{1}, nil, nil, nil, nil, {3, 4, 5, 6}}, 6, 2},
-		{"partial resume ring", 1, 3, 1, []bool{false, false, true}, [][]int16{{1}, nil, {2, 3}}, 4, 2},
-		{"no resume", 1, 0, 1, []bool{false, false, true}, [][]int16{{1}, nil, {3}}, 3, 2},
-		{"no tail", 0, 2, 0, []bool{false, false, false, true}, [][]int16{nil, nil, nil, {2, 3, 4}}, 3, 1},
-		{"negative limits", -1, -1, -1, []bool{false, true}, [][]int16{nil, {2}}, 1, 1},
+		{"short pause", 2, 3, 1, []bool{false, true, false, false, true}, [][]int16{{1}, {2}, {3}, {4}, {5}}, 6, 6},
+		{"resume ring wraps", 1, 3, 1, []bool{false, false, false, false, false, true}, [][]int16{{1}, nil, nil, nil, nil, {3, 4, 5, 6}}, 6, 7},
+		{"partial resume ring", 1, 3, 1, []bool{false, false, true}, [][]int16{{1}, nil, {2, 3}}, 4, 4},
+		{"no resume", 1, 0, 1, []bool{false, false, true}, [][]int16{{1}, nil, {3}}, 3, 4},
+		{"no tail", 0, 2, 0, []bool{false, false, false, true}, [][]int16{nil, nil, nil, {2, 3, 4}}, 3, 4},
+		{"negative limits", -1, -1, -1, []bool{false, true}, [][]int16{nil, {2}}, 1, 2},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			gate := NewStreamGate(tt.tail, tt.resume)
@@ -168,6 +202,9 @@ func TestStreamGateStartResetsUtterance(t *testing.T) {
 	}
 	if got := gate.Next([]int16{4}, false); !reflect.DeepEqual(got, [][]int16{{4}}) {
 		t.Fatalf("Start did not reset tail: %v", got)
+	}
+	if gate.Voiced() != 2 {
+		t.Fatalf("Start did not reset voiced span: %d", gate.Voiced())
 	}
 }
 

@@ -5,6 +5,7 @@ type StreamGate struct {
 	quiet      int
 	held       [][]int16
 	sent       int
+	chunks     int
 	voiced     int
 }
 
@@ -26,13 +27,16 @@ func (g *StreamGate) Start(sentAtStart int) {
 	clear(g.held)
 	g.held = g.held[:0]
 	g.sent = max(0, sentAtStart)
+	g.chunks = 0
 	g.voiced = 0
 	if sentAtStart > 0 {
+		g.chunks = 1
 		g.voiced = 1
 	}
 }
 
 func (g *StreamGate) Next(chunk []int16, voiced bool) [][]int16 {
+	g.chunks++
 	if voiced {
 		chunks := make([][]int16, len(g.held)+1)
 		copy(chunks, g.held)
@@ -41,7 +45,7 @@ func (g *StreamGate) Next(chunk []int16, voiced bool) [][]int16 {
 		g.held = g.held[:0]
 		g.quiet = 0
 		g.sent += len(chunks)
-		g.voiced++
+		g.voiced = g.chunks
 		return chunks
 	}
 	if g.quiet < g.tailChunks {

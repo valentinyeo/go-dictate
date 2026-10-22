@@ -5,6 +5,17 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.134] - 2026-10-22 "Bounded Streams"
+
+### Fixed
+- Count voiced usage across the speech span, including quiet gaps between voiced chunks, without counting pre-roll or trailing silence (IGSH-478).
+- Close the Ultra Fast Deepgram socket immediately when the microphone is released, after 30 seconds without voiced speech, and at a 90-second hard cap even during continuous speech (IGSH-478).
+- Keep watchdog resets, trailing audio, and KeepAlive messages from renewing the speech-idle deadline or reopening a closed socket. Resuming capture waits for speech before connecting.
+- Preserve manual pause across capture/STT resets and log each persistent connection close reason.
+
+### Added
+- Fake-clock and fake-socket regression coverage for release followed by watchdog resets, silence, continuous-speech cap, late connections, and blocked writes.
+
 ## [1.8.133] - 2026-10-22 "Modifier-Safe Input"
 
 ### Fixed
