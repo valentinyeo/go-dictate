@@ -34,7 +34,6 @@ var (
 	audioPaused       atomic.Bool // true when capture is stopped due to pause
 	missedWake        atomic.Bool // true when wake happened while paused
 	trayMgr           *tray.Manager
-	releaseCapture    func()
 
 	lastSTTResetMu     sync.Mutex
 	lastSTTResetAt     time.Time
@@ -169,7 +168,6 @@ func run() {
 
 	// Create state manager
 	stateManager = state.NewManager()
-	stateManager.SetPushToTalk(cfg.Audio.PushToTalk)
 
 	// Create channels
 	audioChunks = make(chan []int16, 100)
@@ -203,30 +201,14 @@ func run() {
 
 	// Start audio capture (protected by mutex for watchdog + mic change access)
 	var audioMu sync.Mutex
-	captureChanged := make(chan struct{}, 1)
 	fmt.Println("[Main] Starting audio capture...")
-	var audioCapture *audio.Capture
-	audioPaused.Store(!stateManager.CaptureAllowed())
-	if stateManager.CaptureAllowed() {
-		audioCapture, err = audio.NewCapture(audioChunks, selectedDevice)
-	}
-	if audioCapture == nil && stateManager.CaptureAllowed() && err != nil {
+	audioCapture, err := audio.NewCapture(audioChunks, selectedDevice)
+	if err != nil {
 		fmt.Printf("[Main] Failed to start audio capture: %v\n", err)
 		time.Sleep(5 * time.Second)
 		os.Exit(1)
 	}
-
 	defer func() { audioMu.Lock(); audioCapture.Stop(); audioMu.Unlock() }()
-	releaseCapture = func() {
-		audioMu.Lock()
-		defer audioMu.Unlock()
-		audioCapture.Stop()
-		audioPaused.Store(true)
-		select {
-		case captureChanged <- struct{}{}:
-		default:
-		}
-	}
 
 	// Start keyboard simulator
 	fmt.Println("[Main] Starting keyboard simulator...")
@@ -280,17 +262,16 @@ func run() {
 			}
 
 			// Update selectedDevice so unpause uses the right mic
-			audioMu.Lock()
 			selectedDevice = newDevice
 
 			// If paused, just remember the choice - capture restarts on unpause
-			if audioPaused.Load() || !stateManager.CaptureAllowed() {
-				audioMu.Unlock()
+			if audioPaused.Load() {
 				fmt.Printf("[Main] Microphone will switch to %s on resume\n", displayName)
 				continue
 			}
 
 			// Restart audio capture with new device
+			audioMu.Lock()
 			audioCapture.Stop()
 			newCapture, err := audio.NewCapture(audioChunks, newDevice)
 			if err != nil {
@@ -356,10 +337,6 @@ func run() {
 				time.Sleep(5 * time.Second)
 				logger.Info("[Watchdog] Restarting audio capture after wake")
 				audioMu.Lock()
-				if !stateManager.CaptureAllowed() || stateManager.PushToTalkEnabled() {
-					audioMu.Unlock()
-					continue
-				}
 				audioCapture.Stop()
 				time.Sleep(500 * time.Millisecond)
 				newCapture, err := audio.NewCapture(audioChunks, selectedDevice)
@@ -385,10 +362,6 @@ func run() {
 					continue
 				}
 				audioMu.Lock()
-				if audioPaused.Load() || !stateManager.CaptureAllowed() || stateManager.PushToTalkEnabled() {
-					audioMu.Unlock()
-					continue
-				}
 				alive := audioCapture.IsAlive(watchdogTimeout)
 				peakRMS := audioCapture.PeakRMS()
 
@@ -520,60 +493,52 @@ func run() {
 		}
 	}()
 
-	// One owner reconciles capture with state changes, including PTT releases.
-	// Subscribe before starting the goroutine so the first press cannot be lost.
-	pauseChangeCh := stateManager.Changed()
-	select {
-	case captureChanged <- struct{}{}:
-	default:
-	}
 	go func() {
+		pauseChangeCh := stateManager.Changed()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-pauseChangeCh:
-			case <-captureChanged:
-			}
-			if missedWake.Swap(false) && !stateManager.PushToTalkEnabled() && stateManager.CaptureAllowed() {
-				timer := time.NewTimer(5 * time.Second)
-				select {
-				case <-ctx.Done():
-					timer.Stop()
-					return
-				case <-timer.C:
-				}
-			}
-			{
-				audioMu.Lock()
-				allowed := stateManager.CaptureAllowed()
-				if !allowed && !audioPaused.Load() {
+				s := stateManager.Get()
+				isPaused := s == state.Paused || s == state.MicConflict
+				wasPaused := audioPaused.Load()
+
+				if isPaused && !wasPaused {
+					audioMu.Lock()
 					audioCapture.Stop()
 					audioPaused.Store(true)
-					logger.Info("[Capture] Microphone released")
-				} else if allowed && audioPaused.Load() {
-					// The previous recording has finished before another hold is accepted.
-					drainAudio(audioChunks)
-					fresh, err := audio.NewCapture(audioChunks, selectedDevice)
-					if err != nil {
-						fresh, err = audio.NewCapture(audioChunks, nil)
+					audioMu.Unlock()
+					logger.Info("[Pause] Audio capture stopped (audiodg.exe can idle)")
+					fmt.Println("[Pause] Audio capture stopped")
+				} else if !isPaused && wasPaused {
+					wakeDeferred := missedWake.Swap(false)
+					if wakeDeferred {
+						logger.Info("[Pause] Wake event was deferred - waiting 5s for audio subsystem to settle")
+						time.Sleep(5 * time.Second)
 					}
+					audioMu.Lock()
+					newCapture, err := audio.NewCapture(audioChunks, selectedDevice)
 					if err != nil {
-						logger.Error("[Capture] Cannot open microphone: %v", err)
-						stateManager.Set(state.Paused)
-						notify.ShowBalloon("Microphone unavailable", "Check Sound Settings and resume to retry.", 5*time.Second)
-					} else if !stateManager.CaptureAllowed() {
-						fresh.Stop()
-					} else {
-						audioCapture = fresh
+						logger.Error("[Pause] Failed to restart capture: %v", err)
+						newCapture, err = audio.NewCapture(audioChunks, nil)
+					}
+					if err == nil {
+						audioCapture = newCapture
 						audioPaused.Store(false)
-						logger.Info("[Capture] Microphone opened")
-						if !stateManager.PushToTalkEnabled() {
-							requestSTTReset("audio capture resumed")
+						if wakeDeferred {
+							logger.Info("[Pause] Audio capture restarted (post-wake)")
+							requestSTTReset("audio capture restarted after paused wake")
+						} else {
+							logger.Info("[Pause] Audio capture restarted")
+							requestSTTReset("audio capture restarted after pause")
 						}
+						fmt.Println("[Pause] Audio capture restarted")
+					} else {
+						logger.Error("[Pause] CRITICAL: Cannot restart audio: %v", err)
 					}
+					audioMu.Unlock()
 				}
-				audioMu.Unlock()
 			}
 		}
 	}()
@@ -617,10 +582,6 @@ func run() {
 					lastDefault = currentDefault
 
 					audioMu.Lock()
-					if !stateManager.CaptureAllowed() || stateManager.PushToTalkEnabled() {
-						audioMu.Unlock()
-						continue
-					}
 					audioCapture.Stop()
 					time.Sleep(500 * time.Millisecond)
 					newCapture, err := audio.NewCapture(audioChunks, nil)
@@ -655,11 +616,6 @@ func registerHotkeys() {
 	time.Sleep(500 * time.Millisecond)
 
 	hkMgr := hk.NewManager()
-	if err := hkMgr.RegisterHold(ctx, hk.MOD_CONTROL|hk.MOD_ALT, 0x20, "Ctrl+Alt+Space push-to-talk", stateManager.Hold); err != nil {
-		logger.Error("[Hotkey] Push-to-talk registration failed: %v", err)
-		notify.ShowBalloon("Push-to-talk shortcut unavailable", "Ctrl+Alt+Space is used by another app. Free the shortcut and restart Go Dictate.", 8*time.Second)
-	}
-
 	// Pause/Resume: Ctrl+Alt+X
 	logger.Info("[Hotkey] Registering Ctrl+Alt+X for pause/resume...")
 	if err := hkMgr.Register(hk.MOD_CONTROL|hk.MOD_ALT, 0x58, "Ctrl+Alt+X (Pause/Resume)", func() {
@@ -825,11 +781,6 @@ func vadAndSTTManager(
 
 	var sttCtx context.Context
 	var sttCancel context.CancelFunc
-	defer func() {
-		if sttCancel != nil {
-			sttCancel()
-		}
-	}()
 	var sttAudioTx chan []int16
 	var sttDoneCh chan struct{} // closed when STT goroutine exits (connection dead)
 	var textBridge chan string  // intermediary channel to track text timing
@@ -917,30 +868,10 @@ func vadAndSTTManager(
 	vadChangeCh := stateManager.Changed()
 
 	for {
-		if ctx.Err() != nil {
-			return
-		}
-		if stateManager.PushToTalkEnabled() {
-			if sttCancel != nil {
-				sttCancel()
-				sttCancel = nil
-			}
-			if sttAudioTx != nil {
-				close(sttAudioTx)
-				sttAudioTx = nil
-			}
-			sttDoneCh = nil
-			endCurrentUtterance("push_to_talk")
-			_ = ducker.Restore()
-			vad.Reset()
-			preRoll = preRoll[:0]
-			runPushToTalk(ctx, audioRx, textTx, stateManager, vadChangeCh, releaseCapture)
-			continue
-		}
 		// When paused, disable ALL processing (zero CPU)
 		var activeAudioRx <-chan []int16
 		var activeMeetingTick <-chan time.Time
-		if s := stateManager.Get(); !stateManager.PushToTalkEnabled() && s != state.Paused && s != state.MicConflict {
+		if s := stateManager.Get(); s != state.Paused && s != state.MicConflict {
 			activeAudioRx = audioRx
 			activeMeetingTick = meetingTicker.C
 		}
@@ -1163,8 +1094,7 @@ func vadAndSTTManager(
 					)
 
 					sttAudioTx = make(chan []int16, 100)
-					streamCtx, streamCancel := context.WithCancel(ctx)
-					sttCtx, sttCancel = streamCtx, streamCancel
+					sttCtx, sttCancel = context.WithCancel(ctx)
 					sttDoneCh = make(chan struct{})
 					connectionStarted = time.Now()
 
@@ -1200,8 +1130,7 @@ func vadAndSTTManager(
 						}
 					}(textBridge, bridgeUtterance, bridgeTracksCurrentUtterance)
 
-					go func(e stt.Engine, eCtx context.Context, cancelFn context.CancelFunc, eAudioRx <-chan []int16, eTx chan string, doneCh chan struct{}, utterance *diagnostics.Utterance, tracksCurrent bool) {
-						defer cancelFn()
+					go func(e stt.Engine, eCtx context.Context, eAudioRx <-chan []int16, eTx chan string, doneCh chan struct{}, utterance *diagnostics.Utterance, tracksCurrent bool) {
 						defer close(doneCh)
 						defer close(eTx)
 						defer func() {
@@ -1219,7 +1148,7 @@ func vadAndSTTManager(
 							logger.Error("[STT] Error: %v", err)
 							fmt.Printf("[STT] Error: %v\n", err)
 						}
-					}(engine, sttCtx, streamCancel, sttAudioTx, textBridge, sttDoneCh, bridgeUtterance, bridgeTracksCurrentUtterance)
+					}(engine, sttCtx, sttAudioTx, textBridge, sttDoneCh, bridgeUtterance, bridgeTracksCurrentUtterance)
 				}
 
 				// Flush pre-roll buffer (captures audio BEFORE VAD fired)

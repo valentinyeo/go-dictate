@@ -1,11 +1,6 @@
 package config
 
-import (
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestDefaultNoiseModeIsNormal(t *testing.T) {
 	if got := Default().VAD.NoiseMode; got != NoiseModeNormal {
@@ -88,55 +83,5 @@ func TestTrainModePreservesStricterUserValues(t *testing.T) {
 	if settings.EnergyThreshold != 0.030 || settings.NoiseMultiplier != 5.0 ||
 		settings.MinStartThreshold != 0.035 || settings.SpeechStartChunks != 6 {
 		t.Fatalf("train mode reduced stricter settings: %+v", settings)
-	}
-}
-
-func TestPushToTalkPreservedByProfiles(t *testing.T) {
-	cfg := Default()
-	if cfg.Audio.PushToTalk {
-		t.Fatal("existing continuous mode must remain the default")
-	}
-	cfg.Audio.PushToTalk = true
-	for _, profile := range []string{ProfileEmailWriting, ProfileTerminalAgent} {
-		cfg.ApplyProfile(profile)
-		if !cfg.Audio.PushToTalk {
-			t.Fatalf("profile %q disabled push-to-talk", profile)
-		}
-	}
-}
-
-func TestPushToTalkConfigRoundTrip(t *testing.T) {
-	t.Setenv("APPDATA", t.TempDir())
-	cfg := Default()
-	cfg.Deepgram.APIKey = "test-key"
-	cfg.Audio.PushToTalk = true
-	path, _ := GetConfigPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := cfg.Save(); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := LoadOrCreate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !loaded.Audio.PushToTalk {
-		t.Fatal("restart lost push-to-talk preference")
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	legacy := strings.ReplaceAll(string(data), "push_to_talk = true", "")
-	if err := os.WriteFile(path, []byte(legacy), 0600); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err = LoadOrCreate()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Audio.PushToTalk {
-		t.Fatal("legacy config unexpectedly enabled push-to-talk")
 	}
 }

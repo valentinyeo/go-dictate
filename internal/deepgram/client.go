@@ -123,13 +123,6 @@ func (c *Client) startNovaStreaming(ctx context.Context, audioRx <-chan []int16,
 	headers := http.Header{}
 	headers.Set("Authorization", fmt.Sprintf("Token %s", c.apiKey))
 
-	return c.streamNova(ctx, audioRx, textTx, wsURL, headers)
-}
-
-// streamNova accepts an endpoint so the stream lifecycle can be tested locally.
-func (c *Client) streamNova(ctx context.Context, audioRx <-chan []int16, textTx chan<- string, wsURL string, headers http.Header) error {
-	dialCtx, cancelDial := context.WithCancel(ctx)
-	defer cancelDial()
 	logger.Info("[Deepgram] Connecting to %s", wsURL)
 
 	// Dial in background so we can buffer audio while connecting
@@ -137,7 +130,7 @@ func (c *Client) streamNova(ctx context.Context, audioRx <-chan []int16, textTx 
 		conn *websocket.Conn
 		err  error
 	}
-	dialCh := make(chan dialResult)
+	dialCh := make(chan dialResult, 1)
 	go func() {
 		dialer := websocket.Dialer{
 			HandshakeTimeout: 10 * time.Second,
@@ -145,20 +138,12 @@ func (c *Client) streamNova(ctx context.Context, audioRx <-chan []int16, textTx 
 				Timeout: 10 * time.Second,
 			}).DialContext,
 		}
-		conn, _, err := dialer.DialContext(dialCtx, wsURL, headers)
-		select {
-		case dialCh <- dialResult{conn, err}:
-		case <-dialCtx.Done():
-			if conn != nil {
-				conn.Close()
-			}
-		}
+		conn, _, err := dialer.Dial(wsURL, headers)
+		dialCh <- dialResult{conn, err}
 	}()
 
 	// Buffer audio chunks while waiting for connection
 	var preBuffer [][]byte
-	var connected *websocket.Conn
-	input := audioRx
 waitLoop:
 	for {
 		select {
@@ -168,13 +153,11 @@ waitLoop:
 				return fmt.Errorf("failed to connect: %w", result.err)
 			}
 			// Connection ready - break out to flush buffer and start streaming
-			connected = result.conn
+			dialCh <- result // put it back for reading below
 			break waitLoop
-		case chunk, ok := <-input:
+		case chunk, ok := <-audioRx:
 			if !ok {
-				// Keep buffered audio even when release precedes connection setup.
-				input = nil
-				continue
+				return nil
 			}
 			bytes := make([]byte, len(chunk)*2)
 			for i, s := range chunk {
@@ -186,9 +169,8 @@ waitLoop:
 		}
 	}
 
-	conn := connected
+	conn := (<-dialCh).conn
 	defer conn.Close()
-	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 
 	// Flush pre-buffered audio
 	logger.Info("[Deepgram] Connected successfully, flushing %d buffered chunks", len(preBuffer))
@@ -205,7 +187,6 @@ waitLoop:
 	done := make(chan struct{})
 	var doneOnce sync.Once
 	closeDone := func() { doneOnce.Do(func() { close(done) }) }
-	defer closeDone()
 
 	// Mutex to protect websocket writes (gorilla/websocket does NOT allow concurrent writes)
 	var wsMu sync.Mutex
@@ -236,22 +217,6 @@ waitLoop:
 				return
 			case audioChunk, ok := <-audioRx:
 				if !ok {
-					// CloseStream asks Deepgram to flush final words before closing.
-					wsMu.Lock()
-					conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-					err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"CloseStream"}`))
-					wsMu.Unlock()
-					if err != nil {
-						conn.Close()
-						return
-					}
-					timer := time.NewTimer(5 * time.Second)
-					defer timer.Stop()
-					select {
-					case <-done:
-					case <-timer.C:
-						conn.Close()
-					}
 					return
 				}
 
@@ -265,7 +230,6 @@ waitLoop:
 				}
 
 				wsMu.Lock()
-				conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 				err := conn.WriteMessage(websocket.BinaryMessage, bytes)
 				wsMu.Unlock()
 				if err != nil {
@@ -278,7 +242,6 @@ waitLoop:
 			case <-keepAliveTicker.C:
 				if time.Since(lastAudioSend) >= 5*time.Second {
 					wsMu.Lock()
-					conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 					err := conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"KeepAlive"}`))
 					wsMu.Unlock()
 					if err != nil {

@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.124"
-	BuildDate      = "2026-09-22"
-	VersionName    = "Push to Talk"
-	VersionSummary = "Release the microphone between push-to-talk recordings"
+	Version        = "1.8.123"
+	BuildDate      = "2026-07-22"
+	VersionName    = "Battery & Budget Saver"
+	VersionSummary = "Nova-3 only, battery and budget saver, remove Vosk"
 )

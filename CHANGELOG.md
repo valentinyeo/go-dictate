@@ -5,19 +5,6 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.8.124] - 2026-09-22
-
-### Added
-- Push to Talk in General Options. Hold Ctrl+Alt+Space to record and release to finish. Capture is closed while idle, including startup, so Windows can stop microphone processing between recordings.
-- Push-to-talk records quiet speech without VAD gating and inserts final text after the shortcut modifiers are released. The mode persists across restarts and profile changes; Ctrl+Alt+X still pauses it.
-- Tray status distinguishes ready, recording, and finishing. A five-minute limit releases capture if a key remains held. New recordings wait until the previous transcript finishes.
-
-### Fixed
-- Finish the Deepgram stream with CloseStream on release, preserving buffered audio when a short recording ends before the network connection opens.
-- Prevent watchdog and default-device checks from reopening an idle push-to-talk microphone. Pausing or changing mode during a recording cancels its text delivery.
-
----
-
 ## [1.8.123] - 2026-07-22
 
 ### Added

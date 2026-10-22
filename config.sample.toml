@@ -15,9 +15,6 @@ holdback = true  # Delay newest interim word slightly for better reliability
 keyterms = ["Codex", "PowerShell", "cmd.exe", "conhost", "go-dictate", "GitHub", "Deepgram", "Nova-3"]
 
 [audio]
-# Hold Ctrl+Alt+Space to record. Release all shortcut keys to insert final text.
-# Keeps the microphone closed while idle. Independent of speech profiles.
-push_to_talk = false
 silence_threshold_ms = 3000   # Auto-pause after 3 seconds of silence
 duck_volume = 0.2            # Volume level (0.0-1.0) for other apps during dictation
 auto_pause_on_media = true   # Auto-pause when media is playing (YouTube, videos, etc.)

@@ -190,16 +190,11 @@ func (c *Capture) QuickRestart() error {
 }
 
 func (c *Capture) Stop() {
-	if c == nil {
-		return
-	}
 	if c.device != nil {
 		c.device.Uninit()
-		c.device = nil
 	}
 	if c.ctx != nil {
 		_ = c.ctx.Uninit() // must uninit before free
 		c.ctx.Free()
-		c.ctx = nil
 	}
 }

@@ -1,12 +1,10 @@
 package hotkey
 
 import (
-	"context"
 	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -25,8 +23,6 @@ var (
 	kernel32               = windows.NewLazySystemDLL("kernel32.dll")
 	procRegisterHotKey     = user32.NewProc("RegisterHotKey")
 	procUnregisterHotKey   = user32.NewProc("UnregisterHotKey")
-	procPeekMessage        = user32.NewProc("PeekMessageW")
-	procGetAsyncKeyState   = user32.NewProc("GetAsyncKeyState")
 	procGetMessage         = user32.NewProc("GetMessageW")
 	procPostThreadMessage  = user32.NewProc("PostThreadMessageW")
 	procGetCurrentThreadId = kernel32.NewProc("GetCurrentThreadId")
@@ -110,9 +106,6 @@ func (m *Manager) messageLoop() {
 	// Store thread ID so Register can post messages to wake us up
 	tid, _, _ := procGetCurrentThreadId.Call()
 	atomic.StoreUint32(&m.threadID, uint32(tid))
-	// Create the message queue before Register posts its first wake-up.
-	var initial MSG
-	procPeekMessage.Call(uintptr(unsafe.Pointer(&initial)), 0, 0, 0, 0)
 	close(m.ready)
 
 	fmt.Println("[Hotkey] Message loop started (blocking GetMessageW, zero CPU)")
@@ -161,56 +154,4 @@ func (m *Manager) drainRegistrations() {
 			return
 		}
 	}
-}
-
-// RegisterHold sleeps in RegisterHotKey while idle and checks for release only
-// during a hold. MOD_NOREPEAT and the atomic guard suppress keyboard repeats.
-func (m *Manager) RegisterHold(ctx context.Context, modifiers, vk uintptr, description string, callback func(bool)) error {
-	var held atomic.Bool
-	return m.Register(modifiers|0x4000, vk, description, func() {
-		if !chordDown(modifiers, vk) || !held.CompareAndSwap(false, true) {
-			return
-		}
-		defer held.Store(false)
-		callback(true)
-		defer callback(false)
-		ticker := time.NewTicker(20 * time.Millisecond)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if !chordDown(modifiers, vk) {
-					return
-				}
-			}
-		}
-	})
-}
-
-func keyDown(vk uintptr) bool {
-	value, _, _ := procGetAsyncKeyState.Call(vk)
-	return value&0x8000 != 0
-}
-
-func chordDown(modifiers, vk uintptr) bool {
-	return keyDown(vk) && (modifiers&MOD_CONTROL == 0 || keyDown(0x11)) &&
-		(modifiers&MOD_ALT == 0 || keyDown(0x12)) &&
-		(modifiers&MOD_SHIFT == 0 || keyDown(0x10))
-}
-
-// WaitForModifiersReleased prevents a held shortcut from changing pasted text
-// into an application command. It has no polling cost outside text delivery.
-func WaitForModifiersReleased(ctx context.Context) bool {
-	for keyDown(0x11) || keyDown(0x12) || keyDown(0x10) || keyDown(0x5B) || keyDown(0x5C) {
-		timer := time.NewTimer(20 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return false
-		case <-timer.C:
-		}
-	}
-	return ctx.Err() == nil
 }

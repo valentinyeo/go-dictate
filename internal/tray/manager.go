@@ -56,7 +56,6 @@ type Manager struct {
 	holdbackItem        *systray.MenuItem
 	zeroLatencyItem     *systray.MenuItem
 	saverModeItem       *systray.MenuItem
-	pushToTalkItem      *systray.MenuItem
 	failedAudioItem     *systray.MenuItem
 	keytermsItem        *systray.MenuItem
 
@@ -163,7 +162,6 @@ func (m *Manager) onReady() {
 	// General options that are not tied to a specific STT provider.
 	m.configMu.RLock()
 	m.speechOptionsParent = systray.AddMenuItem("General Options", "Dictation behavior outside the STT provider")
-	m.pushToTalkItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Push to Talk (hold Ctrl+Alt+Space)", "Release the microphone when idle; release the shortcut to finish the transcript", m.config.Audio.PushToTalk)
 	m.zeroLatencyItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Ultra Fast / Fast Finalize", "Keep a persistent Deepgram connection and type interim results", m.config.Audio.ZeroLatency)
 	m.saverModeItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Battery & Budget Saver", "Close each request quickly, shorten trailing audio, and skip paid keyterms", m.config.Audio.BatteryBudgetSaver)
 	m.duckingItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Audio Ducking", "Lower other apps' volume while speaking", m.config.Audio.DuckEnabled)
@@ -302,7 +300,6 @@ func (m *Manager) syncMenuChecks() {
 	profile := m.config.DisplayProfile()
 	zeroLatency := m.config.Audio.ZeroLatency
 	saverMode := m.config.Audio.BatteryBudgetSaver
-	pushToTalk := m.config.Audio.PushToTalk
 	ducking := m.config.Audio.DuckEnabled
 	autoPause := m.config.Audio.AutoPauseOnMedia
 	saveFailedAudio := m.config.Diagnostics.SaveFailedAudio
@@ -323,9 +320,8 @@ func (m *Manager) syncMenuChecks() {
 	}
 	setMenuItemChecked(m.zeroLatencyItem, zeroLatency)
 	setMenuItemChecked(m.saverModeItem, saverMode)
-	setMenuItemChecked(m.pushToTalkItem, pushToTalk)
 	if m.zeroLatencyItem != nil {
-		if saverMode || pushToTalk {
+		if saverMode {
 			m.zeroLatencyItem.Disable()
 		} else {
 			m.zeroLatencyItem.Enable()
@@ -338,7 +334,7 @@ func (m *Manager) syncMenuChecks() {
 	setMenuItemChecked(m.smartFormatItem, smartFormat)
 	setMenuItemChecked(m.fillerWordsItem, fillerWords)
 	setMenuItemChecked(m.holdbackItem, holdback)
-	systray.SetTooltip(m.baseTooltip() + " - " + m.stateManager.Get().String())
+	systray.SetTooltip(m.baseTooltip() + " - Online (Deepgram)")
 }
 
 func (m *Manager) markProfileCustomLocked() {
@@ -624,18 +620,6 @@ func (m *Manager) handleFeatureToggles() {
 		select {
 		case <-m.ctx.Done():
 			return
-
-		case <-m.pushToTalkItem.ClickedCh:
-			m.configMu.Lock()
-			m.config.Audio.PushToTalk = !m.config.Audio.PushToTalk
-			enabled := m.config.Audio.PushToTalk
-			if err := m.config.Save(); err != nil {
-				logger.Error("[Tray] Failed to save push-to-talk setting: %v", err)
-			}
-			m.configMu.Unlock()
-			m.stateManager.SetPushToTalk(enabled)
-			m.syncMenuChecks()
-			m.notifySettingsChanged()
 
 		case <-m.zeroLatencyItem.ClickedCh:
 			m.configMu.Lock()
@@ -1008,7 +992,6 @@ func (m *Manager) handleIconUpdates() {
 func (m *Manager) updateIcon(appState state.AppState) {
 	iconData := getIconData(appState.IconColor())
 	systray.SetIcon(iconData)
-	systray.SetTooltip(m.baseTooltip() + " - " + appState.String())
 }
 
 // Removed - using icons.go instead
@@ -1047,13 +1030,4 @@ func setAutostart(enable bool) error {
 	}
 
 	return nil
-}
-
-// ConfigSnapshot gives a recording a stable copy of the selected settings.
-func (m *Manager) ConfigSnapshot() config.Config {
-	m.configMu.RLock()
-	defer m.configMu.RUnlock()
-	snapshot := *m.config
-	snapshot.Deepgram.Keyterms = append([]string(nil), m.config.Deepgram.Keyterms...)
-	return snapshot
 }
