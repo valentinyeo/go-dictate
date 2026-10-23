@@ -166,6 +166,10 @@ func run() {
 	logger.Info("Smart format enabled: %v", cfg.Deepgram.SmartFormat)
 	fmt.Printf("[Config] Loaded from: %s\n", configPath)
 
+	logger.Info("[AppVolumeDucker] Initializing with duck volume: %.0f%%", cfg.Audio.DuckVolume*100)
+	ducker := audio.NewAppVolumeDucker(cfg.Audio.DuckVolume)
+	defer ducker.Close()
+
 	// Create state manager
 	stateManager = state.NewManager()
 
@@ -224,11 +228,12 @@ func run() {
 
 	// Start VAD processor and STT engine manager (settingsChangedCh wired after tray creation)
 	settingsChangedCh = make(chan struct{}, 1)
-	go vadAndSTTManager(ctx, audioChunks, transcriptText, stateManager, cfg, settingsChangedCh, sim)
+	go vadAndSTTManager(ctx, audioChunks, transcriptText, stateManager, cfg, settingsChangedCh, sim, ducker)
 
 	// Create and run system tray
 	fmt.Println("[Main] Creating system tray...")
 	trayMgr = tray.NewManager(stateManager, cfg, micNames, cfg.Audio.DeviceName, Version, VersionName, VersionSummary)
+	trayMgr.BeforeExit = ducker.Close
 
 	// Forward settings changes from tray to VAD manager
 	go func() {
@@ -687,7 +692,9 @@ func vadAndSTTManager(
 	cfg *config.Config,
 	settingsChangedCh <-chan struct{},
 	sim *keyboard.Simulator,
+	ducker *audio.AppVolumeDucker,
 ) {
+	defer ducker.RestoreAfterSpeaking(false)
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Error("[VAD] PANIC recovered: %v", r)
@@ -763,10 +770,6 @@ func vadAndSTTManager(
 	const preRollSize = 6   // ~480ms at ~80ms/chunk
 	preRoll := make([][]int16, 0, preRollSize)
 	var silenceStartTime time.Time // when VAD last detected silence (for delayed context reset)
-
-	// Per-app volume ducking for Chrome/Edge
-	logger.Info("[AppVolumeDucker] Initializing with duck volume: %.0f%%", cfg.Audio.DuckVolume*100)
-	ducker := audio.NewAppVolumeDucker(cfg.Audio.DuckVolume)
 
 	// Ghost speech detection: if VAD says "speaking" but Deepgram returns no
 	// actual text for this long, background noise is triggering the VAD.
@@ -885,11 +888,15 @@ func vadAndSTTManager(
 			return
 
 		case <-vadChangeCh:
+			if stateManager.Get() != state.Speaking {
+				ducker.RestoreAfterSpeaking(cfg.Audio.DuckEnabled)
+			}
 			// Clear stale pre-roll on any state change (e.g., unpause after hours)
 			preRoll = preRoll[:0]
 			continue
 
 		case <-settingsChangedCh:
+			ducker.RestoreAfterSpeaking(cfg.Audio.DuckEnabled)
 			// Settings changed - close active STT connection
 			if sttCancel != nil {
 				logger.Info("[VAD] Settings changed - closing active STT connection")
@@ -960,6 +967,7 @@ func vadAndSTTManager(
 					endCurrentUtterance("media_auto_pause")
 					vad.Reset()
 					preRoll = preRoll[:0]
+					ducker.RestoreAfterSpeaking(cfg.Audio.DuckEnabled)
 					stateManager.Set(state.MediaPaused)
 				}
 			} else if currentState == state.MediaPaused {
@@ -994,6 +1002,7 @@ func vadAndSTTManager(
 						logger.Info("[Meeting] Active call detected - auto-pausing")
 						fmt.Println("[Meeting] In a call - pausing dictation")
 					}
+					ducker.RestoreAfterSpeaking(cfg.Audio.DuckEnabled)
 					stateManager.Set(state.MediaPaused)
 				} else if currentState == state.MediaPaused {
 					continue
@@ -1172,11 +1181,7 @@ func vadAndSTTManager(
 						logger.Info("[VAD] Ghost speech detected - no text for %v, closing STT (cooldown %v)", noTextTimeout, ghostCooldown)
 						fmt.Println("[VAD] Ghost speech detected - background noise, cooling down 30s")
 
-						if cfg.Audio.DuckEnabled {
-							if err := ducker.Restore(); err != nil {
-								logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
-							}
-						}
+						ducker.RestoreAfterSpeaking(cfg.Audio.DuckEnabled)
 						if sttCancel != nil {
 							sttCancel()
 							sttCancel = nil
@@ -1200,11 +1205,7 @@ func vadAndSTTManager(
 				fmt.Println("[VAD] Silence detected")
 
 				// Restore Chrome/Edge volume
-				if cfg.Audio.DuckEnabled {
-					if err := ducker.Restore(); err != nil {
-						logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
-					}
-				}
+				ducker.RestoreAfterSpeaking(cfg.Audio.DuckEnabled)
 
 				if effectiveZeroLatency() {
 					// Zero-latency mode: keep connection alive, let Deepgram's

@@ -17,6 +17,7 @@ import (
 )
 
 type Manager struct {
+	BeforeExit   func()
 	stateManager *state.Manager
 	config       *config.Config
 	configMu     sync.RWMutex
@@ -218,6 +219,9 @@ func (m *Manager) ReadyCh() <-chan struct{} {
 }
 
 func (m *Manager) onExit() {
+	if m.BeforeExit != nil {
+		m.BeforeExit()
+	}
 	m.cancel()
 }
 
@@ -871,7 +875,7 @@ func (m *Manager) handleResetAudioClick() {
 			return
 		case <-m.resetAudioItem.ClickedCh:
 			logger.Info("[Tray] Reset Audio clicked - restarting app to get fresh capture")
-			if err := restartApplication(); err != nil {
+			if err := restartApplication(m.BeforeExit); err != nil {
 				logger.Error("[Tray] Failed to restart: %v", err)
 			}
 		}
@@ -885,14 +889,14 @@ func (m *Manager) handleRestartClick() {
 			return
 		case <-m.restartItem.ClickedCh:
 			fmt.Println("[Tray] Restarting application...")
-			if err := restartApplication(); err != nil {
+			if err := restartApplication(m.BeforeExit); err != nil {
 				fmt.Printf("[Tray] Failed to restart: %v\n", err)
 			}
 		}
 	}
 }
 
-func restartApplication() error {
+func restartApplication(beforeExit func()) error {
 	exePath, err := os.Executable()
 	if err != nil {
 		return fmt.Errorf("failed to get executable path: %w", err)
@@ -910,6 +914,10 @@ func restartApplication() error {
 	}
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("failed to schedule restart: %w", err)
+	}
+
+	if beforeExit != nil {
+		beforeExit()
 	}
 
 	// Exit immediately so mutex is released
@@ -951,6 +959,9 @@ func (m *Manager) handleExitClick() {
 			return
 		case <-m.exitItem.ClickedCh:
 			fmt.Println("[Tray] Exiting...")
+			if m.BeforeExit != nil {
+				m.BeforeExit()
+			}
 			systray.Quit()
 			os.Exit(0)
 		}
