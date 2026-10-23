@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.138] - 2026-10-23
+
+### Fixed
+- Chrome and other media apps regain their original volume after dictation, even if ducking is switched off, dictation is paused, or GoDictate exits. Pending restores follow the app across process changes and are recovered after a crash without overwriting volume changes made by the user.
+
+---
+
 ## [1.8.137] - 2026-10-23
 
 Built on 1.8.123. Dictation pastes are marked so clipboard history tools (Lightboard, Win+V) skip them. GoDictate only pastes text it just put on the clipboard. Deepgram, VAD and audio code unchanged from 1.8.123.
