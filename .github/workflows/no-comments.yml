@@ -2,7 +2,7 @@ name: No comments
 
 on:
   push:
-    branches: [master, ceo/IGSH-585]
+    branches: [master]
   pull_request:
 
 jobs:
