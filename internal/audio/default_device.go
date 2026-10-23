@@ -34,7 +34,6 @@ var pkeyDeviceFriendlyName = propertyKey{
 	pid: 14,
 }
 
-// IPolicyConfig CLSIDs (undocumented but stable, used by EarTrumpet and SoundSwitch)
 var (
 	clsidCPolicyConfigClient = syscall.GUID{
 		Data1: 0x870AF99C,
@@ -56,8 +55,6 @@ const (
 	vtLPWSTR          = 31
 )
 
-// GetWindowsDefaultCaptureName returns the friendly name of the current Windows
-// default audio capture device (e.g. "NexiGo HelloCam N930AF").
 func GetWindowsDefaultCaptureName() (string, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -83,7 +80,7 @@ func GetWindowsDefaultCaptureName() (string, error) {
 
 	var device uintptr
 	ret, _, _ = syscall.Syscall6(
-		getVTable(enumerator, 4), // GetDefaultAudioEndpoint
+		getVTable(enumerator, 4),
 		4,
 		enumerator,
 		uintptr(eCapture),
@@ -99,9 +96,6 @@ func GetWindowsDefaultCaptureName() (string, error) {
 	return getDeviceFriendlyName(device)
 }
 
-// SetWindowsDefaultCaptureDevice sets the Windows default audio capture device
-// to the device matching the given friendly name. Uses IPolicyConfig, the same
-// undocumented but stable COM interface used by EarTrumpet and SoundSwitch.
 func SetWindowsDefaultCaptureDevice(friendlyName string) error {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -144,9 +138,9 @@ func SetWindowsDefaultCaptureDevice(friendlyName string) error {
 	defer syscall.Syscall(getVTable(policyConfig, 2), 1, policyConfig, 0, 0)
 
 	idPtr, _ := syscall.UTF16PtrFromString(endpointID)
-	for _, role := range []uintptr{0, 1, 2} { // eConsole, eMultimedia, eCommunications
+	for _, role := range []uintptr{0, 1, 2} {
 		ret, _, _ = syscall.Syscall(
-			getVTable(policyConfig, 12), // SetDefaultEndpoint
+			getVTable(policyConfig, 12),
 			3,
 			policyConfig,
 			uintptr(unsafe.Pointer(idPtr)),
@@ -163,7 +157,7 @@ func SetWindowsDefaultCaptureDevice(friendlyName string) error {
 func getDeviceFriendlyName(device uintptr) (string, error) {
 	var store uintptr
 	ret, _, _ := syscall.Syscall(
-		getVTable(device, 4), // OpenPropertyStore
+		getVTable(device, 4),
 		3,
 		device,
 		uintptr(stgmRead),
@@ -177,7 +171,7 @@ func getDeviceFriendlyName(device uintptr) (string, error) {
 	var pv propVariant
 	pkey := pkeyDeviceFriendlyName
 	ret, _, _ = syscall.Syscall(
-		getVTable(store, 5), // GetValue
+		getVTable(store, 5),
 		3,
 		store,
 		uintptr(unsafe.Pointer(&pkey)),
@@ -198,7 +192,7 @@ func getDeviceFriendlyName(device uintptr) (string, error) {
 func findEndpointIDByName(enumerator uintptr, friendlyName string) (string, error) {
 	var collection uintptr
 	ret, _, _ := syscall.Syscall6(
-		getVTable(enumerator, 3), // EnumAudioEndpoints
+		getVTable(enumerator, 3),
 		4,
 		enumerator,
 		uintptr(eCapture),
@@ -213,7 +207,7 @@ func findEndpointIDByName(enumerator uintptr, friendlyName string) (string, erro
 
 	var count uint32
 	ret, _, _ = syscall.Syscall(
-		getVTable(collection, 3), // GetCount
+		getVTable(collection, 3),
 		2,
 		collection,
 		uintptr(unsafe.Pointer(&count)),
@@ -226,7 +220,7 @@ func findEndpointIDByName(enumerator uintptr, friendlyName string) (string, erro
 	for i := uint32(0); i < count; i++ {
 		var device uintptr
 		ret, _, _ = syscall.Syscall(
-			getVTable(collection, 4), // Item
+			getVTable(collection, 4),
 			3,
 			collection,
 			uintptr(i),
@@ -245,7 +239,7 @@ func findEndpointIDByName(enumerator uintptr, friendlyName string) (string, erro
 		if name == friendlyName {
 			var idPtr uintptr
 			ret, _, _ = syscall.Syscall(
-				getVTable(device, 5), // GetId
+				getVTable(device, 5),
 				2,
 				device,
 				uintptr(unsafe.Pointer(&idPtr)),

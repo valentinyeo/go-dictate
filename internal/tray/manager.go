@@ -37,7 +37,6 @@ type Manager struct {
 	restartItem       *systray.MenuItem
 	exitItem          *systray.MenuItem
 
-	// Speech profiles
 	profileParent       *systray.MenuItem
 	profileTerminalItem *systray.MenuItem
 	profileEmailItem    *systray.MenuItem
@@ -46,11 +45,9 @@ type Manager struct {
 	noiseNormalItem     *systray.MenuItem
 	noiseTrainItem      *systray.MenuItem
 
-	// Capture mode choices in the top-level right-click menu.
 	pushToTalkItem *systray.MenuItem
 	alwaysOnItem   *systray.MenuItem
 
-	// Feature toggles
 	speechOptionsParent   *systray.MenuItem
 	duckingItem           *systray.MenuItem
 	ignoreSystemAudioItem *systray.MenuItem
@@ -64,20 +61,17 @@ type Manager struct {
 	failedAudioItem       *systray.MenuItem
 	keytermsItem          *systray.MenuItem
 
-	// Deepgram settings
 	deepgramModelParent *systray.MenuItem
 
-	// Microphone selection
-	micNames     []string // device names from enumeration
-	selectedMic  string   // currently selected device name ("" = system default)
+	micNames     []string
+	selectedMic  string
 	micParent    *systray.MenuItem
 	micItems     []*systray.MenuItem
-	MicChangedCh chan string // sends device name when user selects a new mic
+	MicChangedCh chan string
 
-	// Signals VAD to reset (close active Deepgram connection and pick up new settings)
 	SettingsChangedCh chan struct{}
 
-	readyCh chan struct{} // closed when tray menu is fully constructed
+	readyCh chan struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -106,17 +100,14 @@ func (m *Manager) Run() {
 }
 
 func (m *Manager) onReady() {
-	// Set initial icon
 	m.updateIcon(m.stateManager.Get())
 	systray.SetTooltip(m.baseTooltip())
 
-	// Create menu items - clicking version opens changelog
 	m.versionItem = systray.AddMenuItem(fmt.Sprintf("v%s - %s", m.appVersion, m.appVersionName), "Click to view changelog")
 	summaryItem := systray.AddMenuItem("  "+m.appVersionSummary, "")
 	summaryItem.Disable()
 	systray.AddSeparator()
 
-	// Profile and Deepgram settings
 	m.configMu.RLock()
 	pushToTalk := m.config.Audio.PushToTalk
 	profile := m.config.DisplayProfile()
@@ -147,7 +138,6 @@ func (m *Manager) onReady() {
 	systray.AddSeparator()
 	m.languageItem = systray.AddMenuItem("Language: English", "Ctrl+Alt+L: Toggle language (EN ↔ DE)")
 
-	// Microphone submenu - show current mic in label
 	micLabel := "Microphone: System Default"
 	if m.selectedMic != "" {
 		micLabel = "Microphone: " + m.selectedMic
@@ -169,7 +159,6 @@ func (m *Manager) onReady() {
 	m.autostartItem = systray.AddMenuItemCheckbox("Start on Boot", "Start application on boot", isAutostartEnabled())
 	systray.AddSeparator()
 
-	// General options that are not tied to a specific STT provider.
 	m.configMu.RLock()
 	m.speechOptionsParent = systray.AddMenuItem("General Options", "Dictation behavior outside the STT provider")
 	m.zeroLatencyItem = m.speechOptionsParent.AddSubMenuItemCheckbox("Ultra Fast / Fast Finalize", "Keep a persistent Deepgram connection and type interim results", m.config.Audio.ZeroLatency)
@@ -191,10 +180,8 @@ func (m *Manager) onReady() {
 	m.restartItem = systray.AddMenuItem("🔄 Restart", "Restart the application")
 	m.exitItem = systray.AddMenuItem("Exit", "Exit application")
 
-	// Update language menu based on config
 	m.updateLanguageMenu()
 
-	// Start event handlers
 	go m.handleProfileClicks()
 	go m.handleMicClicks()
 	go m.handleNoiseModeClicks()
@@ -213,13 +200,10 @@ func (m *Manager) onReady() {
 	go m.handleExitClick()
 	go m.handleIconUpdates()
 
-	// Subclass systray window for left-click toggle + right-click menu fix
 	m.EnableLeftClick()
 
-	// Synchronize checkboxes and effective option availability.
 	m.syncMenuChecks()
 
-	// Signal that tray menu is fully constructed
 	close(m.readyCh)
 
 }
@@ -245,9 +229,6 @@ func (m *Manager) handleVersionClick() {
 	}
 }
 
-// CREATE_NO_WINDOW: never allocate a console for the child process.
-// HideWindow alone is ignored when Windows Terminal is the default console
-// host (Windows 11), which pops a visible terminal window per spawn.
 const createNoWindow = 0x08000000
 
 func openChangelog() error {
@@ -387,17 +368,13 @@ func (m *Manager) applyNoiseMode(mode string) {
 	m.notifySettingsChanged()
 }
 
-// CycleMic advances to the next microphone in the list and returns the display name.
-// Safe to call from any goroutine (e.g. a hotkey callback).
 func (m *Manager) CycleMic() string {
-	// Wait for tray to be ready (menu items created)
 	<-m.readyCh
 
 	if len(m.micItems) <= 1 {
 		return "System Default"
 	}
 
-	// Find current index: 0 = System Default, 1..N = named devices
 	currentIdx := 0
 	for i, name := range m.micNames {
 		if name == m.selectedMic {
@@ -406,7 +383,6 @@ func (m *Manager) CycleMic() string {
 		}
 	}
 
-	// Advance to next (wrap around)
 	nextIdx := (currentIdx + 1) % len(m.micItems)
 
 	var deviceName string
@@ -414,7 +390,6 @@ func (m *Manager) CycleMic() string {
 		deviceName = m.micNames[nextIdx-1]
 	}
 
-	// Update checkmarks
 	for j, item := range m.micItems {
 		if j == nextIdx {
 			item.Check()
@@ -423,7 +398,6 @@ func (m *Manager) CycleMic() string {
 		}
 	}
 
-	// Save to config
 	m.selectedMic = deviceName
 	m.configMu.Lock()
 	m.config.Audio.DeviceName = deviceName
@@ -432,14 +406,12 @@ func (m *Manager) CycleMic() string {
 	}
 	m.configMu.Unlock()
 
-	// Sync to Windows default
 	if deviceName != "" {
 		if err := audio.SetWindowsDefaultCaptureDevice(deviceName); err != nil {
 			logger.Info("[MicSync] Failed to set Windows default: %v", err)
 		}
 	}
 
-	// Notify main to restart audio capture
 	select {
 	case m.MicChangedCh <- deviceName:
 	default:
@@ -454,8 +426,6 @@ func (m *Manager) CycleMic() string {
 	return displayName
 }
 
-// ToggleZeroLatency flips Ultra Fast mode and returns the new state.
-// Safe to call from any goroutine (e.g. a hotkey callback).
 func (m *Manager) ToggleZeroLatency() bool {
 	<-m.readyCh
 
@@ -479,7 +449,6 @@ func (m *Manager) ToggleZeroLatency() bool {
 }
 
 func (m *Manager) handleMicClicks() {
-	// Launch a goroutine per mic item that forwards clicks to a single channel
 	clickCh := make(chan int, 1)
 	for i, item := range m.micItems {
 		go func(idx int, menuItem *systray.MenuItem) {
@@ -502,13 +471,11 @@ func (m *Manager) handleMicClicks() {
 		case <-m.ctx.Done():
 			return
 		case idx := <-clickCh:
-			// Determine device name (index 0 = System Default = "")
 			var deviceName string
 			if idx > 0 {
 				deviceName = m.micNames[idx-1]
 			}
 
-			// Update checkmarks (radio behavior)
 			for j, item := range m.micItems {
 				if j == idx {
 					item.Check()
@@ -517,7 +484,6 @@ func (m *Manager) handleMicClicks() {
 				}
 			}
 
-			// Save to config
 			m.configMu.Lock()
 			m.config.Audio.DeviceName = deviceName
 			if err := m.config.Save(); err != nil {
@@ -525,7 +491,6 @@ func (m *Manager) handleMicClicks() {
 			}
 			m.configMu.Unlock()
 
-			// Sync to Windows default (only for named devices, not "System Default")
 			if deviceName != "" {
 				if err := audio.SetWindowsDefaultCaptureDevice(deviceName); err != nil {
 					logger.Info("[MicSync] Failed to set Windows default: %v", err)
@@ -534,7 +499,6 @@ func (m *Manager) handleMicClicks() {
 				}
 			}
 
-			// Notify main to restart audio capture
 			select {
 			case m.MicChangedCh <- deviceName:
 			default:
@@ -559,7 +523,6 @@ func (m *Manager) handlePauseClick() {
 			newState := m.stateManager.TogglePause()
 			m.updateIcon(newState)
 
-			// Update menu text
 			if newState == state.Paused {
 				m.pauseItem.SetTitle("Resume")
 			} else {
@@ -587,7 +550,6 @@ func (m *Manager) handleLanguageClick() {
 			lang := m.config.Deepgram.Language
 			m.configMu.Unlock()
 
-			// Update UI and notify outside lock (updateLanguageMenu acquires RLock)
 			m.updateLanguageMenu()
 			fmt.Printf("[Tray] Language switched to: %s\n", lang)
 			m.notifySettingsChanged()
@@ -631,7 +593,6 @@ func (m *Manager) handleAutostartClick() {
 	}
 }
 
-// Selecting the checked mode is a no-op, so it cannot interrupt a recording.
 func (m *Manager) setPushToTalk(enabled bool) {
 	m.configMu.Lock()
 	if m.config.Audio.PushToTalk == enabled {
@@ -952,10 +913,6 @@ func restartApplication() error {
 		return fmt.Errorf("failed to get executable path: %w", err)
 	}
 
-	// Use cmd.exe to wait 2 seconds then launch new instance.
-	// This ensures the current process exits and releases the single-instance
-	// mutex before the new process starts.
-	// Use CmdLine directly to avoid Go escaping quotes (which breaks cmd start).
 	cmd := exec.Command("cmd")
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		HideWindow:    true,
@@ -966,7 +923,6 @@ func restartApplication() error {
 		return fmt.Errorf("failed to schedule restart: %w", err)
 	}
 
-	// Exit immediately so mutex is released
 	systray.Quit()
 	os.Exit(0)
 	return nil
@@ -1012,7 +968,6 @@ func (m *Manager) handleExitClick() {
 }
 
 func (m *Manager) handleIconUpdates() {
-	// Watch for Windows theme changes via RegNotifyChangeKeyValue (zero CPU)
 	themeChanged := make(chan struct{}, 1)
 	go watchThemeChanges(m.ctx, themeChanged)
 
@@ -1030,7 +985,6 @@ func (m *Manager) handleIconUpdates() {
 			if currentState != lastState {
 				m.updateIcon(currentState)
 
-				// Update pause menu text
 				if currentState == state.Paused {
 					m.pauseItem.SetTitle("Resume")
 				} else {
@@ -1048,8 +1002,6 @@ func (m *Manager) updateIcon(appState state.AppState) {
 	systray.SetIcon(iconData)
 	systray.SetTooltip(m.baseTooltip() + " - " + appState.String())
 }
-
-// Removed - using icons.go instead
 
 func isAutostartEnabled() bool {
 	k, err := registry.OpenKey(registry.CURRENT_USER, `SOFTWARE\Microsoft\Windows\CurrentVersion\Run`, registry.QUERY_VALUE)
@@ -1087,7 +1039,6 @@ func setAutostart(enable bool) error {
 	return nil
 }
 
-// ConfigSnapshot gives a recording a stable copy of the selected settings.
 func (m *Manager) ConfigSnapshot() config.Config {
 	m.configMu.RLock()
 	defer m.configMu.RUnlock()

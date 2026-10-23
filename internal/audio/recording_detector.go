@@ -49,39 +49,34 @@ type processEntry32W struct {
 	szExeFile           [MAX_PATH_SNAP]uint16
 }
 
-// Processes that indicate active screen recording.
 var recordingProcesses = []string{
-	"ffmpeg.exe", // screencast2-go, OBS output, etc.
+	"ffmpeg.exe",
 }
 
-// Processes where a visible window (not just tray) means recording is active.
 var recordingWindowApps = []string{
 	"loom.exe",
 }
 
-// Shared state for the EnumWindows callback (protected by recordingCache.Mutex)
 var enumState struct {
 	pids  map[uint32]bool
 	found bool
 }
 
-// Create the callback ONCE at init (Go has a global limit of ~2000 callbacks)
 var enumWindowsCallback = syscall.NewCallback(func(hwnd uintptr, lParam uintptr) uintptr {
 	visible, _, _ := procIsWindowVisible.Call(hwnd)
 	if visible == 0 {
-		return 1 // continue
+		return 1
 	}
 
 	var pid uint32
 	procGetWindowTID.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
 	if enumState.pids[pid] {
 		enumState.found = true
-		return 0 // stop enumeration
+		return 0
 	}
-	return 1 // continue
+	return 1
 })
 
-// IsRecordingActive detects if a screen recording is in progress.
 func IsRecordingActive() bool {
 	recordingCache.Lock()
 	defer recordingCache.Unlock()
@@ -135,9 +130,6 @@ func checkRecording() bool {
 	return false
 }
 
-// hasVisibleWindowFromPIDs checks if any visible top-level window belongs to the given PIDs.
-// Uses the pre-allocated enumWindowsCallback (no resource leak).
-// Must be called under recordingCache.Mutex.
 func hasVisibleWindowFromPIDs(pids map[uint32]bool) bool {
 	enumState.pids = pids
 	enumState.found = false
@@ -146,7 +138,6 @@ func hasVisibleWindowFromPIDs(pids map[uint32]bool) bool {
 
 	result := enumState.found
 
-	// Keep pids alive until after EnumWindows returns
 	runtime.KeepAlive(pids)
 
 	enumState.pids = nil

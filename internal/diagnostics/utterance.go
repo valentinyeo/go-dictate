@@ -16,11 +16,10 @@ import (
 
 const (
 	sampleRate              = 16000
-	maxStoredAudioSamples   = sampleRate * 60 // cap optional failed-utterance WAVs at 60s
+	maxStoredAudioSamples   = sampleRate * 60
 	maxTranscriptPreviewLen = 500
 )
 
-// UtteranceConfig captures the state that matters when VAD starts an utterance.
 type UtteranceConfig struct {
 	Provider          string
 	Model             string
@@ -40,7 +39,6 @@ type UtteranceConfig struct {
 	RecentResetAge    time.Duration
 }
 
-// Utterance tracks one VAD-triggered speech segment for diagnostics.
 type Utterance struct {
 	ID     uint64
 	Config UtteranceConfig
@@ -64,7 +62,6 @@ type Utterance struct {
 	endRequested string
 }
 
-// Tracker owns the currently active utterance and writes compact log summaries.
 type Tracker struct {
 	mu      sync.Mutex
 	nextID  uint64
@@ -189,7 +186,6 @@ func (t *Tracker) recordTextLocked(u *Utterance, text string) {
 	if len(u.TextPreview) < maxTranscriptPreviewLen {
 		remaining := maxTranscriptPreviewLen - len(u.TextPreview)
 		if len(clean) > remaining {
-			// Back off to a rune boundary so multi-byte UTF-8 is never split.
 			for remaining > 0 && !utf8.RuneStart(clean[remaining]) {
 				remaining--
 			}
@@ -393,10 +389,10 @@ func writePCM16WAV(path string, samples []int16, rate int) error {
 	if err := binary.Write(f, binary.LittleEndian, uint32(16)); err != nil {
 		return err
 	}
-	if err := binary.Write(f, binary.LittleEndian, uint16(1)); err != nil { // PCM
+	if err := binary.Write(f, binary.LittleEndian, uint16(1)); err != nil {
 		return err
 	}
-	if err := binary.Write(f, binary.LittleEndian, uint16(1)); err != nil { // mono
+	if err := binary.Write(f, binary.LittleEndian, uint16(1)); err != nil {
 		return err
 	}
 	if err := binary.Write(f, binary.LittleEndian, uint32(rate)); err != nil {

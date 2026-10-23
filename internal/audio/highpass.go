@@ -2,15 +2,12 @@ package audio
 
 import "math"
 
-// HighPassFilter removes low-frequency rumble while preserving the speech band.
-// It keeps state across chunks so chunk boundaries do not introduce clicks.
 type HighPassFilter struct {
 	alpha     float64
 	previousX float64
 	previousY float64
 }
 
-// NewHighPassFilter constructs a one-pole high-pass filter.
 func NewHighPassFilter(sampleRate, cutoffHz float64) *HighPassFilter {
 	if sampleRate <= 0 || cutoffHz <= 0 {
 		return &HighPassFilter{}
@@ -20,7 +17,6 @@ func NewHighPassFilter(sampleRate, cutoffHz float64) *HighPassFilter {
 	return &HighPassFilter{alpha: rc / (rc + dt)}
 }
 
-// ProcessInPlace filters signed 16-bit mono PCM samples without allocating.
 func (f *HighPassFilter) ProcessInPlace(samples []int16) {
 	if f == nil || f.alpha <= 0 || f.alpha >= 1 {
 		return
@@ -40,7 +36,6 @@ func (f *HighPassFilter) ProcessInPlace(samples []int16) {
 	}
 }
 
-// Reset clears history after an input-device or environment change.
 func (f *HighPassFilter) Reset() {
 	if f == nil {
 		return

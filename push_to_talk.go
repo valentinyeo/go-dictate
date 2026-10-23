@@ -16,10 +16,7 @@ import (
 	"github.com/valen/go-dictate/internal/stt"
 )
 
-// PTT uses final-only recognition and buffers text until release. This avoids
-// pasting while the user is holding Ctrl/Alt and prevents VAD clipping quiet words.
 func runPushToTalk(ctx context.Context, audioRx <-chan []int16, textTx chan<- string, manager *state.Manager, changed <-chan struct{}, release func()) {
-	// Discard audio captured by continuous mode before the mode switch.
 	release()
 	drainAudio(audioRx)
 	for manager.PushToTalkEnabled() && ctx.Err() == nil {
@@ -46,7 +43,6 @@ func runPushToTalk(ctx context.Context, audioRx <-chan []int16, textTx chan<- st
 			notify.ShowBalloon("Push-to-talk failed", "Check the connection and debug log, then hold the shortcut to retry.", 5*time.Second)
 		}
 		if text != "" && manager.PushToTalkEnabled() && manager.Get() == state.PushToTalkFinishing && hotkey.WaitForModifiersReleased(ctx) {
-			// Recheck after waiting: a manual pause or mode switch cancels delivery.
 			if manager.PushToTalkEnabled() && manager.Get() == state.PushToTalkFinishing {
 				select {
 				case textTx <- text:
@@ -58,8 +54,6 @@ func runPushToTalk(ctx context.Context, audioRx <-chan []int16, textTx chan<- st
 	}
 }
 
-// recordPushToTalk releases capture before closing the audio stream, then waits
-// for final results. The engine and capture release are injected for lifecycle tests.
 func recordPushToTalk(ctx context.Context, audioRx <-chan []int16, manager *state.Manager, changed <-chan struct{}, release func(), engine stt.Engine, cfg config.Config) (string, error) {
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
@@ -107,7 +101,6 @@ func recordPushToTalk(ctx context.Context, audioRx <-chan []int16, manager *stat
 			finishTimer.Stop()
 		}
 	}()
-	// A stuck key must not leave capture open indefinitely.
 	holdLimit := time.NewTimer(5 * time.Minute)
 	defer holdLimit.Stop()
 	released := false
@@ -116,7 +109,7 @@ func recordPushToTalk(ctx context.Context, audioRx <-chan []int16, manager *stat
 			return "", nil
 		}
 		if !released && manager.Get() == state.PushToTalkFinishing {
-			release() // synchronous: no callbacks can arrive after this returns
+			release()
 			for len(audioRx) > 0 {
 				send(<-audioRx)
 			}
@@ -148,7 +141,6 @@ func recordPushToTalk(ctx context.Context, audioRx <-chan []int16, manager *stat
 		case text, ok := <-texts:
 			if !ok {
 				err := <-done
-				// A failed connection while held also shuts the microphone off.
 				manager.Hold(false)
 				return strings.Join(parts, " "), err
 			}

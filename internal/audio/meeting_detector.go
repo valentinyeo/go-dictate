@@ -18,21 +18,14 @@ var (
 		isInMeeting bool
 		lastCheck   time.Time
 	}
-	meetingCacheDuration = 3 * time.Second // Check every 3 seconds
+	meetingCacheDuration = 3 * time.Second
 
-	// Cached kernel32 procs for getProcessName
 	kernel32DLL                    = syscall.NewLazyDLL("kernel32.dll")
 	procOpenProcess                = kernel32DLL.NewProc("OpenProcess")
 	procQueryFullProcessImageNameW = kernel32DLL.NewProc("QueryFullProcessImageNameW")
 	procCloseHandle                = kernel32DLL.NewProc("CloseHandle")
 )
 
-// IsMeetingActive detects if the user is in an ACTIVE video call/meeting.
-// Checks the Windows CapabilityAccessManager registry to see if any OTHER app
-// (besides our own exe) is currently using the microphone. This works for all
-// meeting apps: Teams, Zoom, Google Meet in any browser, Discord, etc.
-// The registry tracks mic usage per-exe with LastUsedTimeStart/LastUsedTimeStop.
-// If start > 0 and stop == 0, the app is actively using the mic right now.
 func IsMeetingActive() bool {
 	meetingCache.Lock()
 	defer meetingCache.Unlock()
@@ -47,31 +40,16 @@ func IsMeetingActive() bool {
 	return meetingCache.isInMeeting
 }
 
-// checkMicPrivacyRegistry reads the Windows mic privacy registry to detect
-// if any other app is actively using the microphone.
-// Registry path: HKCU\Software\Microsoft\Windows\CurrentVersion\
-//
-//	CapabilityAccessManager\ConsentStore\microphone\NonPackaged
-//
-// Each sub-key is an exe path (with # instead of \). Values:
-//
-//	LastUsedTimeStart (REG_QWORD) - FILETIME when mic access started
-//	LastUsedTimeStop  (REG_QWORD) - FILETIME when mic access stopped (0 = still active)
 func checkMicPrivacyRegistry() bool {
 	const basePath = `Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\microphone`
 
-	// Exclude our own exe and apps known to hold mic access without active calls.
-	// These apps register mic permission at launch and never release it.
 	excludedApps := []string{
-		"go-dictate",              // ourselves (any variant)
-		"beeper",                  // messaging app keeps mic open
-		"immersivecontrolpanel",   // Windows Settings app (opens mic for Sound settings)
-		"windowssoundrecorder",    // Windows Sound Recorder (packaged app)
+		"go-dictate",
+		"beeper",
+		"immersivecontrolpanel",
+		"windowssoundrecorder",
 	}
 
-	// Check both NonPackaged apps (e.g. Chrome, Firefox) and Packaged apps
-	// (e.g. new Teams "MSTeams_8wekyb3d8bbwe"). Packaged app keys are direct
-	// sub-keys of the microphone key; NonPackaged apps are under NonPackaged\.
 	regPaths := []string{
 		basePath + `\NonPackaged`,
 		basePath,
@@ -90,8 +68,6 @@ func checkMicPrivacyRegistry() bool {
 		}
 
 		for _, subKeyName := range subKeys {
-			// Skip the "NonPackaged" sub-key when scanning the base path
-			// (we already scan it separately above)
 			if strings.EqualFold(subKeyName, "NonPackaged") {
 				continue
 			}
@@ -109,9 +85,7 @@ func checkMicPrivacyRegistry() bool {
 				continue
 			}
 
-			// Active if start > 0 and stop == 0 (still using mic)
 			if stop == 0 || (errStop != nil && start > 0) {
-				// Check it's not an excluded app
 				nameLower := strings.ToLower(subKeyName)
 				excluded := false
 				for _, app := range excludedApps {
@@ -124,7 +98,6 @@ func checkMicPrivacyRegistry() bool {
 					continue
 				}
 
-				// Extract a readable app name from the registry key
 				appName := registryKeyToAppName(subKeyName)
 				fmt.Printf("[MeetingDetector] Mic actively used by: %s\n", appName)
 				return true
@@ -135,11 +108,7 @@ func checkMicPrivacyRegistry() bool {
 	return false
 }
 
-// registryKeyToAppName converts a registry sub-key name like
-// "C:#Program Files (x86)#Microsoft#Edge#Application#msedge.exe"
-// to a readable name like "msedge.exe"
 func registryKeyToAppName(key string) string {
-	// Replace # with \ to get a path, then extract filename
 	path := strings.ReplaceAll(key, "#", "\\")
 	parts := strings.Split(path, "\\")
 	if len(parts) > 0 {
@@ -148,8 +117,6 @@ func registryKeyToAppName(key string) string {
 	return key
 }
 
-// checkMicInUseByOtherApp checks WASAPI capture sessions.
-// Kept as fallback but the registry approach above is more reliable.
 func checkMicInUseByOtherApp() bool {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -260,7 +227,6 @@ func checkMicInUseByOtherApp() bool {
 	return false
 }
 
-// getProcessName gets the executable name for a given process ID
 func getProcessName(pid uint32) string {
 	const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 

@@ -14,7 +14,7 @@ var (
 		isPlaying bool
 		lastCheck time.Time
 	}
-	cacheDuration = 3 * time.Second // Check at most every 3s (media state changes slowly)
+	cacheDuration = 3 * time.Second
 )
 
 var (
@@ -23,7 +23,6 @@ var (
 	coUninitialize   = ole32.NewProc("CoUninitialize")
 	coCreateInstance = ole32.NewProc("CoCreateInstance")
 
-	// MMDeviceEnumerator CLSID: {BCDE0395-E52F-467C-8E3D-C4579291692E}
 	CLSID_MMDeviceEnumerator = syscall.GUID{
 		Data1: 0xBCDE0395,
 		Data2: 0xE52F,
@@ -31,7 +30,6 @@ var (
 		Data4: [8]byte{0x8E, 0x3D, 0xC4, 0x57, 0x92, 0x91, 0x69, 0x2E},
 	}
 
-	// IMMDeviceEnumerator IID: {A95664D2-9614-4F35-A746-DE8DB63617E6}
 	IID_IMMDeviceEnumerator = syscall.GUID{
 		Data1: 0xA95664D2,
 		Data2: 0x9614,
@@ -39,7 +37,6 @@ var (
 		Data4: [8]byte{0xA7, 0x46, 0xDE, 0x8D, 0xB6, 0x36, 0x17, 0xE6},
 	}
 
-	// IAudioSessionManager2 IID: {77AA99A0-1BD6-484F-8BC7-2C654C9A9B6F}
 	IID_IAudioSessionManager2 = syscall.GUID{
 		Data1: 0x77AA99A0,
 		Data2: 0x1BD6,
@@ -47,7 +44,6 @@ var (
 		Data4: [8]byte{0x8B, 0xC7, 0x2C, 0x65, 0x4C, 0x9A, 0x9B, 0x6F},
 	}
 
-	// IAudioMeterInformation IID: {C02216F6-8C67-4B5B-9D00-D008E73E0064}
 	IID_IAudioMeterInformation = syscall.GUID{
 		Data1: 0xC02216F6,
 		Data2: 0x8C67,
@@ -64,51 +60,41 @@ var (
 
 const (
 	CLSCTX_INPROC_SERVER    = 0x1
-	eRender                 = 0 // Audio rendering (speakers)
-	eCapture                = 1 // Audio capture (microphone)
-	eConsole                = 0 // Console audio device
-	AudioSessionStateActive = 1 // Active audio session
+	eRender                 = 0
+	eCapture                = 1
+	eConsole                = 0
+	AudioSessionStateActive = 1
 )
 
-// IsMediaPlayingCached returns the last cached result without triggering
-// a new COM call. Safe to call from hot paths like audio chunk processing.
 func IsMediaPlayingCached() bool {
 	mediaCache.Lock()
 	defer mediaCache.Unlock()
 	return mediaCache.isPlaying
 }
 
-// IsMediaPlaying detects if any audio is playing through speakers
-// Uses a 3s cache to avoid expensive COM calls on every audio chunk
 func IsMediaPlaying() bool {
 	mediaCache.Lock()
 	defer mediaCache.Unlock()
 
-	// Return cached result if still valid
 	if time.Since(mediaCache.lastCheck) < cacheDuration {
 		return mediaCache.isPlaying
 	}
 
-	// Update cache
 	mediaCache.isPlaying = checkMediaPlayback()
 	mediaCache.lastCheck = time.Now()
 	return mediaCache.isPlaying
 }
 
-// checkMediaPlayback performs the actual Windows API check
 func checkMediaPlayback() bool {
-	// Lock this goroutine to the current OS thread for COM safety
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	// Initialize COM
-	ret, _, _ := coInitializeEx.Call(0, 0x0) // COINIT_MULTITHREADED
-	if ret != 0 && ret != 0x00000001 {       // S_OK or S_FALSE (already initialized)
+	ret, _, _ := coInitializeEx.Call(0, 0x0)
+	if ret != 0 && ret != 0x00000001 {
 		return false
 	}
 	defer coUninitialize.Call()
 
-	// Create MMDeviceEnumerator
 	var deviceEnumerator uintptr
 	ret, _, _ = coCreateInstance.Call(
 		uintptr(unsafe.Pointer(&CLSID_MMDeviceEnumerator)),
@@ -120,16 +106,15 @@ func checkMediaPlayback() bool {
 	if ret != 0 || deviceEnumerator == 0 {
 		return false
 	}
-	defer syscall.Syscall(getVTable(deviceEnumerator, 2), 1, deviceEnumerator, 0, 0) // Release
+	defer syscall.Syscall(getVTable(deviceEnumerator, 2), 1, deviceEnumerator, 0, 0)
 
-	// Get default audio endpoint (speakers)
 	var device uintptr
 	ret, _, _ = syscall.Syscall6(
-		getVTable(deviceEnumerator, 4), // GetDefaultAudioEndpoint
+		getVTable(deviceEnumerator, 4),
 		4,
 		deviceEnumerator,
-		uintptr(eRender),  // Render device (speakers)
-		uintptr(eConsole), // Console role
+		uintptr(eRender),
+		uintptr(eConsole),
 		uintptr(unsafe.Pointer(&device)),
 		0,
 		0,
@@ -137,12 +122,11 @@ func checkMediaPlayback() bool {
 	if ret != 0 || device == 0 {
 		return false
 	}
-	defer syscall.Syscall(getVTable(device, 2), 1, device, 0, 0) // Release
+	defer syscall.Syscall(getVTable(device, 2), 1, device, 0, 0)
 
-	// Activate IAudioSessionManager2
 	var sessionManager uintptr
 	ret, _, _ = syscall.Syscall6(
-		getVTable(device, 3), // Activate
+		getVTable(device, 3),
 		5,
 		device,
 		uintptr(unsafe.Pointer(&IID_IAudioSessionManager2)),
@@ -154,12 +138,11 @@ func checkMediaPlayback() bool {
 	if ret != 0 || sessionManager == 0 {
 		return false
 	}
-	defer syscall.Syscall(getVTable(sessionManager, 2), 1, sessionManager, 0, 0) // Release
+	defer syscall.Syscall(getVTable(sessionManager, 2), 1, sessionManager, 0, 0)
 
-	// Get session enumerator
 	var sessionEnumerator uintptr
 	ret, _, _ = syscall.Syscall(
-		getVTable(sessionManager, 5), // GetSessionEnumerator
+		getVTable(sessionManager, 5),
 		2,
 		sessionManager,
 		uintptr(unsafe.Pointer(&sessionEnumerator)),
@@ -168,12 +151,11 @@ func checkMediaPlayback() bool {
 	if ret != 0 || sessionEnumerator == 0 {
 		return false
 	}
-	defer syscall.Syscall(getVTable(sessionEnumerator, 2), 1, sessionEnumerator, 0, 0) // Release
+	defer syscall.Syscall(getVTable(sessionEnumerator, 2), 1, sessionEnumerator, 0, 0)
 
-	// Get session count
 	var sessionCount int32
 	ret, _, _ = syscall.Syscall(
-		getVTable(sessionEnumerator, 3), // GetCount
+		getVTable(sessionEnumerator, 3),
 		2,
 		sessionEnumerator,
 		uintptr(unsafe.Pointer(&sessionCount)),
@@ -183,17 +165,12 @@ func checkMediaPlayback() bool {
 		return false
 	}
 
-	// Get our own process ID to exclude it
 	ourPID := getCurrentProcessID()
 
-	// IAudioMeterInformation is declared at package scope so the echo gate
-	// (SystemOutputPeak) can query the render endpoint with the same IID.
-
-	// Check each session
 	for i := int32(0); i < sessionCount; i++ {
 		var session uintptr
 		ret, _, _ = syscall.Syscall(
-			getVTable(sessionEnumerator, 4), // GetSession
+			getVTable(sessionEnumerator, 4),
 			3,
 			sessionEnumerator,
 			uintptr(i),
@@ -203,33 +180,28 @@ func checkMediaPlayback() bool {
 			continue
 		}
 
-		// Get session state
 		var sessionState int32
 		syscall.Syscall(
-			getVTable(session, 3), // GetState
+			getVTable(session, 3),
 			2,
 			session,
 			uintptr(unsafe.Pointer(&sessionState)),
 			0,
 		)
 
-		// Get process ID for this session
 		var processID uint32
 		syscall.Syscall(
-			getVTable(session, 14), // GetProcessId
+			getVTable(session, 14),
 			2,
 			session,
 			uintptr(unsafe.Pointer(&processID)),
 			0,
 		)
 
-		// Check if session is active and not our own process
 		if sessionState == AudioSessionStateActive && processID != ourPID {
-			// Query IAudioMeterInformation to check if audio is actually flowing.
-			// A muted video has an active session but zero peak level.
 			var meter uintptr
 			ret, _, _ = syscall.Syscall6(
-				getVTable(session, 0), // QueryInterface
+				getVTable(session, 0),
 				3,
 				session,
 				uintptr(unsafe.Pointer(&IID_IAudioMeterInformation)),
@@ -239,32 +211,27 @@ func checkMediaPlayback() bool {
 			if ret == 0 && meter != 0 {
 				var peakValue float32
 				syscall.Syscall(
-					getVTable(meter, 3), // GetPeakValue
+					getVTable(meter, 3),
 					2,
 					meter,
 					uintptr(unsafe.Pointer(&peakValue)),
 					0,
 				)
-				syscall.Syscall(getVTable(meter, 2), 1, meter, 0, 0) // Release meter
+				syscall.Syscall(getVTable(meter, 2), 1, meter, 0, 0)
 
-				if peakValue > 0.0001 { // Audible threshold
-					syscall.Syscall(getVTable(session, 2), 1, session, 0, 0) // Release session
-					return true                                              // Found actually-audible audio from another process
+				if peakValue > 0.0001 {
+					syscall.Syscall(getVTable(session, 2), 1, session, 0, 0)
+					return true
 				}
 			}
 		}
 
-		syscall.Syscall(getVTable(session, 2), 1, session, 0, 0) // Release session
+		syscall.Syscall(getVTable(session, 2), 1, session, 0, 0)
 	}
 
 	return false
 }
 
-// SystemOutputPeak returns the current peak level (0.0-1.0) of the default
-// render (speaker) endpoint. It is used as an acoustic-echo reference: when
-// something is playing, mic chunks that are quiet relative to this level are
-// treated as speaker bleed rather than speech. Cached briefly (200ms) so the
-// COM call stays cheap on the audio hot path.
 func SystemOutputPeak() float32 {
 	sysPeakCache.Lock()
 	defer sysPeakCache.Unlock()
@@ -281,7 +248,7 @@ func checkSystemOutputPeak() float32 {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	ret, _, _ := coInitializeEx.Call(0, 0x0) // COINIT_MULTITHREADED
+	ret, _, _ := coInitializeEx.Call(0, 0x0)
 	if ret != 0 && ret != 0x00000001 {
 		return 0
 	}
@@ -302,7 +269,7 @@ func checkSystemOutputPeak() float32 {
 
 	var device uintptr
 	ret, _, _ = syscall.Syscall6(
-		getVTable(deviceEnumerator, 4), // GetDefaultAudioEndpoint
+		getVTable(deviceEnumerator, 4),
 		4,
 		deviceEnumerator,
 		uintptr(eRender),
@@ -317,7 +284,7 @@ func checkSystemOutputPeak() float32 {
 
 	var meter uintptr
 	ret, _, _ = syscall.Syscall6(
-		getVTable(device, 0), // QueryInterface
+		getVTable(device, 0),
 		3,
 		device,
 		uintptr(unsafe.Pointer(&IID_IAudioMeterInformation)),
@@ -331,7 +298,7 @@ func checkSystemOutputPeak() float32 {
 
 	var peak float32
 	syscall.Syscall(
-		getVTable(meter, 3), // GetPeakValue
+		getVTable(meter, 3),
 		2,
 		meter,
 		uintptr(unsafe.Pointer(&peak)),
@@ -340,13 +307,11 @@ func checkSystemOutputPeak() float32 {
 	return peak
 }
 
-// getVTable gets a function pointer from COM vtable
 func getVTable(obj uintptr, index int) uintptr {
 	vtable := *(**uintptr)(unsafe.Pointer(obj))
 	return *(*uintptr)(unsafe.Pointer(uintptr(unsafe.Pointer(vtable)) + uintptr(index)*unsafe.Sizeof(uintptr(0))))
 }
 
-// getCurrentProcessID returns the current process ID
 func getCurrentProcessID() uint32 {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	getCurrentProcessId := kernel32.NewProc("GetCurrentProcessId")

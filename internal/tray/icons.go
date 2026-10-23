@@ -37,7 +37,7 @@ func getIconData(colorName string) []byte {
 	case "media":
 		iconFile = "mic-on.png"
 		tintColor = color.RGBA{0xF5, 0x9E, 0x0B, 0xFF}
-	default: // standby
+	default:
 		iconFile = "mic-on.png"
 		if light {
 			tintColor = color.RGBA{0x20, 0x20, 0x20, 0xFF}
@@ -62,7 +62,6 @@ func getIconData(colorName string) []byte {
 	return createFallbackIcon(tintColor)
 }
 
-// isLightTaskbar checks Windows registry for light taskbar theme.
 func isLightTaskbar() bool {
 	k, err := registry.OpenKey(registry.CURRENT_USER,
 		`Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`,
@@ -78,9 +77,6 @@ func isLightTaskbar() bool {
 	return val == 1
 }
 
-// watchThemeChanges uses RegNotifyChangeKeyValue to block until the Windows
-// theme registry key changes, then sends on the channel. Uses zero CPU while
-// waiting (no polling). Same pattern as screencast2-go/theme.go.
 func watchThemeChanges(ctx context.Context, changed chan<- struct{}) {
 	k, err := registry.OpenKey(registry.CURRENT_USER,
 		`Software\Microsoft\Windows\CurrentVersion\Themes\Personalize`,
@@ -93,16 +89,15 @@ func watchThemeChanges(ctx context.Context, changed chan<- struct{}) {
 	for {
 		ret, _, _ := procRegNotifyChangeKeyValue.Call(
 			uintptr(k),
-			0,                      // don't watch subtree
-			regNotifyChangeLastSet, // watch value changes
-			0,                      // no event handle (synchronous)
-			0,                      // synchronous - blocks until change
+			0,
+			regNotifyChangeLastSet,
+			0,
+			0,
 		)
 		if ret != 0 {
 			return
 		}
 
-		// Check if we should stop
 		select {
 		case <-ctx.Done():
 			return
@@ -116,7 +111,6 @@ func watchThemeChanges(ctx context.Context, changed chan<- struct{}) {
 	}
 }
 
-// loadAndBuildICO loads a PNG, scales to multiple sizes, tints, and builds a multi-size ICO.
 func loadAndBuildICO(path string, tintColor color.RGBA) []byte {
 	file, err := os.Open(path)
 	if err != nil {
@@ -129,7 +123,6 @@ func loadAndBuildICO(path string, tintColor color.RGBA) []byte {
 		return nil
 	}
 
-	// Generate multiple sizes for crisp display at any DPI
 	sizes := []int{16, 20, 24, 32, 48}
 	images := make([]*image.RGBA, len(sizes))
 
@@ -137,7 +130,6 @@ func loadAndBuildICO(path string, tintColor color.RGBA) []byte {
 		scaled := image.NewRGBA(image.Rect(0, 0, sz, sz))
 		draw.CatmullRom.Scale(scaled, scaled.Bounds(), srcImg, srcImg.Bounds(), draw.Over, nil)
 
-		// Tint: replace color, preserve alpha
 		for y := 0; y < sz; y++ {
 			for x := 0; x < sz; x++ {
 				c := scaled.RGBAAt(x, y)
@@ -157,7 +149,6 @@ func loadAndBuildICO(path string, tintColor color.RGBA) []byte {
 	return buildMultiSizeICO(images)
 }
 
-// buildMultiSizeICO creates an ICO file with multiple image sizes.
 func buildMultiSizeICO(images []*image.RGBA) []byte {
 	n := len(images)
 	bmps := make([][]byte, n)
@@ -167,12 +158,10 @@ func buildMultiSizeICO(images []*image.RGBA) []byte {
 
 	var buf bytes.Buffer
 
-	// ICO header (6 bytes)
-	binary.Write(&buf, binary.LittleEndian, uint16(0)) // reserved
-	binary.Write(&buf, binary.LittleEndian, uint16(1)) // type: ICO
-	binary.Write(&buf, binary.LittleEndian, uint16(n)) // count
+	binary.Write(&buf, binary.LittleEndian, uint16(0))
+	binary.Write(&buf, binary.LittleEndian, uint16(1))
+	binary.Write(&buf, binary.LittleEndian, uint16(n))
 
-	// Directory entries (16 bytes each)
 	dataOffset := 6 + n*16
 	for i, img := range images {
 		w := img.Bounds().Dx()
@@ -184,11 +173,11 @@ func buildMultiSizeICO(images []*image.RGBA) []byte {
 		if h >= 256 {
 			bh = 0
 		}
-		buf.Write([]byte{bw, bh, 0, 0})                               // width, height, palette, reserved
-		binary.Write(&buf, binary.LittleEndian, uint16(1))             // planes
-		binary.Write(&buf, binary.LittleEndian, uint16(32))            // bpp
-		binary.Write(&buf, binary.LittleEndian, uint32(len(bmps[i])))  // data size
-		binary.Write(&buf, binary.LittleEndian, uint32(dataOffset))    // data offset
+		buf.Write([]byte{bw, bh, 0, 0})
+		binary.Write(&buf, binary.LittleEndian, uint16(1))
+		binary.Write(&buf, binary.LittleEndian, uint16(32))
+		binary.Write(&buf, binary.LittleEndian, uint32(len(bmps[i])))
+		binary.Write(&buf, binary.LittleEndian, uint32(dataOffset))
 		dataOffset += len(bmps[i])
 	}
 
@@ -198,22 +187,19 @@ func buildMultiSizeICO(images []*image.RGBA) []byte {
 	return buf.Bytes()
 }
 
-// imageToBMP converts an RGBA image to ICO-compatible BMP data.
 func imageToBMP(img *image.RGBA) []byte {
 	w := img.Bounds().Dx()
 	h := img.Bounds().Dy()
 
 	var buf bytes.Buffer
 
-	// BITMAPINFOHEADER (40 bytes)
-	binary.Write(&buf, binary.LittleEndian, uint32(40))  // header size
-	binary.Write(&buf, binary.LittleEndian, int32(w))     // width
-	binary.Write(&buf, binary.LittleEndian, int32(h*2))   // height (doubled for ICO)
-	binary.Write(&buf, binary.LittleEndian, uint16(1))    // planes
-	binary.Write(&buf, binary.LittleEndian, uint16(32))   // bpp
-	buf.Write(make([]byte, 24))                           // rest zeros
+	binary.Write(&buf, binary.LittleEndian, uint32(40))
+	binary.Write(&buf, binary.LittleEndian, int32(w))
+	binary.Write(&buf, binary.LittleEndian, int32(h*2))
+	binary.Write(&buf, binary.LittleEndian, uint16(1))
+	binary.Write(&buf, binary.LittleEndian, uint16(32))
+	buf.Write(make([]byte, 24))
 
-	// Pixel data (BGRA, bottom-up)
 	for y := h - 1; y >= 0; y-- {
 		for x := 0; x < w; x++ {
 			c := img.RGBAAt(x, y)
@@ -221,7 +207,6 @@ func imageToBMP(img *image.RGBA) []byte {
 		}
 	}
 
-	// AND mask
 	rowBytes := ((w + 31) / 32) * 4
 	buf.Write(make([]byte, rowBytes*h))
 

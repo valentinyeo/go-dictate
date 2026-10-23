@@ -31,8 +31,8 @@ var (
 	settingsChangedCh chan struct{}
 	ctx               context.Context
 	cancel            context.CancelFunc
-	audioPaused       atomic.Bool // true when capture is stopped due to pause
-	missedWake        atomic.Bool // true when wake happened while paused
+	audioPaused       atomic.Bool
+	missedWake        atomic.Bool
 	trayMgr           *tray.Manager
 	releaseCapture    func()
 
@@ -45,8 +45,6 @@ func main() {
 	run()
 }
 
-// enforceSingleInstance uses a Windows named mutex to ensure only one instance runs.
-// Returns a handle that must be kept alive for the process lifetime.
 func enforceSingleInstance() (uintptr, error) {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	createMutex := kernel32.NewProc("CreateMutexW")
@@ -55,7 +53,6 @@ func enforceSingleInstance() (uintptr, error) {
 	if handle == 0 {
 		return 0, err
 	}
-	// ERROR_ALREADY_EXISTS = 183
 	if errno, ok := err.(syscall.Errno); ok && errno == 183 {
 		syscall.CloseHandle(syscall.Handle(handle))
 		return 0, fmt.Errorf("another instance is already running")
@@ -63,10 +60,6 @@ func enforceSingleInstance() (uintptr, error) {
 	return handle, nil
 }
 
-// enableEfficiencyMode used to opt this process into Windows EcoQoS. That saved
-// a little power, but real-time microphone capture is reliability-critical; on
-// some wireless mics it correlated with silent capture callbacks. Keep normal
-// priority and explicitly clear EcoQoS instead.
 func enableEfficiencyMode() {
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 
@@ -126,7 +119,6 @@ func recentSTTReset(window time.Duration) (bool, string, time.Duration) {
 }
 
 func run() {
-	// Enforce single instance
 	mutexHandle, singleErr := enforceSingleInstance()
 	if singleErr != nil {
 		fmt.Println("[Main] Another instance is already running. Exiting.")
@@ -134,15 +126,12 @@ func run() {
 	}
 	defer syscall.CloseHandle(syscall.Handle(mutexHandle))
 
-	// Enable Windows Efficiency Mode before anything else
 	enableEfficiencyMode()
 
 	fmt.Printf("=== Dictation App v%s (%s) ===\n", Version, VersionName)
 
-	// Redirect stderr to crash.log so panics are captured (no console with -H windowsgui)
 	logger.RedirectStderr()
 
-	// Initialize logger
 	if err := logger.Init(); err != nil {
 		fmt.Printf("[Logger] Warning: Failed to initialize logger: %v\n", err)
 	}
@@ -150,7 +139,6 @@ func run() {
 
 	logger.Info("=== Dictation App v%s (%s) Starting ===", Version, VersionName)
 
-	// Load configuration
 	var err error
 	cfg, err = config.LoadOrCreate()
 	if err != nil {
@@ -167,15 +155,12 @@ func run() {
 	logger.Info("Smart format enabled: %v", cfg.Deepgram.SmartFormat)
 	fmt.Printf("[Config] Loaded from: %s\n", configPath)
 
-	// Create state manager
 	stateManager = state.NewManager()
 	stateManager.SetPushToTalk(cfg.Audio.PushToTalk)
 
-	// Create channels
 	audioChunks = make(chan []int16, 100)
 	transcriptText = make(chan string, 10)
 
-	// Enumerate microphone devices
 	micDevices, err := audio.ListCaptureDevices()
 	if err != nil {
 		logger.Error("[Main] Failed to list microphones: %v", err)
@@ -187,7 +172,6 @@ func run() {
 		fmt.Printf("[Main] Found microphone: %s\n", d.Name)
 	}
 
-	// Find the configured device
 	var selectedDevice *audio.CaptureDevice
 	if cfg.Audio.DeviceName != "" {
 		for i, d := range micDevices {
@@ -201,7 +185,6 @@ func run() {
 		}
 	}
 
-	// Start audio capture (protected by mutex for watchdog + mic change access)
 	var audioMu sync.Mutex
 	captureChanged := make(chan struct{}, 1)
 	fmt.Println("[Main] Starting audio capture...")
@@ -230,7 +213,6 @@ func run() {
 		}
 	}
 
-	// Start keyboard simulator
 	fmt.Println("[Main] Starting keyboard simulator...")
 	ctx, cancel = context.WithCancel(context.Background())
 	defer cancel()
@@ -242,15 +224,12 @@ func run() {
 	logger.Info("[Keyboard] Injection method: %s", cfg.Keyboard.Injection)
 	go sim.Run(ctx, transcriptText)
 
-	// Start VAD processor and STT engine manager (settingsChangedCh wired after tray creation)
 	settingsChangedCh = make(chan struct{}, 1)
 	go vadAndSTTManager(ctx, audioChunks, transcriptText, stateManager, cfg, settingsChangedCh, streamLifetime, sim)
 
-	// Create and run system tray
 	fmt.Println("[Main] Creating system tray...")
 	trayMgr = tray.NewManager(stateManager, cfg, micNames, cfg.Audio.DeviceName, Version, VersionName, VersionSummary)
 
-	// Forward settings changes from tray to VAD manager
 	go func() {
 		for range trayMgr.SettingsChangedCh {
 			noteSTTReset("tray settings changed")
@@ -261,7 +240,6 @@ func run() {
 		}
 	}()
 
-	// Handle microphone changes from tray menu
 	go func() {
 		for deviceName := range trayMgr.MicChangedCh {
 			displayName := deviceName
@@ -270,7 +248,6 @@ func run() {
 			}
 			logger.Info("[Main] Switching microphone to: %s", displayName)
 
-			// Find device
 			var newDevice *audio.CaptureDevice
 			if deviceName != "" {
 				for i, d := range micDevices {
@@ -281,24 +258,20 @@ func run() {
 				}
 			}
 
-			// Update selectedDevice so unpause uses the right mic
 			audioMu.Lock()
 			selectedDevice = newDevice
 
-			// If paused, just remember the choice - capture restarts on unpause
 			if audioPaused.Load() || !stateManager.CaptureAllowed() {
 				audioMu.Unlock()
 				fmt.Printf("[Main] Microphone will switch to %s on resume\n", displayName)
 				continue
 			}
 
-			// Restart audio capture with new device
 			audioCapture.Stop()
 			newCapture, err := audio.NewCapture(audioChunks, newDevice)
 			if err != nil {
 				logger.Error("[Main] Failed to switch microphone: %v", err)
 				fmt.Printf("[Main] Failed to switch microphone: %v\n", err)
-				// Try to restart with system default
 				newCapture, err = audio.NewCapture(audioChunks, nil)
 				if err != nil {
 					logger.Error("[Main] Failed to restart with default mic: %v", err)
@@ -314,28 +287,20 @@ func run() {
 		}
 	}()
 
-	// Start Windows power event monitor for sleep/wake detection
 	powerMon := audio.NewPowerMonitor()
 	defer powerMon.Stop()
 
-	// Audio watchdog: detect dead audio devices (e.g., after sleep/wake,
-	// wireless mic dropout) and automatically restart capture. Also detects
-	// "alive but dead" mics where the callback fires but audio is flat.
-	//
-	// Strategy: try up to 5 restarts quickly, then STOP and just monitor.
-	// The existing device may recover on its own (wireless reconnect).
-	// Constant init/deinit leaks resources and freezes the UI.
 	go func() {
 		const watchdogInterval = 5 * time.Second
 		const watchdogTimeout = 10 * time.Second
-		const flatLineRMSThreshold = 0.0005 // lowered from 0.005: Intel SST mics with HW noise cancellation read ~0.001 during silence
-		const flatLineMax = 6               // 6 * 5s = 30s of flat audio before restart (was 4/20s)
-		const maxRestartAttempts = 5        // stop restarting after this many failures
-		const monitorOnlyLogInterval = 60   // log every 60 ticks (5 min) while monitoring
-		const monitorRetryInterval = 12     // retry from monitor mode every 12 ticks (1 min)
+		const flatLineRMSThreshold = 0.0005
+		const flatLineMax = 6
+		const maxRestartAttempts = 5
+		const monitorOnlyLogInterval = 60
+		const monitorRetryInterval = 12
 		flatLineCount := 0
 		restartAttempts := 0
-		monitorOnly := false // true = gave up restarting, just watching RMS
+		monitorOnly := false
 		monitorTicks := 0
 
 		ticker := time.NewTicker(watchdogInterval)
@@ -346,9 +311,6 @@ func run() {
 				return
 
 			case <-powerMon.Wake:
-				// Windows power event: system resumed from sleep/hibernate.
-				// Wait a few seconds for audio subsystem to settle, then
-				// force a fresh capture restart.
 				if audioPaused.Load() {
 					logger.Info("[Watchdog] Wake event while paused - flagging for unpause restart")
 					missedWake.Store(true)
@@ -382,7 +344,6 @@ func run() {
 				continue
 
 			case <-ticker.C:
-				// Skip watchdog while capture is stopped (paused)
 				if audioPaused.Load() {
 					continue
 				}
@@ -394,7 +355,6 @@ func run() {
 				alive := audioCapture.IsAlive(watchdogTimeout)
 				peakRMS := audioCapture.PeakRMS()
 
-				// Check if audio recovered (works in both modes)
 				if peakRMS >= flatLineRMSThreshold {
 					if monitorOnly {
 						logger.Info("[Watchdog] Audio recovered naturally after %d monitor ticks!", monitorTicks)
@@ -409,19 +369,16 @@ func run() {
 					continue
 				}
 
-				// Monitor-only mode: log periodically, retry every 5 min
 				if monitorOnly {
 					monitorTicks++
 					if monitorTicks%monitorOnlyLogInterval == 0 {
 						logger.Debug("[Watchdog] Still flat (RMS %.6f) - monitoring, %d min elapsed", peakRMS, monitorTicks*5/60)
 					}
-					// Periodic retry: exit monitor mode every 5 min to try again
 					if monitorTicks%monitorRetryInterval == 0 {
 						logger.Info("[Watchdog] Periodic retry from monitor mode (%d min elapsed)", monitorTicks*5/60)
 						monitorOnly = false
 						restartAttempts = 0
 						flatLineCount = 0
-						// Force an immediate restart
 						audioCapture.Stop()
 						time.Sleep(500 * time.Millisecond)
 						newCapture, err := audio.NewCapture(audioChunks, selectedDevice)
@@ -434,7 +391,6 @@ func run() {
 							logger.Info("[Watchdog] Audio capture restarted (periodic retry)")
 							requestSTTReset("audio capture periodic retry")
 						} else {
-							// Failed again, go back to monitor mode
 							monitorOnly = true
 						}
 					}
@@ -442,7 +398,6 @@ func run() {
 					continue
 				}
 
-				// Active mode: detect flat audio and restart
 				needsRestart := false
 				reason := ""
 				callbackSilent := false
@@ -459,7 +414,6 @@ func run() {
 					}
 				}
 
-				// Periodic RMS logging
 				if flatLineCount%6 == 0 {
 					logger.Debug("[Watchdog] Peak RMS: %.6f (flat: %d/%d, restarts: %d/%d)", peakRMS, flatLineCount, flatLineMax, restartAttempts, maxRestartAttempts)
 				}
@@ -477,9 +431,6 @@ func run() {
 
 					logger.Info("[Watchdog] Restarting capture: %s (attempt %d/%d)", reason, restartAttempts, maxRestartAttempts)
 
-					// First 2 flat-audio attempts: try lightweight stop/start.
-					// If the callback itself stopped, a full rebuild is more reliable
-					// than Stop+Start and avoids a 30s dead period on some USB mics.
 					if !callbackSilent && restartAttempts <= 2 {
 						if err := audioCapture.QuickRestart(); err != nil {
 							logger.Error("[Watchdog] Quick restart failed: %v", err)
@@ -492,11 +443,9 @@ func run() {
 						}
 					}
 
-					// Full teardown + rebuild
 					audioCapture.Stop()
 					time.Sleep(500 * time.Millisecond)
 
-					// After 3 failures, try system default mic (only if user didn't explicitly select a device)
 					useDevice := selectedDevice
 					if restartAttempts >= 3 && selectedDevice != nil && cfg.Audio.DeviceName == "" {
 						logger.Info("[Watchdog] Trying system default mic")
@@ -522,8 +471,6 @@ func run() {
 		}
 	}()
 
-	// One owner reconciles capture with state changes, including PTT releases.
-	// Subscribe before starting the goroutine so the first press cannot be lost.
 	pauseChangeCh := stateManager.Changed()
 	select {
 	case captureChanged <- struct{}{}:
@@ -555,7 +502,6 @@ func run() {
 					audioPaused.Store(true)
 					logger.Info("[Capture] Microphone released")
 				} else if allowed && audioPaused.Load() {
-					// The previous recording has finished before another hold is accepted.
 					drainAudio(audioChunks)
 					fresh, err := audio.NewCapture(audioChunks, selectedDevice)
 					if err != nil {
@@ -582,10 +528,6 @@ func run() {
 		}
 	}()
 
-	// Poll Windows default capture device every 5s.
-	// When the app is on "System Default" mode (cfg.Audio.DeviceName == ""),
-	// detect when the user changes the Windows default in Sound Settings and
-	// restart capture so the app picks up the new device.
 	go func() {
 		<-trayMgr.ReadyCh()
 		var lastDefault string
@@ -598,10 +540,10 @@ func run() {
 				return
 			case <-ticker.C:
 				if audioPaused.Load() {
-					continue // don't poll devices while capture is stopped
+					continue
 				}
 				if cfg.Audio.DeviceName != "" {
-					lastDefault = "" // reset so we re-detect when switching back to System Default
+					lastDefault = ""
 					continue
 				}
 
@@ -641,7 +583,6 @@ func run() {
 		}
 	}()
 
-	// Register hotkeys after tray is created
 	go registerHotkeys()
 
 	fmt.Printf("[Main] Dictation app v%s ready!\n", Version)
@@ -650,12 +591,10 @@ func run() {
 	fmt.Println("[Main] - Ctrl+Alt+M: Cycle microphone")
 	fmt.Println("[Main] - Ctrl+Alt+U: Toggle Ultra Fast mode")
 
-	// Run tray (blocks until exit)
 	trayMgr.Run()
 }
 
 func registerHotkeys() {
-	// Give tray time to initialize
 	time.Sleep(500 * time.Millisecond)
 
 	hkMgr := hk.NewManager()
@@ -666,7 +605,6 @@ func registerHotkeys() {
 		logger.Info("[Hotkey] Successfully registered Ctrl+Space for push-to-talk")
 	}
 
-	// Pause/Resume: Ctrl+Alt+X
 	logger.Info("[Hotkey] Registering Ctrl+Alt+X for pause/resume...")
 	if err := hkMgr.Register(hk.MOD_CONTROL|hk.MOD_ALT, 0x58, "Ctrl+Alt+X (Pause/Resume)", func() {
 		logger.Info("[Hotkey] *** CTRL+ALT+X PRESSED *** Toggling pause...")
@@ -678,7 +616,6 @@ func registerHotkeys() {
 		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+X")
 	}
 
-	// Language toggle: Ctrl+Alt+L
 	logger.Info("[Hotkey] Registering Ctrl+Alt+L for language toggle...")
 	if err := hkMgr.Register(hk.MOD_CONTROL|hk.MOD_ALT, 0x4C, "Ctrl+Alt+L (Language Toggle)", func() {
 		logger.Info("[Hotkey] Ctrl+Alt+L pressed - toggling language")
@@ -698,7 +635,6 @@ func registerHotkeys() {
 		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+L")
 	}
 
-	// Microphone cycle: Ctrl+Alt+M
 	logger.Info("[Hotkey] Registering Ctrl+Alt+M for mic cycle...")
 	if err := hkMgr.Register(hk.MOD_CONTROL|hk.MOD_ALT, 0x4D, "Ctrl+Alt+M (Cycle Mic)", func() {
 		logger.Info("[Hotkey] Ctrl+Alt+M pressed - cycling microphone")
@@ -711,7 +647,6 @@ func registerHotkeys() {
 		logger.Info("[Hotkey] Successfully registered Ctrl+Alt+M")
 	}
 
-	// Ultra Fast toggle: Ctrl+Alt+U
 	logger.Info("[Hotkey] Registering Ctrl+Alt+U for Ultra Fast toggle...")
 	if err := hkMgr.Register(hk.MOD_CONTROL|hk.MOD_ALT, 0x55, "Ctrl+Alt+U (Ultra Fast)", func() {
 		logger.Info("[Hotkey] Ctrl+Alt+U pressed - toggling Ultra Fast mode")
@@ -768,12 +703,8 @@ func vadAndSTTManager(
 			silenceMs = 3000
 		}
 		if cfg.Audio.BatteryBudgetSaver && silenceMs > 1500 {
-			// Reduce trailing audio billed after the user stops speaking. A shorter
-			// cutoff can split long pauses into separate Deepgram requests.
 			silenceMs = 1500
 		} else if effectiveZeroLatency() && silenceMs < 2500 {
-			// Ultra Fast should stream interim text quickly, not chop utterances after
-			// tiny pauses. Short 700ms cutoffs caused missing sentence endings.
 			silenceMs = 2500
 		}
 		return silenceMs
@@ -808,11 +739,8 @@ func vadAndSTTManager(
 			settings.MinStartThreshold, settings.NoiseMultiplier, settings.SpeechStartChunks)
 	}
 
-	// Pre-roll ring buffer: keeps last ~500ms of audio so first words aren't lost.
-	// VAD needs audio to detect speech - by the time it fires SpeechStarted,
-	// the beginning of the utterance has already passed. Pre-roll captures it.
-	const audioChunkMs = 80 // capture.go uses 1280 frames at 16kHz
-	const preRollSize = 6   // ~480ms at ~80ms/chunk
+	const audioChunkMs = 80
+	const preRollSize = 6
 	preRoll := make([][]int16, 0, preRollSize)
 	streamGate := audio.NewStreamGate((1500+audioChunkMs-1)/audioChunkMs, 3)
 	var dailyUsage audio.DailyUsage
@@ -828,7 +756,6 @@ func vadAndSTTManager(
 		logger.Info("[Usage] day=%s utterance_streamed=%.1fs utterance_voiced=%.1fs streamed_today=%.1fs voiced_today=%.1fs",
 			day, streamed.Seconds(), voiced.Seconds(), streamedToday.Seconds(), voicedToday.Seconds())
 	}
-	// pushPreRoll appends the newest chunk to the fixed-size pre-roll ring buffer.
 	pushPreRoll := func(chunk []int16) {
 		if len(preRoll) >= preRollSize {
 			copy(preRoll, preRoll[1:])
@@ -837,32 +764,23 @@ func vadAndSTTManager(
 			preRoll = append(preRoll, chunk)
 		}
 	}
-	var silenceStartTime time.Time // when VAD last detected silence (for delayed context reset)
+	var silenceStartTime time.Time
 
-	// Per-app volume ducking for Chrome/Edge
 	logger.Info("[AppVolumeDucker] Initializing with duck volume: %.0f%%", cfg.Audio.DuckVolume*100)
 	ducker := audio.NewAppVolumeDucker(cfg.Audio.DuckVolume)
 
-	// Media ducking / acoustic-echo-gate tuning.
 	const (
-		duckHangover     = 700 * time.Millisecond // keep media ducked this long after the last voiced chunk
-		duckVoiceFloor   = 0.018                  // min RMS counted as voice energy (above YouTube bleed)
-		systemAudioFloor = 0.01                   // render peak above this == something is playing
-		echoGateRatio    = 0.12                   // mic must exceed this fraction of the render peak to be speech
-		minEchoGate      = 0.02                   // never gate below this absolute RMS
+		duckHangover     = 700 * time.Millisecond
+		duckVoiceFloor   = 0.018
+		systemAudioFloor = 0.01
+		echoGateRatio    = 0.12
+		minEchoGate      = 0.02
 	)
-	// Tracks the last chunk that carried voice energy so ducking can be restored
-	// on a short hangover instead of waiting for the STT silence threshold.
 	var lastVoiceActivity time.Time
 
-	// Ghost speech detection: if VAD says "speaking" but Deepgram returns no
-	// actual text for this long, background noise is triggering the VAD.
-	// Force-close the STT connection so the icon goes back to standby.
 	noTextTimeout := effectiveNoTextTimeout()
-	var lastTextNano atomic.Int64 // tracks when real text was last received
+	var lastTextNano atomic.Int64
 
-	// After ghost speech is detected, suppress VAD for a cooldown period
-	// to prevent immediate re-triggering from the same background noise.
 	const ghostCooldown = 30 * time.Second
 	var ghostCooldownUntil time.Time
 
@@ -874,8 +792,8 @@ func vadAndSTTManager(
 		}
 	}()
 	var sttAudioTx chan []int16
-	var sttDoneCh chan struct{} // closed when STT goroutine exits (connection dead)
-	var textBridge chan string  // intermediary channel to track text timing
+	var sttDoneCh chan struct{}
+	var textBridge chan string
 	var connectionStarted time.Time
 	var currentUtteranceHasText atomic.Bool
 	var emptyUtteranceCount atomic.Int64
@@ -948,11 +866,6 @@ func vadAndSTTManager(
 		}
 	}
 
-	// Independent meeting/recording detection ticker.
-	// Runs every 1s regardless of audio flow so auto-pause works even when
-	// the mic is dead, in monitor mode, or the audio channel is nil.
-	// The detectors themselves have internal caches (3s meeting, 2s recording)
-	// so the actual syscalls are throttled despite the fast ticker.
 	meetingTicker := time.NewTicker(1 * time.Second)
 	defer meetingTicker.Stop()
 
@@ -980,7 +893,6 @@ func vadAndSTTManager(
 			runPushToTalk(ctx, audioRx, textTx, stateManager, vadChangeCh, releaseCapture)
 			continue
 		}
-		// When paused, disable ALL processing (zero CPU)
 		var activeAudioRx <-chan []int16
 		var activeMeetingTick <-chan time.Time
 		if s := stateManager.Get(); !stateManager.PushToTalkEnabled() && s != state.Paused && s != state.MicConflict {
@@ -1017,13 +929,11 @@ func vadAndSTTManager(
 				endCurrentUtterance("mic_released")
 				_ = ducker.Restore()
 			}
-			// Clear stale pre-roll on any state change (e.g., unpause after hours)
 			preRoll = preRoll[:0]
 			continue
 
 		case <-settingsChangedCh:
 			streamLifetime.Close("settings_changed")
-			// Settings changed - close active STT connection
 			if sttCancel != nil {
 				logger.Info("[VAD] Settings changed - closing active STT connection")
 				fmt.Println("[VAD] Settings changed - reconnecting with new settings")
@@ -1035,10 +945,9 @@ func vadAndSTTManager(
 				sttAudioTx = nil
 			}
 			sttDoneCh = nil
-			textBridge = nil // don't close - bridge goroutine exits via sttCtx
+			textBridge = nil
 			connectionStarted = time.Time{}
 			endCurrentUtterance("settings_changed")
-			// Recreate VAD with potentially changed silence/noise settings.
 			silenceMs = effectiveSilenceMs()
 			noTextTimeout = effectiveNoTextTimeout()
 			if effectiveZeroLatency() {
@@ -1059,13 +968,9 @@ func vadAndSTTManager(
 			}
 
 		case <-activeMeetingTick:
-			// Independent meeting/recording check - fires even when mic is dead
-			// or audio channel is nil. Disabled entirely when paused (channel is nil).
 			currentState := stateManager.Get()
 			meetingActive := cfg.Audio.AutoPauseOnMedia && audio.IsMeetingActive()
 			recordingActive := cfg.Audio.AutoPauseOnMedia && audio.IsRecordingActive()
-			// Only auto-pause on media if ducking is off. When ducking is enabled,
-			// the user wants to keep dictating with lowered media volume.
 			mediaPlaying := cfg.Audio.AutoPauseOnMedia && !cfg.Audio.DuckEnabled && audio.IsMediaPlaying()
 
 			if meetingActive || recordingActive || mediaPlaying {
@@ -1081,7 +986,6 @@ func vadAndSTTManager(
 						fmt.Println("[Meeting] In a call - pausing dictation")
 					}
 					streamLifetime.Close("media_auto_pause")
-					// Close any active STT connection
 					if sttCancel != nil {
 						sttCancel()
 						sttCancel = nil
@@ -1117,10 +1021,6 @@ func vadAndSTTManager(
 
 			currentState := stateManager.Get()
 
-			// Auto-pause during active meetings or screen recordings
-			// Note: media playback detection is handled by the meetingTicker only,
-			// not here on every audio chunk, because IsMediaPlaying() does heavy
-			// COM calls that can hang and block this entire goroutine.
 			meetingActive := cfg.Audio.AutoPauseOnMedia && audio.IsMeetingActive()
 			recordingActive := cfg.Audio.AutoPauseOnMedia && audio.IsRecordingActive()
 
@@ -1139,7 +1039,6 @@ func vadAndSTTManager(
 				}
 			}
 
-			// Skip VAD during ghost speech cooldown
 			if time.Now().Before(ghostCooldownUntil) {
 				pushPreRoll(audioChunk)
 				continue
@@ -1147,11 +1046,6 @@ func vadAndSTTManager(
 
 			chunkRMS := audio.ChunkRMS(audioChunk)
 
-			// Acoustic echo gate: while something is playing through the speakers,
-			// the bleed the microphone picks up is much quieter than the render
-			// level. Treat those chunks as system audio (not speech) so background
-			// YouTube/music cannot start a false utterance. Only gates the start of
-			// speech - it never cuts an utterance that is already in progress.
 			if cfg.Audio.IgnoreSystemAudio && currentState != state.Speaking && currentState != state.PushToTalkRecording {
 				if peak := audio.SystemOutputPeak(); peak > systemAudioFloor {
 					gate := float64(peak) * echoGateRatio
@@ -1165,10 +1059,6 @@ func vadAndSTTManager(
 				}
 			}
 
-			// Energy-driven ducking with a short hangover. Ducking follows voiced
-			// microphone energy rather than the STT silence threshold, so media
-			// volume comes back up promptly after the last word instead of waiting
-			// for the (potentially multi-second) silence timeout.
 			if cfg.Audio.DuckEnabled {
 				voiceThreshold := vad.LastThreshold()
 				if voiceThreshold < duckVoiceFloor {
@@ -1202,15 +1092,11 @@ func vadAndSTTManager(
 				logger.Info("[VAD] Speech started (RMS %.4f, threshold %.4f, noise %.4f)", vad.LastRMS(), vad.LastThreshold(), vad.NoiseFloor())
 				fmt.Println("[VAD] Speech started")
 
-				// In Ultra Fast mode, reset keyboard context if silence was long enough
-				// that we've likely switched contexts (>3s). Short gaps (<3s) keep context
-				// so late Deepgram results still get proper spacing.
 				if effectiveZeroLatency() && !silenceStartTime.IsZero() && time.Since(silenceStartTime) > 3*time.Second {
 					sim.ResetContext()
 					logger.Debug("[VAD] Reset keyboard context after %.1fs silence", time.Since(silenceStartTime).Seconds())
 				}
 
-				// Duck Chrome/Edge volume
 				if !meetingActive && cfg.Audio.DuckEnabled {
 					if err := ducker.Duck(); err != nil {
 						logger.Error("[AppVolumeDucker] Failed to duck: %v", err)
@@ -1219,7 +1105,6 @@ func vadAndSTTManager(
 
 				stateManager.Set(state.Speaking)
 
-				// Reset ghost speech timer
 				lastTextNano.Store(time.Now().UnixNano())
 				currentUtteranceHasText.Store(false)
 
@@ -1263,9 +1148,6 @@ func vadAndSTTManager(
 					sttDoneCh = make(chan struct{})
 					connectionStarted = time.Now()
 
-					// Text bridge: forwards text to keyboard simulator while tracking
-					// the last time real text was received (for ghost speech detection).
-					// The STT goroutine owns and closes textBridge after StartStreaming returns.
 					bridgeUtterance := activeUtterance
 					bridgeTracksCurrentUtterance := effectiveZeroLatency()
 					textBridge = make(chan string, 10)
@@ -1317,7 +1199,6 @@ func vadAndSTTManager(
 					}(engine, sttCtx, streamCancel, sttAudioTx, textBridge, sttDoneCh, bridgeUtterance, bridgeTracksCurrentUtterance)
 				}
 
-				// Flush pre-roll buffer (captures audio BEFORE VAD fired)
 				if len(preRoll) > 0 {
 					logger.Info("[VAD] Flushing %d pre-roll chunks (~%dms)", len(preRoll), len(preRoll)*audioChunkMs)
 					for _, chunk := range preRoll {
@@ -1326,12 +1207,10 @@ func vadAndSTTManager(
 					preRoll = preRoll[:0]
 				}
 
-				// Send the current chunk that triggered SpeechStarted
 				sendSTTAudio(audioChunk)
 
 			case audio.Speaking:
 				if sttAudioTx != nil {
-					// Ghost speech check: no real text for too long = background noise.
 					lastText := time.Unix(0, lastTextNano.Load())
 					if time.Since(lastText) > noTextTimeout {
 						streamLifetime.Close("ghost_speech_timeout")
@@ -1351,7 +1230,7 @@ func vadAndSTTManager(
 						close(sttAudioTx)
 						sttAudioTx = nil
 						sttDoneCh = nil
-						textBridge = nil // don't close - bridge goroutine exits via sttCtx
+						textBridge = nil
 						connectionStarted = time.Time{}
 						logUsage()
 						endCurrentUtterance("ghost_speech_timeout")
@@ -1370,7 +1249,6 @@ func vadAndSTTManager(
 				logUsage()
 				fmt.Println("[VAD] Silence detected")
 
-				// Restore Chrome/Edge volume
 				if cfg.Audio.DuckEnabled {
 					if err := ducker.Restore(); err != nil {
 						logger.Error("[AppVolumeDucker] Failed to restore: %v", err)
@@ -1378,9 +1256,6 @@ func vadAndSTTManager(
 				}
 
 				if effectiveZeroLatency() {
-					// Zero-latency mode: keep connection alive, let Deepgram's
-					// endpointing handle finalization naturally. Don't send Finalize
-					// as it cuts off words prematurely (e.g., "outstanding" → "out").
 					logger.Info("[VAD] Silence detected (RMS %.4f) - keeping persistent connection (zero-latency)", vad.LastRMS())
 					if !currentUtteranceHasText.Load() {
 						emptyCount := emptyUtteranceCount.Add(1)
@@ -1406,7 +1281,6 @@ func vadAndSTTManager(
 					silenceStartTime = time.Now()
 					scheduleUtteranceEnd(activeUtterance, "silence_detected", 5*time.Second)
 				} else {
-					// Normal/Saver mode: close the Deepgram request after the utterance.
 					logger.Info("[VAD] Silence detected - closing STT connection")
 					if sttCancel != nil {
 						sttCancel()
@@ -1417,19 +1291,16 @@ func vadAndSTTManager(
 						sttAudioTx = nil
 					}
 					sttDoneCh = nil
-					textBridge = nil // don't close - bridge goroutine exits via sttCtx/STT goroutine
+					textBridge = nil
 					connectionStarted = time.Time{}
 					scheduleUtteranceEnd(activeUtterance, "silence_detected", 5*time.Second)
 				}
 
 				vad.Reset()
 				if !effectiveZeroLatency() {
-					// Normal mode: reset keyboard context so next session starts fresh.
-					// In Ultra Fast mode, Deepgram sends late results after VAD silence
-					// that still need proper spacing — don't reset lastChar.
 					sim.ResetContext()
 				}
-				preRoll = preRoll[:0] // Clear pre-roll for next utterance
+				preRoll = preRoll[:0]
 
 				if mediaCache := audio.IsMediaPlayingCached(); mediaCache {
 					logger.Info("[VAD] Media still playing - returning to MediaPaused")
@@ -1439,9 +1310,7 @@ func vadAndSTTManager(
 				}
 
 			case audio.Silence:
-				// Collect into pre-roll ring buffer for next speech start
 				if len(preRoll) >= preRollSize {
-					// Shift left: drop oldest, append newest
 					copy(preRoll, preRoll[1:])
 					preRoll[len(preRoll)-1] = audioChunk
 				} else {

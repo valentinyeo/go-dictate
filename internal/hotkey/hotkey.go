@@ -17,7 +17,7 @@ const (
 	MOD_CONTROL = 0x0002
 	MOD_SHIFT   = 0x0004
 	WM_HOTKEY   = 0x0312
-	WM_APP      = 0x8000 // custom message to wake up GetMessageW
+	WM_APP      = 0x8000
 )
 
 var (
@@ -41,7 +41,6 @@ type MSG struct {
 	Pt     struct{ X, Y int32 }
 }
 
-// Registration holds a pending hotkey to register on the message loop thread.
 type Registration struct {
 	ID          int
 	Modifiers   uintptr
@@ -51,15 +50,12 @@ type Registration struct {
 	Result      chan error
 }
 
-// Manager runs a single OS-thread-locked message loop using blocking
-// GetMessageW. Zero CPU when idle — the thread sleeps in the kernel
-// until a WM_HOTKEY arrives.
 type Manager struct {
 	mu       sync.Mutex
 	hotkeys  map[int]func()
 	nextID   int
 	regCh    chan Registration
-	threadID uint32 // set by message loop goroutine
+	threadID uint32
 	ready    chan struct{}
 	started  bool
 }
@@ -83,7 +79,7 @@ func (m *Manager) Register(modifiers, vkCode uintptr, description string, callba
 
 	if needStart {
 		go m.messageLoop()
-		<-m.ready // wait for loop thread to be ready
+		<-m.ready
 	}
 
 	reg := Registration{
@@ -96,7 +92,6 @@ func (m *Manager) Register(modifiers, vkCode uintptr, description string, callba
 	}
 	m.regCh <- reg
 
-	// Wake up GetMessageW so it drains the registration channel
 	tid := atomic.LoadUint32(&m.threadID)
 	procPostThreadMessage.Call(uintptr(tid), WM_APP, 0, 0)
 
@@ -107,10 +102,8 @@ func (m *Manager) messageLoop() {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	// Store thread ID so Register can post messages to wake us up
 	tid, _, _ := procGetCurrentThreadId.Call()
 	atomic.StoreUint32(&m.threadID, uint32(tid))
-	// Create the message queue before Register posts its first wake-up.
 	var initial MSG
 	procPeekMessage.Call(uintptr(unsafe.Pointer(&initial)), 0, 0, 0, 0)
 	close(m.ready)
@@ -119,16 +112,14 @@ func (m *Manager) messageLoop() {
 
 	var msg MSG
 	for {
-		// GetMessageW blocks until a message is available — zero CPU while waiting.
 		ret, _, _ := procGetMessage.Call(
 			uintptr(unsafe.Pointer(&msg)),
 			0, 0, 0,
 		)
 		if int32(ret) <= 0 {
-			return // WM_QUIT or error
+			return
 		}
 
-		// Drain any pending registrations
 		m.drainRegistrations()
 
 		if msg.Msg == WM_HOTKEY {
@@ -163,8 +154,6 @@ func (m *Manager) drainRegistrations() {
 	}
 }
 
-// RegisterHold sleeps in RegisterHotKey while idle and checks for release only
-// during a hold. MOD_NOREPEAT and the atomic guard suppress keyboard repeats.
 func (m *Manager) RegisterHold(ctx context.Context, modifiers, vk uintptr, description string, callback func(bool)) error {
 	var held atomic.Bool
 	return m.Register(modifiers|0x4000, vk, description, func() {
@@ -200,8 +189,6 @@ func chordDown(modifiers, vk uintptr) bool {
 		(modifiers&MOD_SHIFT == 0 || keyDown(0x10))
 }
 
-// WaitForModifiersReleased prevents a held shortcut from changing pasted text
-// into an application command. It has no polling cost outside text delivery.
 func WaitForModifiersReleased(ctx context.Context) bool {
 	for keyDown(0x11) || keyDown(0x12) || keyDown(0x10) || keyDown(0x5B) || keyDown(0x5C) {
 		timer := time.NewTimer(20 * time.Millisecond)

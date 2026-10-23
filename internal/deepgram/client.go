@@ -26,7 +26,7 @@ type Client struct {
 	smartFormat bool
 	fillerWords bool
 	keyterms    []string
-	useInterim  bool // Ultra Fast mode: emit interim results for instant feedback
+	useInterim  bool
 	holdback    bool
 }
 
@@ -97,7 +97,6 @@ func shouldAppendRaw(suffix string, emittedBefore bool) bool {
 }
 
 func (c *Client) startNovaStreaming(ctx context.Context, audioRx <-chan []int16, textTx chan<- string) error {
-	// Build URL with optional punctuation and dictation parameters
 	wsURL := fmt.Sprintf(
 		"wss://api.eu.deepgram.com/v1/listen?model=%s&encoding=linear16&sample_rate=16000&channels=1&language=%s",
 		c.model, c.language,
@@ -112,7 +111,6 @@ func (c *Client) startNovaStreaming(ctx context.Context, audioRx <-chan []int16,
 	}
 
 	if c.useInterim {
-		// Ultra Fast mode: stream interim results + fast endpointing
 		wsURL += "&interim_results=true&endpointing=200"
 	}
 
@@ -120,7 +118,6 @@ func (c *Client) startNovaStreaming(ctx context.Context, audioRx <-chan []int16,
 		wsURL += "&filler_words=true"
 	}
 
-	// Nova-3 keyterm prompting (replaces keywords for Nova-3)
 	for _, term := range c.keyterms {
 		wsURL += "&keyterm=" + url.QueryEscape(term)
 	}
@@ -131,7 +128,6 @@ func (c *Client) startNovaStreaming(ctx context.Context, audioRx <-chan []int16,
 	return c.streamNova(ctx, audioRx, textTx, wsURL, headers)
 }
 
-// streamNova accepts an endpoint so the stream lifecycle can be tested locally.
 func (c *Client) streamNova(ctx context.Context, audioRx <-chan []int16, textTx chan<- string, wsURL string, headers http.Header) error {
 	if c.session != nil {
 		ctx = c.session.ctx
@@ -153,7 +149,6 @@ func (c *Client) streamNova(ctx context.Context, audioRx <-chan []int16, textTx 
 	defer cancelDial()
 	logger.Info("[Deepgram] Connecting to %s", wsURL)
 
-	// Dial in background so we can buffer audio while connecting
 	type dialResult struct {
 		conn *websocket.Conn
 		err  error
@@ -176,7 +171,6 @@ func (c *Client) streamNova(ctx context.Context, audioRx <-chan []int16, textTx 
 		}
 	}()
 
-	// Buffer audio chunks while waiting for connection
 	var preBuffer [][]byte
 	var connected *websocket.Conn
 	input := audioRx
@@ -194,12 +188,10 @@ waitLoop:
 				logger.Error("[Deepgram] Connection failed: %v", result.err)
 				return fmt.Errorf("failed to connect: %w", result.err)
 			}
-			// Connection ready - break out to flush buffer and start streaming
 			connected = result.conn
 			break waitLoop
 		case chunk, ok := <-input:
 			if !ok {
-				// Keep buffered audio even when release precedes connection setup.
 				input = nil
 				continue
 			}
@@ -224,7 +216,6 @@ waitLoop:
 	}
 	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 
-	// Flush pre-buffered audio
 	logger.Info("[Deepgram] Connected successfully, flushing %d buffered chunks", len(preBuffer))
 	var lastAudioSendNano atomic.Int64
 	for _, b := range preBuffer {
@@ -235,16 +226,13 @@ waitLoop:
 	}
 	preBuffer = nil
 
-	// Channel for coordinating shutdown (use sync.Once to prevent double-close panic)
 	done := make(chan struct{})
 	var doneOnce sync.Once
 	closeDone := func() { doneOnce.Do(func() { close(done) }) }
 	defer closeDone()
 
-	// Mutex to protect websocket writes (gorilla/websocket does NOT allow concurrent writes)
 	var wsMu sync.Mutex
 
-	// Close websocket when context cancels to unblock ReadMessage
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -254,7 +242,6 @@ waitLoop:
 		}
 	}()
 
-	// Goroutine to send audio (with KeepAlive for persistent connections)
 	go func() {
 		keepAliveTicker := time.NewTicker(3 * time.Second)
 		defer keepAliveTicker.Stop()
@@ -266,7 +253,6 @@ waitLoop:
 				return
 			case audioChunk, ok := <-audioRx:
 				if !ok {
-					// CloseStream asks Deepgram to flush final words before closing.
 					wsMu.Lock()
 					conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 					err := writeMessage(websocket.TextMessage, []byte(`{"type":"CloseStream"}`))
@@ -286,7 +272,7 @@ waitLoop:
 				}
 
 				if len(audioChunk) == 0 {
-					continue // skip empty chunks
+					continue
 				}
 
 				bytes := make([]byte, len(audioChunk)*2)
@@ -321,39 +307,22 @@ waitLoop:
 		}
 	}()
 
-	// Receive transcripts (blocking)
-	//
-	// Ultra Fast interim tracking uses two variables:
-	//   dgText  = Deepgram's latest interim (may include corrections we can't type)
-	//   typedBy = byte offset into dgText up to which we've actually typed on screen
-	//
-	// When Deepgram corrects an earlier word, dgText updates but typedBy stays.
-	// Subsequent appends to dgText that extend beyond typedBy get typed normally.
 	interimHoldbackWords := 0
 	if c.holdback {
 		interimHoldbackWords = 1
 	}
-	var dgText string            // Deepgram's latest interim text
-	var typedBy int              // bytes of dgText we've typed on screen
-	var lastResultTime time.Time // when we last received a non-empty result
-	awaitInterim := false        // after a final resets state, ignore further finals until an interim arrives
-	lastFinalTranscript := ""    // suppress duplicate finals from the previous utterance
+	var dgText string
+	var typedBy int
+	var lastResultTime time.Time
+	awaitInterim := false
+	lastFinalTranscript := ""
 
-	// Deepgram sometimes closes a final EARLIER than the interims it already
-	// streamed ("...to see if it's" after we typed "...it's dictating"), then
-	// re-delivers the overhang at the start of the next segment ("dictating a
-	// lot faster."). Without tracking this, the overhang gets typed twice
-	// ("dictating dictating", "not happening not happening"). pendingCarry
-	// holds the typed-but-not-finalized overhang so the next segment's first
-	// interim can skip past it. Time-limited so it can't misfire on a
-	// coincidental match in a later utterance.
 	pendingCarry := ""
 	var pendingCarrySetAt time.Time
 
 	for {
 		messageType, message, err := conn.ReadMessage()
 		if err != nil {
-			// Context cancelled or connection closed - normal shutdown
 			closeDone()
 			return nil
 		}
@@ -376,27 +345,15 @@ waitLoop:
 				transcript = response.Channel.Alternatives[0].Transcript
 			}
 
-			// Log raw response for debugging
 			logger.Debug("Raw response - is_final: %v, text: '%s'", response.IsFinal, transcript)
 
 			if c.useInterim {
-				// Ultra Fast mode: append-only interim results (never backspace).
 				if response.IsFinal {
 					if transcript == "" {
-						// Empty finals carry no text. With endpointing=200 Deepgram
-						// emits them at brief endpoints even in the MIDDLE of an
-						// utterance. Resetting dgText/typedBy here made the next
-						// interim re-type the whole phrase from scratch
-						// ("I still can" -> "I still can. I still can dictate").
-						// Ignore them: a real utterance end arrives as a non-empty
-						// final, and VAD silence handles connection teardown.
 						logger.Debug("[Deepgram] Ignoring empty final (no state reset)")
 						continue
 					}
 					if awaitInterim && dgText == "" {
-						// Stale duplicate finals can arrive after an utterance reset.
-						// But sometimes Deepgram sends only a final for fresh speech
-						// (no interim first). Accept those if audio was just sent.
 						lastAudioSendBits := lastAudioSendNano.Load()
 						audioRecentlySent := lastAudioSendBits != 0 &&
 							time.Since(time.Unix(0, lastAudioSendBits)) <= 3*time.Second
@@ -408,20 +365,14 @@ waitLoop:
 						logger.Debug("[Deepgram] Accepting final without interim after fresh audio: '%s'", transcript)
 					}
 					if dgText != "" {
-						// Interims were typed. Check if final has new content
-						// beyond what we've typed (e.g., trailing punctuation or
-						// words that came after a correction).
 						if len(transcript) > typedBy {
-							// Find next word boundary after typedBy to avoid
-							// emitting partial word fragments from corrections
 							emitFrom := typedBy
 							if emitFrom > 0 && emitFrom < len(transcript) && transcript[emitFrom] != ' ' && transcript[emitFrom] != '.' && transcript[emitFrom] != ',' {
-								// Mid-word — skip to next space
 								idx := strings.IndexByte(transcript[emitFrom:], ' ')
 								if idx >= 0 {
 									emitFrom += idx
 								} else {
-									emitFrom = len(transcript) // no space found, skip
+									emitFrom = len(transcript)
 								}
 							}
 							if emitFrom < len(transcript) {
@@ -436,11 +387,6 @@ waitLoop:
 								}
 							}
 						} else if strings.HasPrefix(dgText, transcript) && typedBy > len(transcript) {
-							// Final ended EARLIER than the interims we already
-							// typed. Deepgram re-delivers the overhang at the
-							// start of the next segment — remember it so the
-							// next first-interim can skip it instead of typing
-							// it twice ("dictating dictating").
 							if carry := strings.TrimSpace(dgText[len(transcript):typedBy]); carry != "" {
 								pendingCarry = carry
 								pendingCarrySetAt = time.Now()
@@ -448,7 +394,6 @@ waitLoop:
 							}
 						}
 					} else if transcript != "" {
-						// No interims came through, emit final directly
 						logger.Transcript(transcript)
 						fmt.Printf("[Deepgram] Final (no interim): %s\n", transcript)
 						select {
@@ -465,29 +410,18 @@ waitLoop:
 					}
 					awaitInterim = true
 				} else if transcript != "" {
-					// Interim result — append only, never replace.
-					// If >10s since last result, reset state to prevent stale
-					// text from a previous utterance leaking into a new one.
-					// Must be long enough to survive Deepgram re-processing
-					// pauses during long utterances (2s was too aggressive —
-					// caused merged-text re-emission on normal speech gaps).
 					if dgText != "" && !lastResultTime.IsZero() && time.Since(lastResultTime) > 10*time.Second {
 						logger.Debug("[Deepgram] Stale interim state reset (%.1fs gap)", time.Since(lastResultTime).Seconds())
 						dgText = ""
 						typedBy = 0
 					}
 					lastResultTime = time.Now()
-					awaitInterim = false // fresh interim arrived, accept finals again
+					awaitInterim = false
 
 					if dgText == "" {
 						emitText, emitBy := emitStablePrefix(transcript, interimHoldbackWords)
-						// Skip a carried overhang from the previous final — that
-						// text is already on screen. typedBy must cover the
-						// skipped region too, or later appends would re-emit it.
 						if pendingCarry != "" {
 							carryLen := len(pendingCarry)
-							// Carry must end on a word boundary in the new
-							// transcript ("not" must not match "nothing").
 							boundaryOK := len(transcript) == carryLen ||
 								(len(transcript) > carryLen &&
 									(transcript[carryLen] == ' ' || transcript[carryLen] == '.' || transcript[carryLen] == ','))
@@ -518,11 +452,6 @@ waitLoop:
 							}
 						}
 					} else if strings.HasPrefix(transcript, dgText) {
-						// Progressive append — type only the new stable suffix.
-						// Important: emit from typedBy, not len(dgText). dgText includes
-						// the held-back unstable word, while typedBy is the number of bytes
-						// actually typed. Using len(dgText) skipped held words such as the
-						// initial "I" in "I mean" or "logs" in "the logs and the output".
 						skipTo := typedBy
 						_, emitBy := emitStablePrefix(transcript, interimHoldbackWords)
 						if skipTo < emitBy {
@@ -542,12 +471,9 @@ waitLoop:
 						}
 						dgText = transcript
 					} else {
-						// Correction — track Deepgram's version so future appends work.
-						// Try to emit new words beyond what we've already typed.
 						logger.Debug("[Deepgram] Interim correction: '%s' (typed %d bytes)", transcript, typedBy)
 						_, emitBy := emitStablePrefix(transcript, interimHoldbackWords)
 						if emitBy > typedBy {
-							// Find next word boundary to avoid partial fragments
 							emitFrom := typedBy
 							if emitFrom > 0 && emitFrom < emitBy && transcript[emitFrom] != ' ' && transcript[emitFrom] != '.' && transcript[emitFrom] != ',' {
 								idx := strings.IndexByte(transcript[emitFrom:emitBy], ' ')
@@ -575,7 +501,6 @@ waitLoop:
 					}
 				}
 			} else {
-				// Normal mode: only emit final results
 				if text := response.GetText(); text != nil {
 					logger.Transcript(*text)
 					fmt.Printf("[Deepgram] Transcript: %s\n", *text)

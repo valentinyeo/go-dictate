@@ -65,15 +65,6 @@ type DiagnosticsConfig struct {
 }
 
 type KeyboardConfig struct {
-	// Injection method for transcribed text:
-	//   "paste" (default) - put text on the clipboard and send Ctrl+V. The
-	//     terminal emulator converts the paste to plain input bytes, so it
-	//     works identically in cmd.exe, Windows Terminal, and tmux/SSH inside
-	//     them. Immune to the dropped-space bug: terminals (ConPTY) silently
-	//     drop space key-events from injected keystroke batches.
-	//   "type" - legacy per-character SendInput key events. Kept as an escape
-	//     hatch for targets where Ctrl+V does not paste.
-	// Paste automatically falls back to typing if the clipboard is unavailable.
 	Injection string `toml:"injection"`
 }
 
@@ -122,14 +113,11 @@ func LoadOrCreate() (*Config, error) {
 		return nil, fmt.Errorf("failed to get config path: %w", err)
 	}
 
-	// Check if config exists
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		// Create directory if it doesn't exist
 		if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 			return nil, fmt.Errorf("failed to create config directory: %w", err)
 		}
 
-		// Create default config
 		defaultCfg := Default()
 		if err := defaultCfg.Save(); err != nil {
 			return nil, fmt.Errorf("failed to save default config: %w", err)
@@ -137,7 +125,6 @@ func LoadOrCreate() (*Config, error) {
 		return &defaultCfg, nil
 	}
 
-	// Load existing config
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read config: %w", err)
@@ -148,7 +135,6 @@ func LoadOrCreate() (*Config, error) {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
 
-	// Existing configs predate [keyboard]; default to paste injection.
 	if cfg.Keyboard.Injection == "" {
 		cfg.Keyboard.Injection = "paste"
 	}
@@ -159,8 +145,6 @@ func LoadOrCreate() (*Config, error) {
 		migrated = true
 	}
 	if !hasTOMLKey(data, "smart_format") {
-		// Previous versions used the Punctuation tray item to send
-		// smart_format=true, so preserve that behavior for old configs.
 		cfg.Deepgram.SmartFormat = cfg.Deepgram.Punctuate
 		migrated = true
 	}
@@ -177,8 +161,6 @@ func LoadOrCreate() (*Config, error) {
 		migrated = true
 	}
 	if !hasTOMLKey(data, "ignore_system_audio") {
-		// Default new installs and old configs to rejecting speaker bleed so
-		// background media (YouTube, music) cannot trigger dictation.
 		cfg.Audio.IgnoreSystemAudio = true
 		migrated = true
 	}
@@ -209,14 +191,10 @@ func LoadOrCreate() (*Config, error) {
 		}
 	}
 	if cfg.VAD.EnergyThreshold <= 0 || cfg.VAD.EnergyThreshold < 0.01 {
-		// Values below ~0.01 caused fans, keyboard taps, and wireless mic noise
-		// to trigger endless empty utterances. Lift old configs to the safer floor.
 		cfg.VAD.EnergyThreshold = 0.012
 		migrated = true
 	}
 	if cfg.Profile == ProfileTerminalAgent && cfg.Audio.ZeroLatency && !cfg.Deepgram.Holdback {
-		// Type all but the newest unstable interim word. This is still fast, but it
-		// prevents many duplicated/missing word endings from Deepgram corrections.
 		cfg.Deepgram.Holdback = true
 		migrated = true
 	}
@@ -260,7 +238,6 @@ func (c *Config) Save() error {
 		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 
-	// Add comments
 	commented := fmt.Sprintf(`# Dictation App Configuration
 # Edit this file to configure the application
 # Get your Deepgram API key from: https://console.deepgram.com/
@@ -331,8 +308,6 @@ func NormalizeNoiseMode(mode string) string {
 	}
 }
 
-// Effective returns the VAD settings to use for the selected environment.
-// Train mode only raises minimums, so stricter user-provided values remain intact.
 func (v VADConfig) Effective() VADConfig {
 	v.NoiseMode = NormalizeNoiseMode(v.NoiseMode)
 	if v.NoiseMode != NoiseModeTrain {
@@ -465,14 +440,11 @@ func OpenInEditor() error {
 		return err
 	}
 
-	// Windows: use cmd.exe to open with default text editor. CREATE_NO_WINDOW
-	// keeps the helper cmd.exe from flashing a terminal window (HideWindow is
-	// ignored when Windows Terminal is the default console host).
 	proc := &os.ProcAttr{
 		Files: []*os.File{os.Stdin, os.Stdout, os.Stderr},
 		Sys: &syscall.SysProcAttr{
 			HideWindow:    true,
-			CreationFlags: 0x08000000, // CREATE_NO_WINDOW
+			CreationFlags: 0x08000000,
 		},
 	}
 	_, err = os.StartProcess("C:\\Windows\\System32\\cmd.exe", []string{"/C", "start", "", configPath}, proc)

@@ -33,14 +33,12 @@ func Init() error {
 
 		logPath := filepath.Join(logDir, "debug.log")
 
-		// Open in append mode, create if doesn't exist
 		instance = &Logger{}
 		instance.file, err = os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
 			return
 		}
 
-		// Write session start marker
 		instance.write("======================================")
 		instance.write(fmt.Sprintf("SESSION START: %s", time.Now().Format("2006-01-02 15:04:05")))
 		instance.write("======================================")
@@ -58,7 +56,7 @@ func (l *Logger) write(msg string) {
 
 	timestamp := time.Now().Format("2006-01-02 15:04:05.000")
 	fmt.Fprintf(l.file, "[%s] %s\n", timestamp, msg)
-	l.file.Sync() // Flush immediately
+	l.file.Sync()
 }
 
 func Info(format string, args ...interface{}) {
@@ -67,7 +65,7 @@ func Info(format string, args ...interface{}) {
 	}
 	msg := fmt.Sprintf(format, args...)
 	instance.write("[INFO] " + msg)
-	fmt.Println(msg) // Also print to console
+	fmt.Println(msg)
 }
 
 func Error(format string, args ...interface{}) {
@@ -76,7 +74,7 @@ func Error(format string, args ...interface{}) {
 	}
 	msg := fmt.Sprintf(format, args...)
 	instance.write("[ERROR] " + msg)
-	fmt.Println(msg) // Also print to console
+	fmt.Println(msg)
 }
 
 func Debug(format string, args ...interface{}) {
@@ -108,9 +106,6 @@ func Close() {
 	}
 }
 
-// RedirectStderr redirects stderr (panic output) to a crash log file.
-// Since we build with -H windowsgui, panics go nowhere and the app dies silently.
-// This captures them so we can diagnose crashes.
 func RedirectStderr() {
 	appData := os.Getenv("APPDATA")
 	if appData == "" {
@@ -121,11 +116,9 @@ func RedirectStderr() {
 	if err != nil {
 		return
 	}
-	// Set the Windows stderr handle to our file
 	kernel32 := syscall.NewLazyDLL("kernel32.dll")
 	setStdHandle := kernel32.NewProc("SetStdHandle")
-	const STD_ERROR_HANDLE = ^uintptr(12 - 1) // 0xFFFFFFF4 = (DWORD)-12
+	const STD_ERROR_HANDLE = ^uintptr(12 - 1)
 	setStdHandle.Call(STD_ERROR_HANDLE, f.Fd())
-	// Also set os.Stderr so fmt.Fprintf(os.Stderr, ...) works
 	os.Stderr = f
 }

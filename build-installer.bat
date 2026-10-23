@@ -4,7 +4,6 @@ echo  Building NSIS Installer
 echo ================================================
 echo.
 
-REM Check if NSIS is installed
 where makensis >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERROR] NSIS not found!
@@ -22,7 +21,6 @@ echo [OK] NSIS found:
 makensis /VERSION
 echo.
 
-REM Check if dictation.exe exists
 if not exist "dictation.exe" (
     echo [ERROR] dictation.exe not found!
     echo Please build the application first:
@@ -35,7 +33,6 @@ if not exist "dictation.exe" (
 echo [OK] dictation.exe found
 echo.
 
-REM Create LICENSE file if it doesn't exist
 if not exist "LICENSE" (
     echo Creating placeholder LICENSE file...
     echo MIT License > LICENSE
@@ -47,7 +44,6 @@ if not exist "LICENSE" (
     echo.
 )
 
-REM Build the installer
 echo [BUILD] Creating installer...
 makensis installer.nsi
 
@@ -64,7 +60,6 @@ echo  Installer built successfully!
 echo ================================================
 echo.
 
-REM Show installer details
 for %%F in (DictationSetup-*.exe) do (
     echo Installer: %%F
     echo Size: %%~zF bytes
