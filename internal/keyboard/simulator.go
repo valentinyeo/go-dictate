@@ -27,7 +27,7 @@ type keyboardInput struct {
 	dwFlags     uint32
 	time        uint32
 	dwExtraInfo uintptr
-	_           [8]byte // padding
+	_           [8]byte
 }
 
 type input struct {
@@ -46,10 +46,9 @@ var (
 
 const (
 	wmSysCommand   = 0x0112
-	scConsolePaste = 0xFFF1 // conhost system-menu "Edit > Paste" command ID
+	scConsolePaste = 0xFFF1
 )
 
-// foregroundWindowClass returns the focused top-level window and its class name.
 func foregroundWindowClass() (uintptr, string) {
 	hwnd, _, _ := getForegroundWindowProc.Call()
 	if hwnd == 0 {
@@ -65,16 +64,12 @@ func foregroundWindowClass() (uintptr, string) {
 
 type Simulator struct {
 	lastChar       rune
-	skipPeriodOnce bool // suppress the auto-period for the next emit (set by ResetContext)
-	typeMode       bool // config escape hatch: per-character key events instead of paste
+	skipPeriodOnce bool
+	typeMode       bool
 	inputSink      func([]input) (int, error)
 	modifierState  func() []string
 	modifierWait   func(context.Context) bool
 
-	// Clipboard save/restore state for paste injection. The user's clipboard
-	// is captured before the first paste of a burst and restored after a
-	// debounce window with no further pastes. Guarded by clipMu because the
-	// restore fires on a timer goroutine.
 	clipMu          sync.Mutex
 	clipSaved       bool
 	savedClip       string
@@ -93,19 +88,10 @@ func NewSimulator() *Simulator {
 	}
 }
 
-// SetTypeMode switches text delivery to legacy per-character key events
-// (config: [keyboard] injection = "type"). Default is clipboard paste.
 func (s *Simulator) SetTypeMode(enabled bool) {
 	s.typeMode = enabled
 }
 
-// ResetContext is called when silence ends an utterance. A pause is NOT a new
-// text field, so we must NOT clear lastChar — doing that dropped the leading
-// space and glued the next word onto the previous text ("opened" + "Let's" ->
-// "openedLet's") whenever the user paused >3s mid-dictation. Instead we keep
-// lastChar (so the next word stays space-separated) and only suppress the
-// auto-period for the next emit, so resuming in a genuinely fresh field can't
-// inject a stray leading ". ".
 func (s *Simulator) ResetContext() {
 	s.skipPeriodOnce = true
 }
@@ -119,12 +105,6 @@ func (s *Simulator) Run(ctx context.Context, textRx <-chan string) {
 			if !ok {
 				return
 			}
-			// Coalesce any fragments that are already queued into a single
-			// delivery. Ultra Fast mode emits many tiny fragments (interim
-			// diffs + finals) in rapid bursts; delivering each separately
-			// saturates the target window's input handling. The drain is
-			// non-blocking, so we only absorb fragments that have already
-			// arrived — no added latency.
 			payload := s.preparePayload(text)
 		drain:
 			for {
@@ -149,15 +129,11 @@ func (s *Simulator) Run(ctx context.Context, textRx <-chan string) {
 	}
 }
 
-// preparePayload applies raw-mode (\x01) handling and auto-spacing to a single
-// fragment, logs it, and advances lastChar. Delivery happens separately so
-// several fragments can be coalesced into one paste/injection.
 func (s *Simulator) preparePayload(text string) string {
 	if text == "" {
 		return ""
 	}
 
-	// Raw mode: \x01 prefix means skip auto-spacing (used by interim result diffs)
 	raw := false
 	if text[0] == '\x01' {
 		raw = true
@@ -167,8 +143,6 @@ func (s *Simulator) preparePayload(text string) string {
 		}
 	}
 
-	// Add space before text if we've already typed something
-	// (i.e., this isn't the very first text being typed)
 	textToType := text
 	if !raw {
 		if s.lastChar != 0 {
@@ -179,7 +153,6 @@ func (s *Simulator) preparePayload(text string) string {
 				textToType = " " + text
 			}
 		}
-		// Consumed by the first real (non-raw) emit after a ResetContext.
 		s.skipPeriodOnce = false
 	}
 
@@ -193,8 +166,6 @@ func (s *Simulator) preparePayload(text string) string {
 	return textToType
 }
 
-// deliver sends the payload to the focused window. Backspace runs become
-// VK_BACK key events; text segments are pasted (or typed in typeMode).
 func (s *Simulator) deliver(ctx context.Context, payload string) {
 	var observed []string
 	for len(payload) > 0 {
@@ -227,15 +198,6 @@ func (s *Simulator) deliver(ctx context.Context, payload string) {
 	}
 }
 
-// insertText delivers a text segment. Default is clipboard paste: terminals
-// (ConPTY — cmd.exe, Windows Terminal, and therefore tmux/SSH inside them)
-// silently DROP space key-events from injected keystroke batches, even within
-// a single atomic SendInput call and regardless of Unicode vs VK_SPACE
-// encoding ("cloud code" -> "cloudcode", "accuracy of whatever" ->
-// "accuracyofwhatever"). Paste is immune: the terminal emulator itself reads
-// the clipboard and forwards literal bytes to whatever runs inside, so tmux
-// needs no clipboard support of its own. Falls back to key events if the
-// clipboard is unavailable.
 func (s *Simulator) insertText(ctx context.Context, text string, modifiers []string) []string {
 	if text == "" {
 		return modifiers
@@ -368,15 +330,11 @@ func unicodeTypingEvents(text string) []input {
 	return inputs
 }
 
-// typingEvents converts text to per-character SendInput key events
-// (legacy path / paste fallback).
 func typingEvents(text string) []input {
 	runes := []rune(text)
 	inputs := make([]input, 0, len(runes)*2)
 	for _, ch := range runes {
 		if ch == ' ' {
-			// Real spacebar key — Unicode-injected spaces are dropped by
-			// terminals far more often than VK_SPACE presses.
 			inputs = append(inputs,
 				input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkSpace}},
 				input{inputType: inputKeyboard, ki: keyboardInput{wVk: vkSpace, dwFlags: keyeventfKeyUp}},
@@ -503,9 +461,6 @@ func (s *Simulator) sendInputs(ctx context.Context, inputs []input) {
 	}
 }
 
-// needsPeriod returns true if a period should be inserted between two utterances.
-// Detects when the previous utterance ended without sentence-ending punctuation
-// and the new utterance starts with an uppercase letter (indicating a new sentence).
 func needsPeriod(lastChar, firstChar rune) bool {
 	if lastChar == '.' || lastChar == '!' || lastChar == '?' || lastChar == ':' || lastChar == ';' || lastChar == ',' {
 		return false
@@ -514,8 +469,8 @@ func needsPeriod(lastChar, firstChar rune) bool {
 }
 
 const (
-	vkBack    = 0x08 // VK_BACK virtual key code
-	vkSpace   = 0x20 // VK_SPACE virtual key code
-	vkControl = 0x11 // VK_CONTROL virtual key code
-	vkV       = 0x56 // 'V' virtual key code
+	vkBack    = 0x08
+	vkSpace   = 0x20
+	vkControl = 0x11
+	vkV       = 0x56
 )

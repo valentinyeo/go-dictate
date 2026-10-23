@@ -8,9 +8,6 @@ import (
 	"github.com/valen/go-dictate/internal/logger"
 )
 
-// PowerMonitor listens for Windows power events (sleep/wake) via
-// RegisterPowerSettingNotification. Sends on the Wake channel when
-// the system resumes from sleep/hibernate.
 type PowerMonitor struct {
 	Wake chan struct{}
 	stop chan struct{}
@@ -18,26 +15,24 @@ type PowerMonitor struct {
 }
 
 var (
-	user32                            = syscall.NewLazyDLL("user32.dll")
-	procRegisterClassExW              = user32.NewProc("RegisterClassExW")
-	procCreateWindowExW               = user32.NewProc("CreateWindowExW")
-	procDefWindowProcW                = user32.NewProc("DefWindowProcW")
-	procGetMessageW                   = user32.NewProc("GetMessageW")
-	procTranslateMessage              = user32.NewProc("TranslateMessage")
-	procDispatchMessageW              = user32.NewProc("DispatchMessageW")
+	user32                               = syscall.NewLazyDLL("user32.dll")
+	procRegisterClassExW                 = user32.NewProc("RegisterClassExW")
+	procCreateWindowExW                  = user32.NewProc("CreateWindowExW")
+	procDefWindowProcW                   = user32.NewProc("DefWindowProcW")
+	procGetMessageW                      = user32.NewProc("GetMessageW")
+	procTranslateMessage                 = user32.NewProc("TranslateMessage")
+	procDispatchMessageW                 = user32.NewProc("DispatchMessageW")
 	procRegisterPowerSettingNotification = user32.NewProc("RegisterPowerSettingNotification")
-	procDestroyWindow                 = user32.NewProc("DestroyWindow")
+	procDestroyWindow                    = user32.NewProc("DestroyWindow")
 )
 
-// GUID_CONSOLE_DISPLAY_STATE: {6FE69556-704A-47A0-8F24-C28D936FDA47}
-// Notifies when display state changes (off/on/dimmed) — reliable wake indicator.
 var guidConsoleDisplayState = [16]byte{
 	0x56, 0x95, 0xE6, 0x6F, 0x4A, 0x70, 0xA0, 0x47,
 	0x8F, 0x24, 0xC2, 0x8D, 0x93, 0x6F, 0xDA, 0x47,
 }
 
 const (
-	wmPowerBroadcast    = 0x0218
+	wmPowerBroadcast      = 0x0218
 	pbtAPMResumeAutomatic = 0x0012
 	pbtPowerSettingChange = 0x8013
 )
@@ -69,7 +64,7 @@ type msg struct {
 type powerBroadcastSetting struct {
 	PowerSetting [16]byte
 	DataLength   uint32
-	Data         [1]byte // variable length
+	Data         [1]byte
 }
 
 var powerMonitorInstance *PowerMonitor
@@ -104,7 +99,7 @@ var powerWndProc = syscall.NewCallback(func(hwnd uintptr, msg uint32, wParam, lP
 			setting := (*powerBroadcastSetting)(unsafe.Pointer(lParam))
 			if setting.PowerSetting == guidConsoleDisplayState && setting.DataLength >= 1 {
 				displayState := setting.Data[0]
-				if displayState == 1 { // display ON = waking up
+				if displayState == 1 {
 					logger.Info("[Power] Display turned ON (wake detected)")
 					if powerMonitorInstance != nil {
 						select {
@@ -134,10 +129,10 @@ func (pm *PowerMonitor) run() {
 	hwnd, _, _ := procCreateWindowExW.Call(
 		0,
 		uintptr(unsafe.Pointer(className)),
-		0, // no title
-		0, // style
-		0, 0, 0, 0, // x, y, w, h
-		0, // HWND_MESSAGE would be better but 0 works
+		0,
+		0,
+		0, 0, 0, 0,
+		0,
 		0, 0, 0,
 	)
 	if hwnd == 0 {
@@ -145,11 +140,10 @@ func (pm *PowerMonitor) run() {
 		return
 	}
 
-	// Register for power setting notifications
 	procRegisterPowerSettingNotification.Call(
 		hwnd,
 		uintptr(unsafe.Pointer(&guidConsoleDisplayState)),
-		0, // DEVICE_NOTIFY_WINDOW_HANDLE
+		0,
 	)
 
 	logger.Info("[Power] Power monitor started, listening for sleep/wake events")
@@ -163,13 +157,12 @@ func (pm *PowerMonitor) run() {
 		default:
 		}
 
-		// GetMessage blocks until a message arrives
 		ret, _, _ := procGetMessageW.Call(
 			uintptr(unsafe.Pointer(&m)),
 			hwnd,
 			0, 0,
 		)
-		if ret == 0 || ret == uintptr(^uintptr(0)) { // WM_QUIT or error
+		if ret == 0 || ret == uintptr(^uintptr(0)) {
 			return
 		}
 		procTranslateMessage.Call(uintptr(unsafe.Pointer(&m)))

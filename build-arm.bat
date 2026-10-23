@@ -1,8 +1,6 @@
 @echo off
 echo Building go-dictate for Windows ARM64...
 
-REM Zig is the C toolchain for CGO (malgo), same as build.bat. On ARM64 laptops it is
-REM installed with winget (zig.zig), so use whatever zig is on PATH, else C:\Users\valen\zig.
 where zig >nul 2>nul || set PATH=C:\Users\valen\zig;%PATH%
 
 set GOOS=windows
@@ -11,12 +9,8 @@ set CGO_ENABLED=1
 set CC=zig cc -target aarch64-windows-gnu
 set CXX=zig c++ -target aarch64-windows-gnu
 
-REM With CGO the external linker produces the final exe and -H windowsgui is
-REM silently lost (binary becomes a console app). Force the GUI subsystem.
 set CGO_LDFLAGS=-Wl,--subsystem,windows
 
-REM rsrc_windows_arm64.syso carries the icon; regenerate with:
-REM   go run github.com/tc-hib/go-winres@latest make --arch arm64 --in winres/winres.json
 go build -ldflags="-s -w -H windowsgui" -trimpath -o go-dictate.exe .
 if errorlevel 1 goto failed
 

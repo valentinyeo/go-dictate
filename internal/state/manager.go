@@ -8,12 +8,12 @@ import (
 type AppState int
 
 const (
-	Active      AppState = iota // Listening, VAD running (grey icon)
-	Paused                      // User paused (red icon)
-	AutoPaused                  // VAD silence-paused (grey icon)
-	MediaPaused                 // Auto-paused due to media playback (amber icon)
-	Speaking                    // Actively transcribing (blue icon)
-	MicConflict                 // Mic in use by other app (red icon)
+	Active AppState = iota
+	Paused
+	AutoPaused
+	MediaPaused
+	Speaking
+	MicConflict
 	PushToTalkIdle
 	PushToTalkRecording
 	PushToTalkFinishing
@@ -80,10 +80,6 @@ func NewManager() *Manager {
 	}
 }
 
-// Changed returns a NEW channel that receives a signal whenever the state
-// changes. Each caller gets its own independent channel, so multiple
-// goroutines can all observe state changes without stealing signals from
-// each other. Call this once per goroutine and reuse the returned channel.
 func (m *Manager) Changed() <-chan struct{} {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -102,7 +98,6 @@ func (m *Manager) Set(newState AppState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Automatic VAD/media transitions must never reopen an idle PTT microphone.
 	if m.pushToTalk && newState != Paused && newState != MicConflict {
 		return
 	}
@@ -133,8 +128,6 @@ func (m *Manager) TogglePause() AppState {
 	return newState
 }
 
-// notifyAll sends a non-blocking signal to every subscriber.
-// Must be called with m.mu held.
 func (m *Manager) notifyAll() {
 	for _, ch := range m.subscribers {
 		select {
@@ -144,7 +137,6 @@ func (m *Manager) notifyAll() {
 	}
 }
 
-// SetPushToTalk changes the capture mode without overriding a manual pause.
 func (m *Manager) SetPushToTalk(enabled bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -168,7 +160,6 @@ func (m *Manager) PushToTalkEnabled() bool {
 	return m.pushToTalk
 }
 
-// Hold ignores repeats, manual pauses, and presses while a result is finishing.
 func (m *Manager) Hold(down bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

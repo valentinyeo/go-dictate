@@ -23,7 +23,7 @@ func TestPushToTalkReleaseDrainsAudioAndWaitsForFinal(t *testing.T) {
 	changed := manager.Changed()
 	manager.SetPushToTalk(true)
 	manager.Hold(true)
-	manager.Hold(false) // Release before the manager has even processed the press.
+	manager.Hold(false)
 	audio := make(chan []int16, 4)
 	audio <- []int16{1, 2}
 	released := false

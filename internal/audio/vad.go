@@ -9,14 +9,12 @@ import (
 type VADEvent int
 
 const (
-	SpeechStarted   VADEvent = iota // Speech just started
-	Speaking                        // Ongoing speech
-	SilenceDetected                 // Silence threshold reached
-	Silence                         // Ongoing silence
+	SpeechStarted VADEvent = iota
+	Speaking
+	SilenceDetected
+	Silence
 )
 
-// storeFloat64/loadFloat64 wrap the bit conversions needed to keep float64
-// values in atomic.Uint64 fields.
 func storeFloat64(a *atomic.Uint64, v float64) { a.Store(math.Float64bits(v)) }
 func loadFloat64(a *atomic.Uint64) float64     { return math.Float64frombits(a.Load()) }
 
@@ -35,7 +33,6 @@ func (e VADEvent) String() string {
 	}
 }
 
-// VADOptions controls the noise-resistant speech gate.
 type VADOptions struct {
 	AdaptiveNoise     bool
 	NoiseMultiplier   float32
@@ -57,9 +54,9 @@ type VoiceActivityDetector struct {
 	minStartThreshold float64
 	noiseFloor        float64
 	noiseFloorReady   bool
-	lastRMS           atomic.Uint64 // last computed RMS (float64 bits) for diagnostics
-	lastThreshold     atomic.Uint64 // last effective threshold (float64 bits) for diagnostics
-	lastNoiseFloor    atomic.Uint64 // last learned ambient RMS floor (float64 bits) for diagnostics
+	lastRMS           atomic.Uint64
+	lastThreshold     atomic.Uint64
+	lastNoiseFloor    atomic.Uint64
 }
 
 func NewVAD(energyThreshold float32, silenceThresholdMs uint64) *VoiceActivityDetector {
@@ -106,9 +103,6 @@ func (v *VoiceActivityDetector) Process(audioChunk []int16) VADEvent {
 		if !v.isSpeaking {
 			v.speechStartCount++
 			if v.speechStartCount < v.requiredSpeechChunks() {
-				// A single loud chunk is usually a key press, chair bump, or fan burst.
-				// Return Silence so the chunk remains in the pre-roll buffer if this
-				// becomes real speech on the following chunks.
 				return Silence
 			}
 		}
@@ -128,7 +122,6 @@ func (v *VoiceActivityDetector) Process(audioChunk []int16) VADEvent {
 		v.updateNoiseFloor(rms)
 	}
 
-	// Silence detected
 	if v.lastSpeechTime != nil {
 		silenceDuration := v.now().Sub(*v.lastSpeechTime)
 
@@ -174,8 +167,6 @@ func (v *VoiceActivityDetector) effectiveThreshold(speaking bool) float64 {
 	}
 
 	if speaking {
-		// Once speech has started, use a lower release threshold so quiet syllables
-		// do not chop the utterance, while still letting fan noise fall back to silence.
 		release := threshold * 0.60
 		minRelease := float64(v.energyThreshold)
 		if v.minStartThreshold > 0 && v.minStartThreshold*0.55 > minRelease {
@@ -211,30 +202,26 @@ func (v *VoiceActivityDetector) updateNoiseFloor(rms float64) {
 		return
 	}
 
-	// Do not let short non-speech spikes teach the noise floor upward.
 	if rms > v.noiseFloor*3.0 && rms > v.minStartThreshold*0.75 {
 		return
 	}
 
-	alpha := 0.04 // slow upward adaptation for fans/HVAC
+	alpha := 0.04
 	if rms < v.noiseFloor {
-		alpha = 0.20 // faster recovery when the room gets quieter
+		alpha = 0.20
 	}
 	v.noiseFloor = v.noiseFloor + alpha*(rms-v.noiseFloor)
 	storeFloat64(&v.lastNoiseFloor, v.noiseFloor)
 }
 
-// LastRMS returns the RMS energy of the most recently processed chunk.
 func (v *VoiceActivityDetector) LastRMS() float64 {
 	return loadFloat64(&v.lastRMS)
 }
 
-// LastThreshold returns the effective threshold used for the most recent chunk.
 func (v *VoiceActivityDetector) LastThreshold() float64 {
 	return loadFloat64(&v.lastThreshold)
 }
 
-// NoiseFloor returns the learned ambient noise floor.
 func (v *VoiceActivityDetector) NoiseFloor() float64 {
 	return loadFloat64(&v.lastNoiseFloor)
 }
@@ -249,9 +236,6 @@ func (v *VoiceActivityDetector) Reset() {
 	v.speechStartCount = 0
 }
 
-// ChunkRMS returns the normalized RMS energy (0.0-1.0) of an int16 audio chunk.
-// It is exported so the dictation loop can reason about ambient energy (echo
-// gating and ducking hangover) without a second VAD instance.
 func ChunkRMS(audioChunk []int16) float64 {
 	if len(audioChunk) == 0 {
 		return 0

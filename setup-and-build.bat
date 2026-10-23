@@ -4,7 +4,6 @@ echo  Go Dictation App - Setup and Build
 echo ================================================
 echo.
 
-REM Check if Go is installed
 where go >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERROR] Go is not installed!
@@ -18,7 +17,6 @@ echo [OK] Go found:
 go version
 echo.
 
-REM Check if GCC is installed (for CGO)
 where gcc >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERROR] GCC (MinGW) is not installed!
@@ -33,14 +31,12 @@ echo [OK] GCC found:
 gcc --version | findstr "gcc"
 echo.
 
-REM Enable CGO
 echo [SETUP] Enabling CGO...
 set CGO_ENABLED=1
 set GOOS=windows
 set GOARCH=amd64
 echo.
 
-REM Download dependencies
 echo [SETUP] Downloading dependencies...
 go mod download
 if %errorlevel% neq 0 (
@@ -50,12 +46,10 @@ if %errorlevel% neq 0 (
 )
 echo.
 
-REM Tidy dependencies
 echo [SETUP] Organizing dependencies...
 go mod tidy
 echo.
 
-REM Build release version
 echo [BUILD] Building release version...
 echo Command: go build -ldflags="-s -w -H windowsgui" -trimpath -o dictation.exe .
 go build -ldflags="-s -w -H windowsgui" -trimpath -o dictation.exe .

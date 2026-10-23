@@ -12,15 +12,13 @@ import (
 	"github.com/valen/go-dictate/internal/logger"
 )
 
-// AppVolumeDucker ducks volume for specific applications (Chrome/Edge/Firefox)
 type AppVolumeDucker struct {
 	duckVolume      float32
-	originalVolumes map[uint32]float32 // pid -> original volume
+	originalVolumes map[uint32]float32
 	isDucked        bool
 	mu              sync.Mutex
 }
 
-// Browser/media app process names to duck
 var mediaAppProcesses = []string{
 	"chrome.exe",
 	"msedge.exe",
@@ -29,7 +27,7 @@ var mediaAppProcesses = []string{
 	"opera.exe",
 	"vlc.exe",
 	"screenbox.exe",
-	"Screenbox.exe", // Case variations
+	"Screenbox.exe",
 	"spotify.exe",
 }
 
@@ -40,14 +38,12 @@ func NewAppVolumeDucker(duckVolume float32) *AppVolumeDucker {
 	}
 }
 
-// IsDucked reports whether media app volumes are currently lowered.
 func (d *AppVolumeDucker) IsDucked() bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.isDucked
 }
 
-// Duck reduces volume for browser/media applications
 func (d *AppVolumeDucker) Duck() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -59,18 +55,15 @@ func (d *AppVolumeDucker) Duck() error {
 
 	logger.Info("[AppVolumeDucker] Ducking media apps to %.0f%%", d.duckVolume*100)
 
-	// Lock OS thread for entire COM operation
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	// Initialize COM
-	ret, _, _ := coInitializeEx.Call(0, 0x0) // COINIT_MULTITHREADED
+	ret, _, _ := coInitializeEx.Call(0, 0x0)
 	if ret != 0 && ret != 0x00000001 {
 		return fmt.Errorf("CoInitializeEx failed")
 	}
 	defer coUninitialize.Call()
 
-	// Get device enumerator
 	var deviceEnumerator uintptr
 	ret, _, _ = coCreateInstance.Call(
 		uintptr(unsafe.Pointer(&CLSID_MMDeviceEnumerator)),
@@ -84,7 +77,6 @@ func (d *AppVolumeDucker) Duck() error {
 	}
 	defer syscall.Syscall(getVTable(deviceEnumerator, 2), 1, deviceEnumerator, 0, 0)
 
-	// Get default audio endpoint
 	var device uintptr
 	ret, _, _ = syscall.Syscall6(
 		getVTable(deviceEnumerator, 4),
@@ -100,7 +92,6 @@ func (d *AppVolumeDucker) Duck() error {
 	}
 	defer syscall.Syscall(getVTable(device, 2), 1, device, 0, 0)
 
-	// Get session manager
 	var sessionManager uintptr
 	ret, _, _ = syscall.Syscall6(
 		getVTable(device, 3),
@@ -117,7 +108,6 @@ func (d *AppVolumeDucker) Duck() error {
 	}
 	defer syscall.Syscall(getVTable(sessionManager, 2), 1, sessionManager, 0, 0)
 
-	// Get session enumerator
 	var sessionEnumerator uintptr
 	ret, _, _ = syscall.Syscall(
 		getVTable(sessionManager, 5),
@@ -131,7 +121,6 @@ func (d *AppVolumeDucker) Duck() error {
 	}
 	defer syscall.Syscall(getVTable(sessionEnumerator, 2), 1, sessionEnumerator, 0, 0)
 
-	// Get session count
 	var sessionCount int32
 	syscall.Syscall(
 		getVTable(sessionEnumerator, 3),
@@ -143,7 +132,6 @@ func (d *AppVolumeDucker) Duck() error {
 
 	duckedCount := 0
 
-	// Duck each media app session
 	for i := int32(0); i < sessionCount; i++ {
 		var session uintptr
 		ret, _, _ = syscall.Syscall(
@@ -157,7 +145,6 @@ func (d *AppVolumeDucker) Duck() error {
 			continue
 		}
 
-		// Get process ID
 		var processID uint32
 		syscall.Syscall(
 			getVTable(session, 14),
@@ -170,7 +157,6 @@ func (d *AppVolumeDucker) Duck() error {
 		processName := getProcessName(processID)
 		processNameLower := strings.ToLower(processName)
 
-		// Check if this is a media app
 		isMediaApp := false
 		for _, mediaProc := range mediaAppProcesses {
 			if strings.Contains(processNameLower, strings.ToLower(mediaProc)) {
@@ -184,7 +170,6 @@ func (d *AppVolumeDucker) Duck() error {
 			continue
 		}
 
-		// Get ISimpleAudioVolume interface
 		IID_ISimpleAudioVolume := syscall.GUID{
 			Data1: 0x87CE5498,
 			Data2: 0x68D6,
@@ -194,7 +179,7 @@ func (d *AppVolumeDucker) Duck() error {
 
 		var simpleVolume uintptr
 		ret, _, _ = syscall.Syscall6(
-			getVTable(session, 0), // QueryInterface
+			getVTable(session, 0),
 			3,
 			session,
 			uintptr(unsafe.Pointer(&IID_ISimpleAudioVolume)),
@@ -202,16 +187,15 @@ func (d *AppVolumeDucker) Duck() error {
 			0, 0, 0,
 		)
 
-		syscall.Syscall(getVTable(session, 2), 1, session, 0, 0) // Release session
+		syscall.Syscall(getVTable(session, 2), 1, session, 0, 0)
 
 		if ret != 0 || simpleVolume == 0 {
 			continue
 		}
 
-		// Get current volume
 		var currentVolume float32
 		syscall.Syscall(
-			getVTable(simpleVolume, 4), // GetMasterVolume
+			getVTable(simpleVolume, 4),
 			2,
 			simpleVolume,
 			uintptr(unsafe.Pointer(&currentVolume)),
@@ -221,31 +205,27 @@ func (d *AppVolumeDucker) Duck() error {
 		logger.Info("[AppVolumeDucker] %s (PID %d) current volume: %.0f%%",
 			processName, processID, currentVolume*100)
 
-		// Store original volume
 		d.originalVolumes[processID] = currentVolume
 
-		// Set ducked volume - pass float bits directly so Go's asmstdcall
-		// loads them into the XMM register (COM expects float by value, not pointer)
 		targetVolume := d.duckVolume
 		ret, _, _ = syscall.Syscall(
-			getVTable(simpleVolume, 3), // SetMasterVolume
+			getVTable(simpleVolume, 3),
 			3,
 			simpleVolume,
 			uintptr(math.Float32bits(targetVolume)),
 			0,
 		)
 
-		// Verify it actually changed
 		var actualVolume float32
 		syscall.Syscall(
-			getVTable(simpleVolume, 4), // GetMasterVolume
+			getVTable(simpleVolume, 4),
 			2,
 			simpleVolume,
 			uintptr(unsafe.Pointer(&actualVolume)),
 			0,
 		)
 
-		syscall.Syscall(getVTable(simpleVolume, 2), 1, simpleVolume, 0, 0) // Release
+		syscall.Syscall(getVTable(simpleVolume, 2), 1, simpleVolume, 0, 0)
 
 		logger.Info("[AppVolumeDucker] Ducked %s (PID %d): %.0f%% → %.0f%% (actual: %.0f%%)",
 			processName, processID, currentVolume*100, targetVolume*100, actualVolume*100)
@@ -262,7 +242,6 @@ func (d *AppVolumeDucker) Duck() error {
 	return nil
 }
 
-// Restore restores original volume for browser/media applications
 func (d *AppVolumeDucker) Restore() error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -274,18 +253,15 @@ func (d *AppVolumeDucker) Restore() error {
 
 	logger.Info("[AppVolumeDucker] Restoring media app volumes (stored %d PIDs)", len(d.originalVolumes))
 
-	// Lock OS thread for entire COM operation
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	// Initialize COM
-	ret, _, _ := coInitializeEx.Call(0, 0x0) // COINIT_MULTITHREADED
+	ret, _, _ := coInitializeEx.Call(0, 0x0)
 	if ret != 0 && ret != 0x00000001 {
 		return fmt.Errorf("CoInitializeEx failed")
 	}
 	defer coUninitialize.Call()
 
-	// Get device enumerator
 	var deviceEnumerator uintptr
 	ret, _, _ = coCreateInstance.Call(
 		uintptr(unsafe.Pointer(&CLSID_MMDeviceEnumerator)),
@@ -299,7 +275,6 @@ func (d *AppVolumeDucker) Restore() error {
 	}
 	defer syscall.Syscall(getVTable(deviceEnumerator, 2), 1, deviceEnumerator, 0, 0)
 
-	// Get default audio endpoint
 	var device uintptr
 	ret, _, _ = syscall.Syscall6(
 		getVTable(deviceEnumerator, 4),
@@ -315,7 +290,6 @@ func (d *AppVolumeDucker) Restore() error {
 	}
 	defer syscall.Syscall(getVTable(device, 2), 1, device, 0, 0)
 
-	// Get session manager
 	var sessionManager uintptr
 	ret, _, _ = syscall.Syscall6(
 		getVTable(device, 3),
@@ -332,7 +306,6 @@ func (d *AppVolumeDucker) Restore() error {
 	}
 	defer syscall.Syscall(getVTable(sessionManager, 2), 1, sessionManager, 0, 0)
 
-	// Get session enumerator
 	var sessionEnumerator uintptr
 	ret, _, _ = syscall.Syscall(
 		getVTable(sessionManager, 5),
@@ -346,7 +319,6 @@ func (d *AppVolumeDucker) Restore() error {
 	}
 	defer syscall.Syscall(getVTable(sessionEnumerator, 2), 1, sessionEnumerator, 0, 0)
 
-	// Get session count
 	var sessionCount int32
 	syscall.Syscall(
 		getVTable(sessionEnumerator, 3),
@@ -358,7 +330,6 @@ func (d *AppVolumeDucker) Restore() error {
 
 	restoredCount := 0
 
-	// Restore each media app session that we have stored
 	for i := int32(0); i < sessionCount; i++ {
 		var session uintptr
 		ret, _, _ = syscall.Syscall(
@@ -372,7 +343,6 @@ func (d *AppVolumeDucker) Restore() error {
 			continue
 		}
 
-		// Get process ID
 		var processID uint32
 		syscall.Syscall(
 			getVTable(session, 14),
@@ -382,14 +352,12 @@ func (d *AppVolumeDucker) Restore() error {
 			0,
 		)
 
-		// Check if we have an original volume for this PID
 		originalVolume, exists := d.originalVolumes[processID]
 		if !exists {
 			syscall.Syscall(getVTable(session, 2), 1, session, 0, 0)
 			continue
 		}
 
-		// Get ISimpleAudioVolume interface
 		IID_ISimpleAudioVolume := syscall.GUID{
 			Data1: 0x87CE5498,
 			Data2: 0x68D6,
@@ -399,7 +367,7 @@ func (d *AppVolumeDucker) Restore() error {
 
 		var simpleVolume uintptr
 		ret, _, _ = syscall.Syscall6(
-			getVTable(session, 0), // QueryInterface
+			getVTable(session, 0),
 			3,
 			session,
 			uintptr(unsafe.Pointer(&IID_ISimpleAudioVolume)),
@@ -407,42 +375,39 @@ func (d *AppVolumeDucker) Restore() error {
 			0, 0, 0,
 		)
 
-		syscall.Syscall(getVTable(session, 2), 1, session, 0, 0) // Release session
+		syscall.Syscall(getVTable(session, 2), 1, session, 0, 0)
 
 		if ret != 0 || simpleVolume == 0 {
 			continue
 		}
 
-		// Get current volume before restore
 		var currentVolume float32
 		syscall.Syscall(
-			getVTable(simpleVolume, 4), // GetMasterVolume
+			getVTable(simpleVolume, 4),
 			2,
 			simpleVolume,
 			uintptr(unsafe.Pointer(&currentVolume)),
 			0,
 		)
 
-		// Restore original volume - pass float bits directly (COM expects float by value)
 		ret, _, _ = syscall.Syscall(
-			getVTable(simpleVolume, 3), // SetMasterVolume
+			getVTable(simpleVolume, 3),
 			3,
 			simpleVolume,
 			uintptr(math.Float32bits(originalVolume)),
 			0,
 		)
 
-		// Verify it actually changed
 		var actualVolume float32
 		syscall.Syscall(
-			getVTable(simpleVolume, 4), // GetMasterVolume
+			getVTable(simpleVolume, 4),
 			2,
 			simpleVolume,
 			uintptr(unsafe.Pointer(&actualVolume)),
 			0,
 		)
 
-		syscall.Syscall(getVTable(simpleVolume, 2), 1, simpleVolume, 0, 0) // Release
+		syscall.Syscall(getVTable(simpleVolume, 2), 1, simpleVolume, 0, 0)
 
 		processName := getProcessName(processID)
 		logger.Info("[AppVolumeDucker] Restored %s (PID %d): %.0f%% → %.0f%% (actual: %.0f%%)",
@@ -451,7 +416,7 @@ func (d *AppVolumeDucker) Restore() error {
 	}
 
 	d.isDucked = false
-	d.originalVolumes = make(map[uint32]float32) // Clear stored volumes
+	d.originalVolumes = make(map[uint32]float32)
 
 	logger.Info("[AppVolumeDucker] ✅ Restored %d media app(s)", restoredCount)
 	return nil

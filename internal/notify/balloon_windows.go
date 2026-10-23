@@ -9,13 +9,8 @@ import (
 	"github.com/valen/go-dictate/internal/logger"
 )
 
-// CREATE_NO_WINDOW: never allocate a console for the child process.
-// HideWindow alone is ignored when Windows Terminal is the default console
-// host (Windows 11), which pops a visible terminal window per notification.
 const createNoWindow = 0x08000000
 
-// ShowBalloon displays a Windows balloon/toast notification.
-// The notification auto-dismisses after the given duration.
 func ShowBalloon(title, message string, duration time.Duration) {
 	go func() {
 		secs := int(duration.Seconds())
@@ -47,9 +42,6 @@ $n.Dispose()`,
 }
 
 func escapePSString(s string) string {
-	// Escape single quotes for PowerShell single-quoted strings. A literal
-	// newline inside the quoted string would break the generated script, so
-	// flatten line breaks to spaces.
 	result := make([]byte, 0, len(s))
 	for i := 0; i < len(s); i++ {
 		switch s[i] {

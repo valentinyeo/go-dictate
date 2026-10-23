@@ -16,7 +16,6 @@ var (
 	procFindWindow       = user32DLL.NewProc("FindWindowW")
 	procPostMessage      = user32DLL.NewProc("PostMessageW")
 
-	// For forcing foreground window when another app has focus
 	procGetForegroundWindow      = user32DLL.NewProc("GetForegroundWindow")
 	procGetWindowThreadProcessId = user32DLL.NewProc("GetWindowThreadProcessId")
 	procAttachThreadInput        = user32DLL.NewProc("AttachThreadInput")
@@ -31,7 +30,6 @@ const (
 	wmUser      = 0x0400
 )
 
-// GWLP_WNDPROC = -4, expressed as uintptr (two's complement)
 var gwlpWndProc = ^uintptr(3)
 
 var (
@@ -39,13 +37,9 @@ var (
 	clickManager    *Manager
 	systrayHwnd     uintptr
 
-	// Create callback ONCE at init - syscall.NewCallback has a global ~2000 limit.
 	subclassedWndProc = syscall.NewCallback(trayWndProc)
 )
 
-// EnableLeftClick subclasses the systray hidden window to:
-//   - Toggle pause on left-click (instead of showing the menu)
-//   - Fix right-click menu reliability (PostMessage WM_NULL + AttachThreadInput)
 func (m *Manager) EnableLeftClick() {
 	clickManager = m
 
@@ -70,14 +64,10 @@ func (m *Manager) EnableLeftClick() {
 	fmt.Println("[Tray] Click handler installed (left-click=toggle, right-click menu fix)")
 }
 
-// forceforeground temporarily attaches our thread's input queue to the
-// foreground window's thread, making SetForegroundWindow work even when
-// another app (like Teams, Chrome) has focus. This is the standard Windows
-// workaround for the foreground lock.
 func forceForeground() {
 	fgHwnd, _, _ := procGetForegroundWindow.Call()
 	if fgHwnd == 0 || fgHwnd == systrayHwnd {
-		return // Already foreground or no foreground window
+		return
 	}
 
 	fgTID, _, _ := procGetWindowThreadProcessId.Call(fgHwnd, 0)
@@ -86,20 +76,17 @@ func forceForeground() {
 		return
 	}
 
-	// Attach to foreground thread's input queue so SetForegroundWindow works
-	procAttachThreadInput.Call(ourTID, fgTID, 1) // TRUE = attach
+	procAttachThreadInput.Call(ourTID, fgTID, 1)
 	procSetForegroundWindow.Call(systrayHwnd)
-	procAttachThreadInput.Call(ourTID, fgTID, 0) // FALSE = detach
+	procAttachThreadInput.Call(ourTID, fgTID, 0)
 }
 
-// trayWndProc is our subclassed window procedure that intercepts tray icon messages.
 func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 	const wmSystrayMessage = wmUser + 1
 
 	if msg == wmSystrayMessage {
 		switch lParam {
 		case wmLButtonUp:
-			// Left-click: toggle pause instead of showing the context menu.
 			if clickManager != nil {
 				newState := clickManager.stateManager.TogglePause()
 				clickManager.updateIcon(newState)
@@ -112,21 +99,16 @@ func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 			return 0
 
 		case wmRButtonUp:
-			// Force our window to foreground before the library calls TrackPopupMenu.
-			// Without this, the menu silently fails when Teams/Chrome has focus.
 			forceForeground()
 
-			// Let the original handler call TrackPopupMenu (blocking).
 			ret, _, _ := procCallWindowProc.Call(
 				originalWndProc, hwnd, uintptr(msg), wParam, lParam,
 			)
-			// Fix: KB Q135788 - PostMessage WM_NULL ensures menu dismisses properly.
 			procPostMessage.Call(hwnd, wmNull, 0, 0)
 			return ret
 		}
 	}
 
-	// Everything else: pass through to the original wndProc.
 	ret, _, _ := procCallWindowProc.Call(
 		originalWndProc, hwnd, uintptr(msg), wParam, lParam,
 	)

@@ -6,7 +6,6 @@ import (
 	"time"
 )
 
-// Opt-in hardware smoke test. No audio is stored or sent to a speech service.
 func TestCaptureReleasesDevice(t *testing.T) {
 	if os.Getenv("GO_DICTATE_TEST_MIC") != "1" {
 		t.Skip("set GO_DICTATE_TEST_MIC=1 to test the Windows microphone")
@@ -32,6 +31,6 @@ func TestCaptureReleasesDevice(t *testing.T) {
 		if capture.lastCallbackNano.Load() != last {
 			t.Fatal("audio callbacks continued after Stop")
 		}
-		capture.Stop() // repeated release must be harmless
+		capture.Stop()
 	}
 }

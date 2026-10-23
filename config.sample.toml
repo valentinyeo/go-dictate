@@ -1,39 +1,34 @@
-# Dictation App Configuration
-# Edit this file to configure the application
-# Get your Deepgram API key from: https://console.deepgram.com/
 
-profile = "terminal_agent"  # terminal_agent, email_writing, or custom
+profile = "terminal_agent"
 
 [deepgram]
 api_key = "YOUR_API_KEY_HERE"
-language = "en"  # en or de
-model = "nova-3"  # only supported online dictation model
-punctuate = true  # Add punctuation and capitalization
-smart_format = false  # Format numbers/dates/currency; Deepgram also enables punctuation when true
-filler_words = false  # Include filler words such as "um" and "uh"
-holdback = true  # Delay newest interim word slightly for better reliability
+language = "en"
+model = "nova-3"
+punctuate = true
+smart_format = false
+filler_words = false
+holdback = true
 keyterms = ["Codex", "PowerShell", "cmd.exe", "conhost", "go-dictate", "GitHub", "Deepgram", "Nova-3"]
 
 [audio]
-# Hold Ctrl+Space to record. Release all shortcut keys to insert final text.
-# Keeps the microphone closed while idle. Independent of speech profiles.
 push_to_talk = false
-silence_threshold_ms = 3000   # Auto-pause after 3 seconds of silence
-duck_volume = 0.2            # Volume level (0.0-1.0) for other apps during dictation
-auto_pause_on_media = true   # Auto-pause when media is playing (YouTube, videos, etc.)
-zero_latency = true          # Ultra Fast mode
-battery_budget_saver = false # Shorter billable silence, no persistent socket or paid keyterms
+silence_threshold_ms = 3000
+duck_volume = 0.2
+auto_pause_on_media = true
+zero_latency = true
+battery_budget_saver = false
 
 [vad]
-energy_threshold = 0.012  # Base RMS threshold for speech detection (0.0-1.0)
-adaptive_noise = true     # Raise threshold above learned room/fan noise floor
-noise_multiplier = 3.0    # Speech must be this many times louder than ambient noise
+energy_threshold = 0.012
+adaptive_noise = true
+noise_multiplier = 3.0
 min_start_threshold = 0.012
-speech_start_chunks = 2   # Require consecutive speech chunks to ignore typing/fan spikes
-noise_mode = "normal"     # normal or train (rumble filter + stricter speech detection)
+speech_start_chunks = 2
+noise_mode = "normal"
 
 [diagnostics]
-save_failed_audio = false  # Privacy-sensitive: save WAVs only for utterances that produce no transcript
+save_failed_audio = false
 
 [keyboard]
-injection = "paste"  # "paste" (default): clipboard + Ctrl+V — terminals can't drop spaces; works in cmd.exe, Windows Terminal, tmux/SSH. "type": legacy per-character key events (escape hatch; paste auto-falls back to it if the clipboard is unavailable)
+injection = "paste"

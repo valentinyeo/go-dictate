@@ -32,8 +32,6 @@ var (
 	globalUnlockProc            = kernel32.NewProc("GlobalUnlock")
 )
 
-// openClipboardRetry opens the clipboard, retrying briefly — another process
-// (clipboard managers, the target app reading our paste) may hold it.
 func openClipboardRetry(owner uintptr) error {
 	for i := 0; i < 10; i++ {
 		ret, _, _ := openClipboardProc.Call(owner)
@@ -169,8 +167,6 @@ func writeClipboardTextOpen(text string) error {
 	if ret, _, _ := emptyClipboardProc.Call(); ret == 0 {
 		return fmt.Errorf("EmptyClipboard failed")
 	}
-	// Publish privacy metadata before text so a failed metadata write never
-	// exposes untagged dictation to clipboard listeners on CloseClipboard.
 	for _, format := range clipboardPrivacyFormats() {
 		name, _ := windows.UTF16PtrFromString(format.name)
 		id, _, _ := registerClipboardFormatProc.Call(uintptr(unsafe.Pointer(name)))
@@ -196,7 +192,6 @@ func writeClipboardTextOpen(text string) error {
 	if ret, _, _ := setClipboardDataProc.Call(cfUnicodeText, h); ret == 0 {
 		return fmt.Errorf("SetClipboardData failed")
 	}
-	// On success the system owns the memory — do not free.
 	h = 0
 	return nil
 }
