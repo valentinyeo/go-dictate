@@ -13,6 +13,7 @@ type playbackReference struct {
 	mu      sync.Mutex
 	samples [2][]float64
 	updated time.Time
+	delays  [2][]int
 }
 
 func (r *playbackReference) receive(input []byte, frames uint32, now time.Time) {
@@ -42,8 +43,10 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 		return
 	}
 	var reference [2][]float64
+	var previousDelays [2][]int
 	for channel := range reference {
 		reference[channel] = append([]float64(nil), r.samples[channel]...)
+		previousDelays[channel] = append([]int(nil), r.delays[channel]...)
 	}
 	r.mu.Unlock()
 
@@ -62,6 +65,7 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 		size *= 2
 	}
 	var spectra [2][]complex128
+	hasRender := false
 	var energies [2][]float64
 	for channel, render := range reference {
 		spectra[channel] = make([]complex128, size)
@@ -70,10 +74,31 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 			spectra[channel][i] = complex(sample, 0)
 			energies[channel][i+1] = energies[channel][i] + sample*sample
 		}
-		echoFFT(spectra[channel], false)
+		if energies[channel][len(render)] > 0 {
+			hasRender = true
+			echoFFT(spectra[channel], false)
+		}
+	}
+	if !hasRender {
+		return
 	}
 	var paths [][]float64
-	for range echoPaths {
+	var pathChannels, pathStarts []int
+	addPath := func(channel, start int) {
+		if start < 0 || start+len(samples) > len(reference[channel]) {
+			return
+		}
+		candidate := reference[channel][start : start+len(samples)]
+		for _, path := range paths {
+			if &path[0] == &candidate[0] {
+				return
+			}
+		}
+		paths = append(paths, candidate)
+		pathChannels = append(pathChannels, channel)
+		pathStarts = append(pathStarts, start)
+	}
+	for iteration := range echoPaths {
 		residualSpectrum := make([]complex128, size)
 		for i, sample := range residual {
 			residualSpectrum[len(residual)-1-i] = complex(sample, 0)
@@ -81,7 +106,7 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 		echoFFT(residualSpectrum, false)
 		bestScore := 0.0
 		var bestRender []float64
-		bestStart := -1
+		bestStart, bestChannel := -1, 0
 		for channel, render := range reference {
 			if len(render) < len(samples) || energies[channel][len(render)] == 0 {
 				continue
@@ -96,7 +121,7 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 				energy := energies[channel][start+len(samples)] - energies[channel][start]
 				if energy > 0 && dot*dot/energy > bestScore {
 					bestScore = dot * dot / energy
-					bestRender, bestStart = render, start
+					bestRender, bestStart, bestChannel = render, start, channel
 				}
 			}
 		}
@@ -108,6 +133,21 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 			break
 		}
 		previousPaths := len(paths)
+		if iteration == 0 && len(previousDelays[bestChannel]) > 0 {
+			delay := len(bestRender) - len(samples) - bestStart
+			nearest := previousDelays[bestChannel][0]
+			for _, prior := range previousDelays[bestChannel] {
+				if math.Abs(float64(delay-prior)) < math.Abs(float64(delay-nearest)) {
+					nearest = prior
+				}
+			}
+			shift := delay - nearest
+			for channel, delays := range previousDelays {
+				for _, prior := range delays {
+					addPath(channel, len(reference[channel])-len(samples)-prior-shift)
+				}
+			}
+		}
 		begin, end := bestStart, bestStart
 		for _, path := range paths {
 			for start := max(0, bestStart-32); start <= min(len(bestRender)-len(samples), bestStart+32); start++ {
@@ -118,23 +158,16 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 			}
 		}
 		for start := begin; start <= end; start++ {
-			candidate := bestRender[start : start+len(samples)]
-			duplicate := false
-			for _, path := range paths {
-				if &path[0] == &candidate[0] {
-					duplicate = true
-					break
-				}
-			}
-			if !duplicate {
-				paths = append(paths, candidate)
-			}
+			addPath(bestChannel, start)
 		}
 		if len(paths) == previousPaths {
 			break
 		}
 		coefficients := fitEcho(paths, mic)
 		if coefficients == nil {
+			paths = paths[:previousPaths]
+			pathChannels = pathChannels[:previousPaths]
+			pathStarts = pathStarts[:previousPaths]
 			break
 		}
 		for i, sample := range mic {
@@ -147,6 +180,14 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 	if len(paths) == 0 {
 		return
 	}
+	r.mu.Lock()
+	for channel := range r.delays {
+		r.delays[channel] = r.delays[channel][:0]
+	}
+	for i, channel := range pathChannels {
+		r.delays[channel] = append(r.delays[channel], len(reference[channel])-len(samples)-pathStarts[i])
+	}
+	r.mu.Unlock()
 	for i, sample := range residual {
 		samples[i] = int16(math.Round(max(-32768, min(32767, sample))))
 	}

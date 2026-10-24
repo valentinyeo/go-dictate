@@ -12,6 +12,16 @@ for (const file of protectedFiles) {
   unchanged(readFileSync(file, 'utf8'), expected);
 }
 const main = readFileSync('main.go', 'utf8');
+const capture = readFileSync('internal/audio/capture.go', 'utf8');
+function connected(source) {
+  assert.match(source, /Data: c\.receiveFrames/);
+  assert.match(source, /c\.echo\.receive\(input, frames, time\.Now\(\)\)/);
+  const filter = source.indexOf('c.echo.filter(samples, now)');
+  assert(filter > 0 && filter < source.indexOf('case c.audioChunks <- samples:'));
+}
+connected(capture);
+assert.throws(() => connected(capture.replace('Data: c.receiveFrames', 'Data: nil')));
+assert.throws(() => connected(capture.replace('c.echo.filter(samples, now)', '')));
 assert.throws(() => unchanged(main.replace('close(sttAudioTx)', 'sttAudioTx = nil'), main));
 assert.throws(() => unchanged(main.replace('silenceMs = 1500', 'silenceMs = 3000'), main));
 const comments = source => {
