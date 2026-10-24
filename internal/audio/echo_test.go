@@ -369,3 +369,40 @@ func TestEchoQuantizationHistory(t *testing.T) {
 		}
 	}
 }
+
+func TestEchoRememberedPathDuringDoubleTalk(t *testing.T) {
+	const frames = 1280
+	left := echoSignal(710, frames*10, 13000)
+	right := echoSignal(711, len(left), 11000)
+	chunks := make(chan []int16, 1)
+	capture := &Capture{audioChunks: chunks, echo: &playbackReference{}}
+	capture.echo.receive(echoStereo(left[:frames], right[:frames]), frames, time.Now())
+	for block := 1; block <= 8; block++ {
+		begin, end := block*frames, (block+1)*frames
+		capture.echo.receive(echoStereo(left[begin:end], right[begin:end]), frames, time.Now())
+		level, gain := 0.0, 0.65
+		if block >= 4 {
+			level = 4500
+		}
+		if block >= 6 {
+			gain = 0.08
+		}
+		voice := echoSignal(uint32(2026+block), frames, level)
+		mic := append([]float64(nil), voice...)
+		for i := range mic {
+			mic[i] += gain*left[begin-317+i] + 0.12*right[begin-424+i]
+		}
+		capture.receiveFrames(nil, echoPCM(mic), frames)
+		<-chunks
+		t.Logf("block=%d left_paths=%v right_paths=%v", block, capture.echo.delays[0], capture.echo.delays[1])
+		for channel, expected := range []int{317, 424} {
+			found := false
+			for _, delay := range capture.echo.delays[channel] {
+				found = found || delay == expected
+			}
+			if !found {
+				t.Errorf("lost established channel %d path %d during double-talk at block %d", channel, expected, block)
+			}
+		}
+	}
+}
