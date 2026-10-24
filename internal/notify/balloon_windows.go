@@ -18,11 +18,19 @@ const createNoWindow = 0x08000000
 // The notification auto-dismisses after the given duration.
 func ShowBalloon(title, message string, duration time.Duration) {
 	go func() {
-		secs := int(duration.Seconds())
-		if secs < 1 {
-			secs = 1
+		cmd := balloonCommand(title, message, duration)
+		if err := cmd.Start(); err != nil {
+			logger.Error("[Notify] failed to launch notification: %v", err)
 		}
-		script := fmt.Sprintf(`
+	}()
+}
+
+func balloonCommand(title, message string, duration time.Duration) *exec.Cmd {
+	secs := int(duration.Seconds())
+	if secs < 1 {
+		secs = 1
+	}
+	script := fmt.Sprintf(`
 Add-Type -AssemblyName System.Windows.Forms
 $n = New-Object System.Windows.Forms.NotifyIcon
 $n.Icon = [System.Drawing.SystemIcons]::Information
@@ -32,18 +40,15 @@ $n.Visible = $true
 $n.ShowBalloonTip(%d)
 Start-Sleep %d
 $n.Dispose()`,
-			escapePSString(title),
-			escapePSString(message),
-			secs*1000,
-			secs,
-		)
+		escapePSString(title),
+		escapePSString(message),
+		secs*1000,
+		secs,
+	)
 
-		cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command", script)
-		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
-		if err := cmd.Start(); err != nil {
-			logger.Error("[Notify] failed to launch notification: %v", err)
-		}
-	}()
+	cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command", script)
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
+	return cmd
 }
 
 func escapePSString(s string) string {
