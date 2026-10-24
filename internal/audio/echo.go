@@ -139,7 +139,7 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 		for _, sample := range residual {
 			residualEnergy += sample * sample
 		}
-		if bestStart < 0 || bestScore < residualEnergy*0.15*0.15 {
+		if residualEnergy <= float64(len(samples)) || bestStart < 0 || bestScore < residualEnergy*0.15*0.15 {
 			break
 		}
 		previousPaths := len(paths)
@@ -174,6 +174,11 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 			break
 		}
 		fitted := fitEcho(paths, mic)
+		if fitted == nil && previousPaths == 0 {
+			paths, pathChannels, pathStarts = paths[:0], pathChannels[:0], pathStarts[:0]
+			addPath(bestChannel, bestStart)
+			fitted = fitEcho(paths, mic)
+		}
 		if fitted == nil {
 			paths = paths[:previousPaths]
 			pathChannels = pathChannels[:previousPaths]

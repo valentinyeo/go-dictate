@@ -350,3 +350,22 @@ func TestEchoStereoReferenceChange(t *testing.T) {
 		}
 	}
 }
+
+func TestEchoQuantizationHistory(t *testing.T) {
+	chunks := make(chan []int16, 1)
+	capture := &Capture{audioChunks: chunks, echo: &playbackReference{}}
+	for block := range 5 {
+		left := echoSignal(uint32(710+block), echoHistoryFrames, 13000)
+		right := echoSignal(uint32(720+block), echoHistoryFrames, 11000)
+		mic := make([]float64, 1280)
+		for i := range mic {
+			mic[i] = 0.65*left[len(left)-len(mic)-317+i] + 0.12*right[len(right)-len(mic)-424+i]
+		}
+		capture.echo.receive(echoStereo(left, right), uint32(len(left)), time.Now())
+		capture.receiveFrames(nil, echoPCM(mic), uint32(len(mic)))
+		<-chunks
+		if taps := len(capture.echo.delays[0]) + len(capture.echo.delays[1]); taps != 2 {
+			t.Errorf("learned quantization error as an acoustic response: %d taps", taps)
+		}
+	}
+}

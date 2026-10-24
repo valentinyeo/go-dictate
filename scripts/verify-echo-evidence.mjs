@@ -30,7 +30,7 @@ if (mode === 'red' || mode === 'green') {
   } else {
     assert.equal(run.conclusion, 'success');
     assert.equal(run.jobs.find(job => job.name === 'echo-green')?.conclusion, 'success');
-    for (const test of [...regressions, 'TestCaptureEchoVoiceWithoutPlaybackMatch', 'TestEchoReferenceUnavailable', 'TestEchoReferenceBounds', 'TestEchoFFTCorrelationMatchesDirect', 'TestEchoStereoReferenceChange']) assert(log.includes('--- PASS: ' + test));
+    for (const test of [...regressions, 'TestCaptureEchoVoiceWithoutPlaybackMatch', 'TestEchoReferenceUnavailable', 'TestEchoReferenceBounds', 'TestEchoFFTCorrelationMatchesDirect', 'TestEchoStereoReferenceChange', 'TestEchoQuantizationHistory']) assert(log.includes('--- PASS: ' + test));
     assert(log.includes('ECHO SCOPE VERIFIED'));
     assert(log.includes('BenchmarkCaptureEcho'));
     assert(log.includes('Artifact go-dictate-1.8.139.zip successfully finalized'));
