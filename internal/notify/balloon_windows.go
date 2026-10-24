@@ -2,7 +2,9 @@ package notify
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,34 +31,22 @@ func balloonCommand(title, message string, duration time.Duration) *exec.Cmd {
 Add-Type -AssemblyName System.Windows.Forms
 $n = New-Object System.Windows.Forms.NotifyIcon
 $n.Icon = [System.Drawing.SystemIcons]::Information
-$n.BalloonTipTitle = '%s'
-$n.BalloonTipText = '%s'
+$n.BalloonTipTitle = $env:GD_BALLOON_TITLE
+$n.BalloonTipText = $env:GD_BALLOON_TEXT
 $n.Visible = $true
 $n.ShowBalloonTip(%d)
 Start-Sleep %d
 $n.Dispose()`,
-		escapePSString(title),
-		escapePSString(message),
 		secs*1000,
 		secs,
 	)
 
 	cmd := exec.Command("powershell", "-WindowStyle", "Hidden", "-Command", script)
+	cmd.Env = append(os.Environ(), "GD_BALLOON_TITLE="+flatten(title), "GD_BALLOON_TEXT="+flatten(message))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: createNoWindow}
 	return cmd
 }
 
-func escapePSString(s string) string {
-	result := make([]byte, 0, len(s))
-	for i := 0; i < len(s); i++ {
-		switch s[i] {
-		case '\'':
-			result = append(result, '\'', '\'')
-		case '\n', '\r':
-			result = append(result, ' ')
-		default:
-			result = append(result, s[i])
-		}
-	}
-	return string(result)
+func flatten(s string) string {
+	return strings.NewReplacer("\r", " ", "\n", " ").Replace(s)
 }
