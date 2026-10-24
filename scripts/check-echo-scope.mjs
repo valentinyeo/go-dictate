@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
 const protectedFiles = ['main.go', ...git('ls-tree', '-r', '--name-only', 'v1.8.138', 'internal/deepgram', 'internal/config', 'internal/tray').trim().split('\n'), ...git('ls-tree', '-r', '--name-only', 'v1.8.138', 'internal/audio').trim().split('\n').filter(file => file !== 'internal/audio/capture.go')];
 function unchanged(actual, expected) {
-  assert.equal(actual.replaceAll("\r\n", "\n"), expected, 'protected lifecycle, VAD, media filter, configuration or ducking changed');
+  assert.equal(actual.replaceAll("\r\n", "\n"), expected.replaceAll("\r\n", "\n"), 'protected lifecycle, VAD, media filter, configuration or ducking changed');
 }
 for (const file of protectedFiles) {
   const expected = git('show', 'v1.8.138:' + file);
@@ -15,6 +15,7 @@ const main = readFileSync('main.go', 'utf8');
 assert.throws(() => unchanged(main.replace('close(sttAudioTx)', 'sttAudioTx = nil'), main));
 assert.throws(() => unchanged(main.replace('silenceMs = 1500', 'silenceMs = 3000'), main));
 const comments = source => {
+  source = source.replaceAll('\r\n', '\n');
   const found = new Map();
   const tokens = /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`[^`]*`|(\/\/[^\n]*|\/\*[\s\S]*?\*\/)/g;
   for (const match of source.matchAll(tokens)) {
