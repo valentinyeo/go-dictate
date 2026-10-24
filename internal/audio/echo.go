@@ -14,6 +14,7 @@ type playbackReference struct {
 	samples [2][]float64
 	updated time.Time
 	delays  [2][]int
+	gains   [2][]float64
 }
 
 func (r *playbackReference) receive(input []byte, frames uint32, now time.Time) {
@@ -44,9 +45,11 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 	}
 	var reference [2][]float64
 	var previousDelays [2][]int
+	var previousGains [2][]float64
 	for channel := range reference {
 		reference[channel] = append([]float64(nil), r.samples[channel]...)
 		previousDelays[channel] = append([]int(nil), r.delays[channel]...)
+		previousGains[channel] = append([]float64(nil), r.gains[channel]...)
 	}
 	r.mu.Unlock()
 
@@ -84,6 +87,7 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 	}
 	var paths [][]float64
 	var coefficients []float64
+	previousWeights := make(map[*float64]float64)
 	var pathChannels, pathStarts []int
 	addPath := func(channel, start int) {
 		if start < 0 || start+len(samples) > len(reference[channel]) || len(paths) >= echoPaths*37 {
@@ -139,7 +143,11 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 		for _, sample := range residual {
 			residualEnergy += sample * sample
 		}
-		if residualEnergy <= float64(len(samples)) || bestStart < 0 || bestScore < residualEnergy*0.15*0.15 {
+		correlationThreshold := 0.15
+		if iteration > 0 && len(previousWeights) > 0 {
+			correlationThreshold = 0.20
+		}
+		if residualEnergy <= float64(len(samples)) || bestStart < 0 || bestScore < residualEnergy*correlationThreshold*correlationThreshold {
 			break
 		}
 		previousPaths := len(paths)
@@ -153,8 +161,12 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 			}
 			shift := delay - nearest
 			for channel, delays := range previousDelays {
-				for _, prior := range delays {
-					addPath(channel, len(reference[channel])-len(samples)-prior-shift)
+				for i, prior := range delays {
+					start := len(reference[channel]) - len(samples) - prior - shift
+					addPath(channel, start)
+					if start >= 0 && start+len(samples) <= len(reference[channel]) {
+						previousWeights[&reference[channel][start]] = previousGains[channel][i]
+					}
 				}
 			}
 		}
@@ -185,6 +197,27 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 			pathStarts = pathStarts[:previousPaths]
 			break
 		}
+		var fitErrorEnergy float64
+		for i, sample := range mic {
+			for j, path := range paths {
+				sample -= fitted[j] * path[i]
+			}
+			fitErrorEnergy += sample * sample
+		}
+		fitNoiseRMS := math.Sqrt(fitErrorEnergy / float64(len(samples)))
+		for i, path := range paths {
+			prior, ok := previousWeights[&path[0]]
+			if !ok {
+				continue
+			}
+			var energy float64
+			for _, sample := range path {
+				energy += sample * sample
+			}
+			if math.Abs(fitted[i]-prior)*math.Sqrt(energy) <= 3*fitNoiseRMS {
+				fitted[i] = prior
+			}
+		}
 		coefficients = fitted
 		for i, sample := range mic {
 			for j, path := range paths {
@@ -204,6 +237,7 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 	r.mu.Lock()
 	for channel := range r.delays {
 		r.delays[channel] = r.delays[channel][:0]
+		r.gains[channel] = r.gains[channel][:0]
 	}
 	for i, channel := range pathChannels {
 		var energy float64
@@ -214,6 +248,7 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 			continue
 		}
 		r.delays[channel] = append(r.delays[channel], len(reference[channel])-len(samples)-pathStarts[i])
+		r.gains[channel] = append(r.gains[channel], coefficients[i])
 	}
 	r.mu.Unlock()
 	for i, sample := range residual {
