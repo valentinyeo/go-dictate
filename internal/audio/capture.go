@@ -54,6 +54,9 @@ func ListCaptureDevices() ([]CaptureDevice, error) {
 
 type Capture struct {
 	device           *malgo.Device
+	loopback         *malgo.Device
+	audioChunks      chan<- []int16
+	echo             *playbackReference
 	ctx              *malgo.AllocatedContext
 	lastCallbackNano atomic.Int64  // UnixNano timestamp of last audio callback
 	peakRMS          atomic.Uint64 // Peak RMS (float64 bits) over recent window, reset on read
@@ -87,55 +90,35 @@ func NewCapture(audioChunks chan<- []int16, selectedDevice *CaptureDevice) (*Cap
 	sizeInBytes := uint32(deviceConfig.PeriodSizeInFrames * 2) // samples * 2 bytes per sample
 
 	// Create capture object first so callback can reference it
-	c := &Capture{ctx: ctx}
+	c := &Capture{ctx: ctx, audioChunks: audioChunks, echo: &playbackReference{}}
 	c.lastCallbackNano.Store(time.Now().UnixNano())
 
-	onRecvFrames := func(pOutputSample, pInputSamples []byte, framecount uint32) {
-		c.lastCallbackNano.Store(time.Now().UnixNano())
-
-		// Convert bytes to int16 samples
-		samples := make([]int16, framecount)
-		for i := uint32(0); i < framecount; i++ {
-			// Little-endian conversion
-			samples[i] = int16(pInputSamples[i*2]) | int16(pInputSamples[i*2+1])<<8
-		}
-
-		// Track peak RMS for watchdog audio quality monitoring
-		var sumSquares float64
-		for _, s := range samples {
-			normalized := float64(s) / float64(math.MaxInt16)
-			sumSquares += normalized * normalized
-		}
-		rms := math.Sqrt(sumSquares / float64(len(samples)))
-		// Atomically update peak: load current, store if new is higher
-		for {
-			old := c.peakRMS.Load()
-			oldRMS := math.Float64frombits(old)
-			if rms <= oldRMS {
-				break
-			}
-			if c.peakRMS.CompareAndSwap(old, math.Float64bits(rms)) {
-				break
-			}
-		}
-
-		// Send to channel (non-blocking)
-		select {
-		case audioChunks <- samples:
-		default:
-			// Drop frames if channel is full
-			fmt.Println("[Audio] Warning: Dropping frames, channel full")
-		}
-	}
-
 	device, err := malgo.InitDevice(ctx.Context, deviceConfig, malgo.DeviceCallbacks{
-		Data: onRecvFrames,
+		Data: c.receiveFrames,
 	})
 	if err != nil {
 		ctx.Free()
 		return nil, fmt.Errorf("failed to initialize audio device: %w", err)
 	}
 	c.device = device
+
+	loopbackConfig := malgo.DefaultDeviceConfig(malgo.Loopback)
+	loopbackConfig.Capture.Format = malgo.FormatS16
+	loopbackConfig.Capture.Channels = 2
+	loopbackConfig.SampleRate = 16000
+	loopbackConfig.PeriodSizeInFrames = 160
+	c.loopback, err = malgo.InitDevice(ctx.Context, loopbackConfig, malgo.DeviceCallbacks{
+		Data: func(_ []byte, input []byte, frames uint32) {
+			c.echo.receive(input, frames, time.Now())
+		},
+	})
+	if err != nil {
+		fmt.Printf("[Audio] Playback reference unavailable: %v\n", err)
+	} else if err := c.loopback.Start(); err != nil {
+		fmt.Printf("[Audio] Playback reference failed to start: %v\n", err)
+		c.loopback.Uninit()
+		c.loopback = nil
+	}
 
 	// Device info
 	if selectedDevice != nil {
@@ -148,6 +131,9 @@ func NewCapture(audioChunks chan<- []int16, selectedDevice *CaptureDevice) (*Cap
 
 	// Start the device
 	if err := device.Start(); err != nil {
+		if c.loopback != nil {
+			c.loopback.Uninit()
+		}
 		device.Uninit()
 		ctx.Free()
 		return nil, fmt.Errorf("failed to start audio device: %w", err)
@@ -190,11 +176,54 @@ func (c *Capture) QuickRestart() error {
 }
 
 func (c *Capture) Stop() {
+	if c.loopback != nil {
+		c.loopback.Uninit()
+		c.loopback = nil
+	}
 	if c.device != nil {
 		c.device.Uninit()
 	}
 	if c.ctx != nil {
 		_ = c.ctx.Uninit() // must uninit before free
 		c.ctx.Free()
+	}
+}
+
+func (c *Capture) receiveFrames(_ []byte, pInputSamples []byte, framecount uint32) {
+	now := time.Now()
+	c.lastCallbackNano.Store(now.UnixNano())
+	if uint64(len(pInputSamples)) < uint64(framecount)*2 || framecount == 0 {
+		return
+	}
+
+	samples := make([]int16, framecount)
+	for i := uint32(0); i < framecount; i++ {
+		samples[i] = int16(pInputSamples[i*2]) | int16(pInputSamples[i*2+1])<<8
+	}
+
+	var sumSquares float64
+	for _, s := range samples {
+		normalized := float64(s) / float64(math.MaxInt16)
+		sumSquares += normalized * normalized
+	}
+	rms := math.Sqrt(sumSquares / float64(len(samples)))
+	for {
+		old := c.peakRMS.Load()
+		oldRMS := math.Float64frombits(old)
+		if rms <= oldRMS {
+			break
+		}
+		if c.peakRMS.CompareAndSwap(old, math.Float64bits(rms)) {
+			break
+		}
+	}
+
+	if c.echo != nil {
+		c.echo.filter(samples, now)
+	}
+	select {
+	case c.audioChunks <- samples:
+	default:
+		fmt.Println("[Audio] Warning: Dropping frames, channel full")
 	}
 }

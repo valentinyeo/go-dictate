@@ -1,0 +1,62 @@
+name: Echo regression
+
+on:
+  push:
+    branches: [ceo/IGSH-710-echo]
+  pull_request:
+    paths:
+      - internal/audio/**
+      - scripts/**
+      - .github/workflows/echo.yml
+
+permissions:
+  contents: read
+
+jobs:
+  baseline-regression-control:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: 1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@v4
+        with:
+          ref: v1.8.138
+          path: baseline
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - run: node scripts/echo-baseline.mjs baseline
+      - name: Verify released capture regression failures
+        run: node scripts/check-echo-baseline.mjs
+  echo-green:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: 1
+      CC: gcc
+      CXX: g++
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+      - run: node scripts/check-echo-scope.mjs
+      - run: go vet -unsafeptr=false -lostcancel=false ./...
+      - run: go test -v ./...
+      - run: go test -race ./internal/audio
+      - run: go test ./internal/audio -run '^$' -bench BenchmarkCaptureEcho -benchtime=1s -benchmem
+      - name: Build Windows GUI
+        env:
+          CGO_LDFLAGS: -Wl,--subsystem,windows
+        run: go build -ldflags="-s -w -H windowsgui" -trimpath -o go-dictate.exe .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: go-dictate-1.8.139
+          path: go-dictate.exe
+          if-no-files-found: error
