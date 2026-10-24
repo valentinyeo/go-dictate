@@ -284,3 +284,36 @@ func TestCaptureEchoStreamingTransitions(t *testing.T) {
 		}
 	}
 }
+
+func TestEchoFFTCorrelationMatchesDirect(t *testing.T) {
+	for _, frames := range []int{1, 160, 1280} {
+		render := echoSignal(710, frames+317, 13000)
+		mic := echoSignal(711, frames, 4500)
+		size := 1
+		for size < len(render)+len(mic) {
+			size *= 2
+		}
+		x, y := make([]complex128, size), make([]complex128, size)
+		for i, sample := range render {
+			x[i] = complex(sample, 0)
+		}
+		for i, sample := range mic {
+			y[len(mic)-1-i] = complex(sample, 0)
+		}
+		echoFFT(x, false)
+		echoFFT(y, false)
+		for i := range x {
+			x[i] *= y[i]
+		}
+		echoFFT(x, true)
+		for start := 0; start+frames <= len(render); start++ {
+			var direct float64
+			for i, sample := range mic {
+				direct += sample * render[start+i]
+			}
+			if math.Abs(real(x[start+frames-1])-direct) > 0.01 {
+				t.Fatalf("FFT correlation differs from direct at frames=%d start=%d", frames, start)
+			}
+		}
+	}
+}

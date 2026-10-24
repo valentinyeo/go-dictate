@@ -57,42 +57,43 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 		return
 	}
 	residual := append([]float64(nil), mic...)
+	size := 1
+	for size < len(reference[0])+len(samples) {
+		size *= 2
+	}
+	var spectra [2][]complex128
+	var energies [2][]float64
+	for channel, render := range reference {
+		spectra[channel] = make([]complex128, size)
+		energies[channel] = make([]float64, len(render)+1)
+		for i, sample := range render {
+			spectra[channel][i] = complex(sample, 0)
+			energies[channel][i+1] = energies[channel][i] + sample*sample
+		}
+		echoFFT(spectra[channel], false)
+	}
 	var paths [][]float64
 	for range echoPaths {
+		residualSpectrum := make([]complex128, size)
+		for i, sample := range residual {
+			residualSpectrum[len(residual)-1-i] = complex(sample, 0)
+		}
+		echoFFT(residualSpectrum, false)
 		bestScore := 0.0
 		var bestRender []float64
 		bestStart := -1
-		for _, render := range reference {
-			var renderEnergy float64
-			for _, sample := range render {
-				renderEnergy += sample * sample
-			}
-			if renderEnergy == 0 {
+		for channel, render := range reference {
+			if len(render) < len(samples) || energies[channel][len(render)] == 0 {
 				continue
 			}
-			coarseScore, coarseStart := 0.0, -1
+			correlation := make([]complex128, size)
+			for i := range correlation {
+				correlation[i] = spectra[channel][i] * residualSpectrum[i]
+			}
+			echoFFT(correlation, true)
 			for start := 0; start+len(samples) <= len(render); start++ {
-				var dot, energy float64
-				for i := 0; i < len(samples); i += 8 {
-					x := render[start+i]
-					dot += x * residual[i]
-					energy += x * x
-				}
-				if energy > 0 && dot*dot/energy > coarseScore {
-					coarseScore = dot * dot / energy
-					coarseStart = start
-				}
-			}
-			if coarseStart < 0 {
-				continue
-			}
-			for start := max(0, coarseStart-8); start <= min(len(render)-len(samples), coarseStart+8); start++ {
-				candidate := render[start : start+len(samples)]
-				var dot, energy float64
-				for i, x := range candidate {
-					dot += x * residual[i]
-					energy += x * x
-				}
+				dot := real(correlation[start+len(samples)-1])
+				energy := energies[channel][start+len(samples)] - energies[channel][start]
 				if energy > 0 && dot*dot/energy > bestScore {
 					bestScore = dot * dot / energy
 					bestRender, bestStart = render, start
@@ -184,4 +185,41 @@ func fitEcho(paths [][]float64, mic []float64) []float64 {
 		coefficients[i] = matrix[i][n]
 	}
 	return coefficients
+}
+
+func echoFFT(values []complex128, inverse bool) {
+	n := len(values)
+	for i, j := 1, 0; i < n; i++ {
+		bit := n >> 1
+		for j&bit != 0 {
+			j ^= bit
+			bit >>= 1
+		}
+		j ^= bit
+		if i < j {
+			values[i], values[j] = values[j], values[i]
+		}
+	}
+	for width := 2; width <= n; width *= 2 {
+		angle := -2 * math.Pi / float64(width)
+		if inverse {
+			angle = -angle
+		}
+		step := complex(math.Cos(angle), math.Sin(angle))
+		for start := 0; start < n; start += width {
+			phase := complex(1, 0)
+			for offset := 0; offset < width/2; offset++ {
+				a := values[start+offset]
+				b := phase * values[start+offset+width/2]
+				values[start+offset] = a + b
+				values[start+offset+width/2] = a - b
+				phase *= step
+			}
+		}
+	}
+	if inverse {
+		for i := range values {
+			values[i] /= complex(float64(n), 0)
+		}
+	}
 }
