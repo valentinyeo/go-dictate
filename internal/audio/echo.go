@@ -161,7 +161,7 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 		begin, end := bestStart, bestStart
 		for _, path := range paths {
 			for start := max(0, bestStart-32); start <= min(len(bestRender)-len(samples), bestStart+32); start++ {
-				if &path[0] == &bestRender[start] {
+				if start != bestStart && &path[0] == &bestRender[start] {
 					begin = min(begin, max(0, start-32))
 					end = max(end, min(len(bestRender)-len(samples), start+4))
 				}
