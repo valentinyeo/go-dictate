@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.138"
-	BuildDate      = "2026-10-23"
-	VersionName    = "Ducking Always Restores"
-	VersionSummary = "Chrome's volume always comes back after dictation"
+	Version        = "1.8.139"
+	BuildDate      = "2026-10-24"
+	VersionName    = "Playback Echo Rejection"
+	VersionSummary = "Laptop playback is removed before speech detection"
 )
