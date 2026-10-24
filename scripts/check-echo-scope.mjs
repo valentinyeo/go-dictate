@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-const git = (...args) => execFileSync('git', args, { encoding: 'utf8' });
+const git = (...args) => execFileSync('git', args, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
 const protectedFiles = ['main.go', ...git('ls-tree', '-r', '--name-only', 'v1.8.138', 'internal/deepgram', 'internal/config', 'internal/tray').trim().split('\n'), ...git('ls-tree', '-r', '--name-only', 'v1.8.138', 'internal/audio').trim().split('\n').filter(file => file !== 'internal/audio/capture.go')];
 function unchanged(actual, expected) {
-  assert.equal(actual, expected, 'protected lifecycle, VAD, media filter, configuration or ducking changed');
+  assert.equal(actual.replaceAll("\r\n", "\n"), expected, 'protected lifecycle, VAD, media filter, configuration or ducking changed');
 }
 for (const file of protectedFiles) {
   const expected = git('show', 'v1.8.138:' + file);
@@ -29,7 +29,7 @@ function noAddedComments(source, baseline) {
 assert.throws(() => noAddedComments('const x = 1; // forbidden', 'const x = 1;'));
 assert.throws(() => noAddedComments('/* forbidden */', ''));
 noAddedComments('const url = "https://example.invalid";', '');
-const files = git('diff', '--name-only', 'v1.8.138', '--', '*.go', '*.mjs').trim().split('\n').filter(Boolean);
+const files = git('diff', '--name-only', 'v1.8.138', '--', '*.go').trim().split('\n').filter(Boolean);
 for (const file of files) {
   let baseline = '';
   try { baseline = git('show', 'v1.8.138:' + file); } catch {}

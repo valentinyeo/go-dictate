@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 
 const target = resolve(process.argv[2]);
 const baseline = execFileSync('git', ['show', 'v1.8.138:internal/audio/capture.go'], { encoding: 'utf8' });
-assert.equal(readFileSync(resolve(target, 'internal/audio/capture.go'), 'utf8'), baseline);
+assert.equal(readFileSync(resolve(target, 'internal/audio/capture.go'), 'utf8').replaceAll('\r\n', '\n'), baseline);
 const start = baseline.indexOf('\tonRecvFrames := func(');
 const end = baseline.indexOf('\n\tdevice, err :=', start);
 assert(start > 0 && end > start);
