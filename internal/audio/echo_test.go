@@ -195,3 +195,92 @@ func BenchmarkCaptureEcho(b *testing.B) {
 		r.filter(mic, r.updated)
 	}
 }
+
+func TestCaptureEchoColoredRoom(t *testing.T) {
+	for _, decay := range []float64{0.4, 0.75, 0.9} {
+		for _, voiceLevel := range []float64{0, 1300, 4500} {
+			left := echoSignal(710, echoHistoryFrames, 13000)
+			voice := echoSignal(2026, 1280, voiceLevel)
+			mic := append([]float64(nil), voice...)
+			taps := make([]float64, 32)
+			var total float64
+			for i := range taps {
+				taps[i] = math.Pow(decay, float64(i)) * math.Cos(float64(i)*0.75)
+				total += math.Abs(taps[i])
+			}
+			for i := range mic {
+				for tap, gain := range taps {
+					mic[i] += gain / total * 0.7 * left[len(left)-len(mic)-640-tap+i]
+				}
+			}
+			out, _ := echoCapture(t, left, left, mic)
+			errorSignal := make([]float64, len(out))
+			var dot, voiceEnergy float64
+			for i := range out {
+				errorSignal[i] = out[i] - voice[i]
+				dot += out[i] * voice[i]
+				voiceEnergy += voice[i] * voice[i]
+			}
+			t.Logf("decay=%.2f voice_rms=%.6f mic_rms=%.6f error_rms=%.6f", decay, echoRMS(voice), echoRMS(mic), echoRMS(errorSignal))
+			limit := 0.002
+			if voiceLevel > 0 {
+				limit = 0.005
+				if gain := dot / voiceEnergy; gain < 0.95 || gain > 1.05 {
+					t.Errorf("colored echo changed voice gain: %.4f", gain)
+				}
+			}
+			if echoRMS(errorSignal) > limit {
+				t.Errorf("speaker/room frequency response was not removed: %.6f", echoRMS(errorSignal))
+			}
+		}
+	}
+}
+
+func TestCaptureEchoStreamingTransitions(t *testing.T) {
+	const frames = 1280
+	left := echoSignal(710, frames*20, 13000)
+	right := echoSignal(711, len(left), 11000)
+	chunks := make(chan []int16, 1)
+	capture := &Capture{audioChunks: chunks, echo: &playbackReference{}}
+	vad := NewVAD(0.005, 1500)
+	for block := 1; block < 20; block++ {
+		begin, end := block*frames, (block+1)*frames
+		for pos := begin; pos < end; pos += 160 {
+			capture.echo.receive(echoStereo(left[pos:pos+160], right[pos:pos+160]), 160, time.Now())
+		}
+		voiceLevel := 0.0
+		if block >= 4 && block < 12 {
+			voiceLevel = 4500
+		}
+		voice := echoSignal(uint32(2026+block), frames, voiceLevel)
+		mic := append([]float64(nil), voice...)
+		gain := 0.65
+		if block >= 6 && block < 11 {
+			gain = 0.08
+		}
+		delay := 317
+		if block >= 10 {
+			delay = 629
+		}
+		for i := range mic {
+			mic[i] += gain*left[begin-delay+i] + 0.12*right[begin-delay-107+i]
+		}
+		capture.receiveFrames(nil, echoPCM(mic), frames)
+		out := <-chunks
+		errorSignal := make([]float64, frames)
+		for i, sample := range out {
+			errorSignal[i] = float64(sample) - voice[i]
+		}
+		t.Logf("block=%d playback_gain=%.2f voice_rms=%.6f error_rms=%.6f", block, gain, echoRMS(voice), echoRMS(errorSignal))
+		if echoRMS(errorSignal) > 0.004 {
+			t.Errorf("playback restart, duck gain or delay change leaked: %.6f", echoRMS(errorSignal))
+		}
+		event := vad.Process(out)
+		if block < 4 && event != Silence {
+			t.Errorf("playback before user speech opened VAD: %s", event)
+		}
+		if block == 4 && event != SpeechStarted {
+			t.Errorf("overlapping user speech did not open VAD: %s", event)
+		}
+	}
+}

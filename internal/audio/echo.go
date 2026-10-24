@@ -48,15 +48,28 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 	r.mu.Unlock()
 
 	mic := make([]float64, len(samples))
+	var micEnergy float64
 	for i, sample := range samples {
 		mic[i] = float64(sample)
+		micEnergy += mic[i] * mic[i]
+	}
+	if micEnergy == 0 {
+		return
 	}
 	residual := append([]float64(nil), mic...)
 	var paths [][]float64
 	for range echoPaths {
 		bestScore := 0.0
-		var best []float64
+		var bestRender []float64
+		bestStart := -1
 		for _, render := range reference {
+			var renderEnergy float64
+			for _, sample := range render {
+				renderEnergy += sample * sample
+			}
+			if renderEnergy == 0 {
+				continue
+			}
 			coarseScore, coarseStart := 0.0, -1
 			for start := 0; start+len(samples) <= len(render); start++ {
 				var dot, energy float64
@@ -82,7 +95,7 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 				}
 				if energy > 0 && dot*dot/energy > bestScore {
 					bestScore = dot * dot / energy
-					best = candidate
+					bestRender, bestStart = render, start
 				}
 			}
 		}
@@ -90,10 +103,26 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 		for _, sample := range residual {
 			residualEnergy += sample * sample
 		}
-		if best == nil || bestScore < residualEnergy*0.15*0.15 {
+		if bestStart < 0 || bestScore < residualEnergy*0.15*0.15 {
 			break
 		}
-		paths = append(paths, best)
+		previousPaths := len(paths)
+		for start := max(0, bestStart-2); start <= min(len(bestRender)-len(samples), bestStart+2); start++ {
+			candidate := bestRender[start : start+len(samples)]
+			duplicate := false
+			for _, path := range paths {
+				if &path[0] == &candidate[0] {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				paths = append(paths, candidate)
+			}
+		}
+		if len(paths) == previousPaths {
+			break
+		}
 		coefficients := fitEcho(paths, mic)
 		if coefficients == nil {
 			break
