@@ -13,7 +13,7 @@ permissions:
   contents: read
 
 jobs:
-  baseline-red:
+  baseline-regression-control:
     runs-on: windows-latest
     timeout-minutes: 15
     env:
@@ -30,9 +30,8 @@ jobs:
         with:
           go-version: '1.26.5'
       - run: node scripts/echo-baseline.mjs baseline
-      - name: Replay fixtures through released capture callback
-        working-directory: baseline
-        run: go test -v ./internal/audio -run '^TestCaptureEcho'
+      - name: Verify released capture regression failures
+        run: node scripts/check-echo-baseline.mjs
   echo-green:
     runs-on: windows-latest
     timeout-minutes: 15
@@ -50,6 +49,7 @@ jobs:
       - run: node scripts/check-echo-scope.mjs
       - run: go vet -unsafeptr=false -lostcancel=false ./...
       - run: go test -v ./...
+      - run: go test -race ./internal/audio
       - run: go test ./internal/audio -run '^$' -bench BenchmarkCaptureEcho -benchtime=1s -benchmem
       - name: Build Windows GUI
         env:
