@@ -29,7 +29,11 @@ if (mode === 'red' || mode === 'green') {
     assert.deepEqual(replayed(git('show', run.headSha + ':internal/audio/echo_test.go')), replayed(readFileSync('internal/audio/echo_test.go', 'utf8')));
   } else {
     assert.equal(run.conclusion, 'success');
-    assert.equal(run.jobs.find(job => job.name === 'echo-green')?.conclusion, 'success');
+    const job = run.jobs.find(job => job.name === 'echo-green');
+    assert.equal(job?.conclusion, 'success');
+    for (const step of ['Run node scripts/check-echo-scope.mjs', 'Run go vet -unsafeptr=false -lostcancel=false ./...', 'Run go test -v ./...', 'Run go test -race ./internal/audio', 'Build Windows GUI']) assert.equal(job.steps.find(candidate => candidate.name === step)?.conclusion, 'success', step);
+    assert.equal(run.jobs.find(job => job.name === 'baseline-regression-control')?.conclusion, 'success');
+    assert(log.includes('BASELINE REGRESSION CONTROL VERIFIED'));
     for (const test of [...regressions, 'TestCaptureEchoVoiceWithoutPlaybackMatch', 'TestEchoReferenceUnavailable', 'TestEchoReferenceBounds', 'TestEchoFFTCorrelationMatchesDirect', 'TestEchoStereoReferenceChange', 'TestEchoQuantizationHistory']) assert(log.includes('--- PASS: ' + test));
     assert(log.includes('ECHO SCOPE VERIFIED'));
     assert(log.includes('BenchmarkCaptureEcho'));
