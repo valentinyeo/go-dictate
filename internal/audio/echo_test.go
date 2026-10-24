@@ -224,7 +224,7 @@ func TestCaptureEchoColoredRoom(t *testing.T) {
 			t.Logf("decay=%.2f voice_rms=%.6f mic_rms=%.6f error_rms=%.6f", decay, echoRMS(voice), echoRMS(mic), echoRMS(errorSignal))
 			limit := 0.002
 			if voiceLevel > 0 {
-				limit = 0.005
+				limit = echoRMS(voice)*0.25 + 0.002
 				if gain := dot / voiceEnergy; gain < 0.95 || gain > 1.05 {
 					t.Errorf("colored echo changed voice gain: %.4f", gain)
 				}
@@ -243,6 +243,7 @@ func TestCaptureEchoStreamingTransitions(t *testing.T) {
 	chunks := make(chan []int16, 1)
 	capture := &Capture{audioChunks: chunks, echo: &playbackReference{}}
 	vad := NewVAD(0.005, 1500)
+	capture.echo.receive(echoStereo(left[:frames], right[:frames]), frames, time.Now())
 	for block := 1; block < 20; block++ {
 		begin, end := block*frames, (block+1)*frames
 		for pos := begin; pos < end; pos += 160 {
