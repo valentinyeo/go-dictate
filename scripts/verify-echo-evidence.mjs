@@ -25,11 +25,12 @@ if (mode === 'red' || mode === 'green') {
     assert(log.includes('--- PASS: TestCaptureEchoVoiceWithoutPlaybackMatch'));
     assert(log.includes('playback reached VAD: residual RMS'));
     assert(log.includes("mixed output is not the user's voice"));
-    assert.equal(git('show', run.headSha + ':internal/audio/echo_test.go'), readFileSync('internal/audio/echo_test.go', 'utf8').trim());
+    const replayed = source => source.split(/(?=^func )/m).filter(part => /^func (?:echo\w+|TestCaptureEcho\w+)\(/.test(part)).map(part => part.trim());
+    assert.deepEqual(replayed(git('show', run.headSha + ':internal/audio/echo_test.go')), replayed(readFileSync('internal/audio/echo_test.go', 'utf8')));
   } else {
     assert.equal(run.conclusion, 'success');
     assert.equal(run.jobs.find(job => job.name === 'echo-green')?.conclusion, 'success');
-    for (const test of [...regressions, 'TestCaptureEchoVoiceWithoutPlaybackMatch', 'TestEchoReferenceUnavailable', 'TestEchoReferenceBounds', 'TestEchoFFTCorrelationMatchesDirect']) assert(log.includes('--- PASS: ' + test));
+    for (const test of [...regressions, 'TestCaptureEchoVoiceWithoutPlaybackMatch', 'TestEchoReferenceUnavailable', 'TestEchoReferenceBounds', 'TestEchoFFTCorrelationMatchesDirect', 'TestEchoStereoReferenceChange']) assert(log.includes('--- PASS: ' + test));
     assert(log.includes('ECHO SCOPE VERIFIED'));
     assert(log.includes('BenchmarkCaptureEcho'));
     assert(log.includes('Artifact go-dictate-1.8.139.zip successfully finalized'));

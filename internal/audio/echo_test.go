@@ -318,3 +318,35 @@ func TestEchoFFTCorrelationMatchesDirect(t *testing.T) {
 		}
 	}
 }
+
+func TestEchoStereoReferenceChange(t *testing.T) {
+	chunks := make(chan []int16, 1)
+	capture := &Capture{audioChunks: chunks, echo: &playbackReference{}}
+	for step := range 3 {
+		left := echoSignal(uint32(710+step), echoHistoryFrames, 13000)
+		right := echoSignal(uint32(720+step), echoHistoryFrames, 11000)
+		if step > 0 {
+			for i := range right {
+				right[i] = left[i]
+				if step == 2 {
+					right[i] = -right[i]
+				}
+			}
+		}
+		mic := make([]float64, 1280)
+		for i := range mic {
+			index := len(left) - len(mic) - 317 + i
+			mic[i] = 0.45*left[index] + 0.15*right[index]
+		}
+		capture.echo.receive(echoStereo(left, right), uint32(len(left)), time.Now())
+		capture.receiveFrames(nil, echoPCM(mic), uint32(len(mic)))
+		out := <-chunks
+		residual := make([]float64, len(out))
+		for i, sample := range out {
+			residual[i] = float64(sample)
+		}
+		if echoRMS(residual) > 0.002 {
+			t.Errorf("stereo/mono/polarity transition leaked playback at step %d: %.6f", step, echoRMS(residual))
+		}
+	}
+}

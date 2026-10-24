@@ -94,6 +94,15 @@ func (r *playbackReference) filter(samples []int16, now time.Time) {
 			if &path[0] == &candidate[0] {
 				return
 			}
+			var dot, energy, pathEnergy float64
+			for i, sample := range candidate {
+				dot += sample * path[i]
+				energy += sample * sample
+				pathEnergy += path[i] * path[i]
+			}
+			if energy == 0 || dot*dot >= energy*pathEnergy*(1-1e-10) {
+				return
+			}
 		}
 		paths = append(paths, candidate)
 		pathChannels = append(pathChannels, channel)
