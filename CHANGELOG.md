@@ -5,6 +5,13 @@ All notable changes to the Dictation App will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.140] - 2026-10-25
+
+### Fixed
+- The microphone switched popup shows the device name as plain text, whatever characters the name contains. Dictation, hotkeys and the rest of the app are unchanged.
+
+---
+
 ## [1.8.139] - 2026-10-24
 
 ### Fixed

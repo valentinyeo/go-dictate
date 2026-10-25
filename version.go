@@ -1,8 +1,8 @@
 package main
 
 const (
-	Version        = "1.8.139"
-	BuildDate      = "2026-10-24"
-	VersionName    = "Playback Echo Rejection"
-	VersionSummary = "Laptop playback is removed before speech detection"
+	Version        = "1.8.140"
+	BuildDate      = "2026-10-25"
+	VersionName    = "Safer Popup Text"
+	VersionSummary = "The microphone popup shows any device name as plain text"
 )
